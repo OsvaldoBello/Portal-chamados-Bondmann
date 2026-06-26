@@ -514,7 +514,7 @@ CREATE INDEX idx_historico_chamado ON historico_chamados(chamado_id, created_at)
 
 ### 5.3 Triggers/Functions (nomes exatos da spec)
 
-1. **`trigger_set_timestamp`** — `BEFORE UPDATE` em `empresas`, `perfis`, `chamados`: seta `updated_at = now()`.
+1. **`trigger_set_timestamp`** — `BEFORE UPDATE` em `planos_sla`, `empresas`, `perfis`, `chamados`: seta `updated_at = now()`. (`planos_sla` incluída na implementação por também possuir `updated_at`; estende a lista da spec.)
 2. **`gerar_codigo_chamado`** — `BEFORE INSERT` em `chamados`: gera `codigo` no formato **`BOND-YYYY-NNNNN`** via **sequence dedicada** (sem `SELECT MAX()+1` — seria *racy*).
 3. **`calcular_sla_chamado`** — `BEFORE INSERT` (e em mudança de prioridade) em `chamados`: calcula `limite_resposta`/`limite_resolucao` conforme 5.2 + escada C1.
 4. **`handle_new_user`** — `AFTER INSERT` em `auth.users`: cria `perfis` com `role = 'CLIENTE'`.
@@ -643,6 +643,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 |---|---|---|
 | 2026-06-26 | Todas | Criação do plano mestre a partir da spec v2.0. Contradições C1–C3 resolvidas; decisões de RLS×pooling, cache tenant-scoped, CSRF/CSP/headers, Storage, schema canônico das 7 tabelas, código BOND seguro sob concorrência, topologia Realtime e cronograma com DoD por fase. |
 | 2026-06-26 | 5.1 / 5.4 / 6.2 / Estado | Início da produção (Fase 1). Aplicadas migrations `0001_init_enums` (3 enums) e `0002_tables_core` (7 tabelas + índices) no projeto Supabase `iurlzlhbnoemkzgexcfk`, materializando o schema canônico da Seção 5.1; `.sql` versionados em `supabase/migrations/`. Adicionada **regra dura de segurança** (6.2): chaves de API nunca expostas em código, docs ou qualquer artefato — só em env vars. RLS ainda **desabilitado** nas 7 tabelas (trabalho da Fase 2). |
+| 2026-06-26 | 3.3 / 5.3 / 5.4 / Estado | Fase 2 (banco). Aplicadas `0003_triggers` (`trigger_set_timestamp`, `gerar_codigo_chamado` com contador anual atômico, `calcular_sla_chamado` com escada C1, `handle_new_user`), `0004_rls_policies` (helpers `auth_role`/`auth_empresa_id` SECURITY DEFINER, **RLS habilitado nas 7 tabelas + `contador_chamados`**, policies por papel da Seção 3.3, grants com `anon` sem acesso e imutabilidade de `mensagens`/`historico`) e `0005_harden_functions` (search_path fixo + REVOKE de EXECUTE nas functions de trigger). Smoke test em transação revertida confirmou código `BOND-YYYY-00001`, SLA URGENTE = 50% de ALTA e perfil CLIENTE automático. Advisor de segurança: 0 erros (resta apenas INFO de `contador_chamados` deny-all, intencional). |
 
 ---
 
@@ -652,11 +653,11 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 |---|---|---|---|
 | Setup FastAPI + Dockerfile (porta 8080) | Planejado | 1 | Inclui Tailwind CLI build e `libmagic`. |
 | `GET /health` | Planejado | 1 | Railway healthcheck. |
-| Migrations base (enums + 7 tabelas + índices) | ✅ Implementado | 1–2 | Schema canônico Seção 5. Migrations `0001_init_enums` + `0002_tables_core` aplicadas no projeto `iurlzlhbnoemkzgexcfk` e versionadas em `supabase/migrations/`. **RLS ainda desabilitado** (Fase 2). |
-| Triggers (`trigger_set_timestamp`, `gerar_codigo_chamado`, `calcular_sla_chamado`, `handle_new_user`) | Planejado | 2 | Código BOND com contador anual atômico. |
+| Migrations base (enums + 7 tabelas + índices) | ✅ Implementado | 1–2 | Schema canônico Seção 5. Migrations `0001_init_enums` + `0002_tables_core` aplicadas no projeto `iurlzlhbnoemkzgexcfk` e versionadas em `supabase/migrations/`. RLS habilitado na Fase 2 (`0004`). |
+| Triggers (`trigger_set_timestamp`, `gerar_codigo_chamado`, `calcular_sla_chamado`, `handle_new_user`) | ✅ Implementado | 2 | Migration `0003_triggers`. Código BOND com contador anual atômico; SLA com escada C1; smoke test verde. |
 | Auth (login/logout/cadastro) + cookies de sessão | Planejado | 2 | httpOnly+Secure+SameSite. |
 | Verificação JWT (JWKS/HS256) | Planejado | 2 | Decisão Seção 3.6, confirmar modo do projeto. |
-| RLS nas 7 tabelas + policies por papel | Planejado | 2 | Acesso via asyncpg + `SET LOCAL`. |
+| RLS nas 7 tabelas + policies por papel | ✅ Implementado | 2 | Migrations `0004_rls_policies` + `0005_harden_functions`. Helpers `auth_role`/`auth_empresa_id`; `anon` sem acesso. Acesso de domínio via asyncpg + `SET LOCAL` (a implementar no backend). |
 | CSRF + Security headers + CSP estrita | Planejado | 2 | Alpine CSP build, HTMX 2.0. |
 | Teste de isolamento multi-tenant | Planejado | 2 | **Bloqueia** Fase 3. |
 | Portal do Cliente (dashboard/abertura/chat) | Planejado | 3 | Upload validado server-side. |
