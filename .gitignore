@@ -1,0 +1,29 @@
+# Segredos — NUNCA commitar (Seção 6.2: chaves só em env vars)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node / Tailwind
+node_modules/
+package-lock.json
+
+# Build de CSS gerado pelo Tailwind CLI
+app/static/css/app.css
+
+# Supabase CLI local
+supabase/.branches/
+supabase/.temp/
+
+# OS
+.DS_Store
