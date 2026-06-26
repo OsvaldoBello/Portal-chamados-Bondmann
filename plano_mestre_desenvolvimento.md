@@ -606,6 +606,16 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 - **Pydantic Settings** para toda configuração; **`.env` nunca commitado**; segredos via **env do Railway**.
 - **Regra dura:** a **`service_role` key NUNCA chega ao browser** e nunca é usada para servir dados de usuário (Seção 3.1). No browser só vão `SUPABASE_URL` + **anon key** (necessários ao `supabase-js` do Realtime) e o **JWT do usuário**.
 
+> ### 🔒 REGRA DURA DE SEGURANÇA — Chaves de API NUNCA expostas (vale para TODAS as fases)
+>
+> **Nenhuma chave de API, token, segredo ou string de conexão pode aparecer em texto claro em parte alguma do projeto.** Isto inclui — sem exceção — código-fonte, templates, arquivos de configuração versionados, **este e qualquer outro `.md`/documentação**, comentários, mensagens de commit, descrições de PR, logs, prints/screenshots e exemplos. Aplica-se a `anon key`, **chave publishable/`sb_publishable_...`**, `service_role key`, JWT secret, `DATABASE_URL` e quaisquer credenciais de terceiros.
+>
+> - **Único local permitido:** variáveis de ambiente (env do Railway em produção; `.env` local **no `.gitignore`**, nunca commitado), carregadas via Pydantic Settings.
+> - **Em documentação/exemplos:** usar sempre placeholders (`SUPABASE_ANON_KEY`, `<sua-anon-key>`), nunca o valor real.
+> - **Mesmo a `anon key`/publishable** (apesar de "pública") **não** deve ser hard-coded em arquivos versionados — entra no HTML servido **em runtime** a partir de env var, para permitir rotação sem alterar o repositório.
+> - **Se uma chave for exposta acidentalmente** (commit, log, chat): tratá-la como **comprometida** → **rotacionar imediatamente** no painel Supabase e purgar do histórico antes de qualquer outra ação.
+> - **Chaves recebidas via chat/issue** (como no setup inicial) servem **apenas** para a operação pontual e **não** devem ser persistidas no repositório.
+
 ### 6.3 Observabilidade
 
 - **Logging estruturado** (JSON) com **request-id** por requisição (correlação ponta a ponta).
@@ -632,6 +642,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | Data | Seção alterada | Resumo |
 |---|---|---|
 | 2026-06-26 | Todas | Criação do plano mestre a partir da spec v2.0. Contradições C1–C3 resolvidas; decisões de RLS×pooling, cache tenant-scoped, CSRF/CSP/headers, Storage, schema canônico das 7 tabelas, código BOND seguro sob concorrência, topologia Realtime e cronograma com DoD por fase. |
+| 2026-06-26 | 5.1 / 5.4 / 6.2 / Estado | Início da produção (Fase 1). Aplicadas migrations `0001_init_enums` (3 enums) e `0002_tables_core` (7 tabelas + índices) no projeto Supabase `iurlzlhbnoemkzgexcfk`, materializando o schema canônico da Seção 5.1; `.sql` versionados em `supabase/migrations/`. Adicionada **regra dura de segurança** (6.2): chaves de API nunca expostas em código, docs ou qualquer artefato — só em env vars. RLS ainda **desabilitado** nas 7 tabelas (trabalho da Fase 2). |
 
 ---
 
@@ -641,7 +652,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 |---|---|---|---|
 | Setup FastAPI + Dockerfile (porta 8080) | Planejado | 1 | Inclui Tailwind CLI build e `libmagic`. |
 | `GET /health` | Planejado | 1 | Railway healthcheck. |
-| Migrations base (enums + 7 tabelas + índices) | Planejado | 1–2 | Schema canônico Seção 5. |
+| Migrations base (enums + 7 tabelas + índices) | ✅ Implementado | 1–2 | Schema canônico Seção 5. Migrations `0001_init_enums` + `0002_tables_core` aplicadas no projeto `iurlzlhbnoemkzgexcfk` e versionadas em `supabase/migrations/`. **RLS ainda desabilitado** (Fase 2). |
 | Triggers (`trigger_set_timestamp`, `gerar_codigo_chamado`, `calcular_sla_chamado`, `handle_new_user`) | Planejado | 2 | Código BOND com contador anual atômico. |
 | Auth (login/logout/cadastro) + cookies de sessão | Planejado | 2 | httpOnly+Secure+SameSite. |
 | Verificação JWT (JWKS/HS256) | Planejado | 2 | Decisão Seção 3.6, confirmar modo do projeto. |
