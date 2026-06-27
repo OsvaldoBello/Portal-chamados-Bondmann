@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telas do Portal · Bondmann Química</title>
+<link rel="stylesheet" href="./assets/fonts.css">
+<link rel="stylesheet" href="./assets/app.css">
+
+<style>
+  html{scroll-behavior:smooth}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px;border:2px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:#94a3b8;background-clip:content-box}
+  .glass{backdrop-filter:saturate(1.2) blur(2px)}
+</style>
+</head>
+<body class="font-sans bg-surface text-ink antialiased">
+
+<div class="bg-navy-900 relative overflow-hidden">
+  <div class="absolute -left-20 -top-20 w-96 h-96 rounded-full border-[56px] border-white/5"></div>
+  <div class="absolute right-10 top-10 w-40 h-40 rounded-full border-[22px] border-brandgreen/10"></div>
+  <div class="max-w-[1180px] mx-auto px-10 py-14 relative">
+    <div class="flex items-center gap-2.5 select-none">
+      <svg viewBox="0 0 46 46" fill="none" stroke="currentColor" stroke-width="2.4" class="w-9 h-9 text-brandgreen shrink-0"><circle cx="23.0" cy="23.0" r="5.3"/><circle cx="23.00" cy="10.50" r="5.3"/><circle cx="33.83" cy="16.75" r="5.3"/><circle cx="33.83" cy="29.25" r="5.3"/><circle cx="23.00" cy="35.50" r="5.3"/><circle cx="12.17" cy="29.25" r="5.3"/><circle cx="12.17" cy="16.75" r="5.3"/></svg>
+      <div class="leading-none">
+        <div class="font-display font-black tracking-tight text-2xl" style="color:#FFFFFF">BONDMANN</div>
+        <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5" style="color:#FFFFFF;opacity:.92">QUÍMICA</div>
+      </div>
+    </div>
+    <h1 class="font-display font-bold text-white text-4xl mt-8">Portal de Chamados — Protótipo de alta fidelidade</h1>
+    <p class="text-white/70 mt-3 max-w-2xl leading-relaxed">16 telas construídas a partir do Manual de Identidade Visual da Bondmann Química e do Plano Mestre de Desenvolvimento. Stack: Tailwind CSS · HTMX · Alpine.js · Chart.js — a mesma definida na Seção 0.4 do plano.</p>
+    <div class="mt-6 flex flex-wrap gap-2.5">
+      <span class="px-3 py-1 rounded-full text-xs font-semibold bg-white/10 text-white">Multi-tenant</span>
+      <span class="px-3 py-1 rounded-full text-xs font-semibold bg-white/10 text-white">SLA visual</span>
+      <span class="px-3 py-1 rounded-full text-xs font-semibold bg-white/10 text-white">RBAC: Admin · Operador · Cliente</span>
+      <span class="px-3 py-1 rounded-full text-xs font-semibold bg-brandgreen/20 text-brandgreen">Identidade Bondmann</span>
+    </div>
+  </div>
+  <div class="h-1.5 w-full bg-gradient-to-r from-brandgreen via-brandgreen-600 to-navy-500"></div>
+</div>
+<div class="max-w-[1180px] mx-auto px-10 py-12"><section class="mb-10">
+      <div class="flex items-center gap-2.5 mb-4"><span class="w-3 h-3 rounded-full" style="background:#2E466F"></span><h2 class="font-display font-bold text-xl text-navy">Fundamentos</h2><span class="text-sm text-muted">(1)</span></div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5"><a href="design-system.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#2E466F"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Design System</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Cores, tipografia, logo e componentes</p>
+      </div></a></div></section><section class="mb-10">
+      <div class="flex items-center gap-2.5 mb-4"><span class="w-3 h-3 rounded-full" style="background:#41B6E6"></span><h2 class="font-display font-bold text-xl text-navy">Autenticação</h2><span class="text-sm text-muted">(3)</span></div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5"><a href="login.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#41B6E6"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Login</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Acesso ao portal</p>
+      </div></a><a href="cadastro.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#41B6E6"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Cadastro</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Solicitação de acesso do cliente</p>
+      </div></a><a href="recuperar-senha.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#41B6E6"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Recuperar senha</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Reset por e-mail (link 1h)</p>
+      </div></a></div></section><section class="mb-10">
+      <div class="flex items-center gap-2.5 mb-4"><span class="w-3 h-3 rounded-full" style="background:#1FB98C"></span><h2 class="font-display font-bold text-xl text-navy">Portal do Cliente</h2><span class="text-sm text-muted">(3)</span></div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5"><a href="cliente-dashboard.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#1FB98C"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Dashboard</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Visão geral + meus chamados</p>
+      </div></a><a href="cliente-novo-chamado.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#1FB98C"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Abrir chamado</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Formulário + upload + SLA previsto</p>
+      </div></a><a href="cliente-chamado-detalhe.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#1FB98C"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Detalhe + Chat</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Conversa e anexos</p>
+      </div></a></div></section><section class="mb-10">
+      <div class="flex items-center gap-2.5 mb-4"><span class="w-3 h-3 rounded-full" style="background:#5560B0"></span><h2 class="font-display font-bold text-xl text-navy">Workspace do Operador</h2><span class="text-sm text-muted">(3)</span></div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5"><a href="operador-fila-lista.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#5560B0"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Fila — Lista</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Filtros, SLA visual, ações em lote</p>
+      </div></a><a href="operador-fila-kanban.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#5560B0"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Fila — Kanban</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Colunas por status (drag & drop)</p>
+      </div></a><a href="operador-atendimento.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#5560B0"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Atendimento</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Chat + nota interna + auditoria</p>
+      </div></a></div></section><section class="mb-10">
+      <div class="flex items-center gap-2.5 mb-4"><span class="w-3 h-3 rounded-full" style="background:#F0934E"></span><h2 class="font-display font-bold text-xl text-navy">Painel Admin</h2><span class="text-sm text-muted">(6)</span></div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5"><a href="admin-dashboard.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#F0934E"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Dashboard / KPIs</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Gráficos Chart.js</p>
+      </div></a><a href="admin-empresas.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#F0934E"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Empresas</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Gestão de tenants</p>
+      </div></a><a href="admin-planos-sla.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#F0934E"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Planos de SLA</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Tempos por prioridade</p>
+      </div></a><a href="admin-categorias.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#F0934E"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Categorias</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Catálogo global</p>
+      </div></a><a href="admin-usuarios.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#F0934E"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Usuários</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Papéis e convites</p>
+      </div></a><a href="admin-relatorios.html" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">
+      <div class="h-2" style="background:#F0934E"></div>
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <h3 class="font-display font-bold text-navy group-hover:text-brandgreen-700 transition">Relatórios</h3>
+          <span class="text-faint group-hover:text-brandgreen-700 transition"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.25 4.5l7.5 7.5-7.5 7.5"/></svg></span>
+        </div>
+        <p class="text-sm text-muted mt-1">Filtros + export CSV</p>
+      </div></a></div></section>
+  <p class="text-center text-xs text-faint mt-6">© 2026 Bondmann Química · Protótipo gerado a partir do design system · bondmann.com.br</p>
+</div></body></html>

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel · Bondmann Química</title>
+<link rel="stylesheet" href="./assets/fonts.css">
+<link rel="stylesheet" href="./assets/app.css">
+
+<style>
+  html{scroll-behavior:smooth}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px;border:2px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:#94a3b8;background-clip:content-box}
+  .glass{backdrop-filter:saturate(1.2) blur(2px)}
+</style>
+</head>
+<body class="font-sans bg-surface text-ink antialiased">
+<div class="flex min-h-screen"><aside class="w-[248px] shrink-0 bg-navy-900 min-h-screen flex flex-col sticky top-0 self-start">
+      <div class="px-5 h-16 flex items-center border-b border-white/10"><div class="flex items-center gap-2.5 select-none">
+      <svg viewBox="0 0 46 46" fill="none" stroke="currentColor" stroke-width="2.4" class="w-9 h-9 text-brandgreen shrink-0"><circle cx="23.0" cy="23.0" r="5.3"/><circle cx="23.00" cy="10.50" r="5.3"/><circle cx="33.83" cy="16.75" r="5.3"/><circle cx="33.83" cy="29.25" r="5.3"/><circle cx="23.00" cy="35.50" r="5.3"/><circle cx="12.17" cy="29.25" r="5.3"/><circle cx="12.17" cy="16.75" r="5.3"/></svg>
+      <div class="leading-none">
+        <div class="font-display font-black tracking-tight text-[19px]" style="color:#FFFFFF">BONDMANN</div>
+        <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5" style="color:#FFFFFF;opacity:.92">QUÍMICA</div>
+      </div>
+    </div></div>
+      <nav class="flex-1 p-3 space-y-1"><a href="cliente-dashboard.html" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition bg-white/10 text-white"><span class="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-brandgreen"></span><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg><span>Painel</span></a><a href="cliente-novo-chamado.html" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition text-white/70 hover:text-white hover:bg-white/5"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span>Abrir chamado</span></a><a href="cliente-dashboard.html" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition bg-white/10 text-white"><span class="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-brandgreen"></span><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6v.75m0 3v.75m0 3v.75m0 3V18m-9-5.25h5.25M7.5 15h3M3.375 5.25c-.621 0-1.125.504-1.125 1.125v3.026a3 3 0 010 5.198v3.026c0 .621.504 1.125 1.125 1.125h17.25c.621 0 1.125-.504 1.125-1.125v-3.026a3 3 0 010-5.198V6.375c0-.621-.504-1.125-1.125-1.125H3.375z"/></svg><span>Meus chamados</span></a></nav>
+      <div class="p-3 border-t border-white/10">
+        <a href="login.html" class="flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 transition"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/></svg><span>Sair</span></a>
+      </div>
+    </aside><div class="flex-1 min-w-0 flex flex-col"><header class="h-16 bg-white border-b border-line sticky top-0 z-20 flex items-center gap-4 px-7">
+      <div class="min-w-0">
+        <h1 class="font-display font-bold text-[17px] text-navy leading-tight truncate">Painel</h1>
+        <p class="text-xs text-muted truncate">Visão geral dos seus atendimentos</p>
+      </div>
+      <div class="flex-1"></div>
+      
+      <div class="relative">
+        <button class="relative w-10 h-10 grid place-items-center rounded-lg text-muted hover:bg-surface hover:text-navy transition"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.857 17.082a23.85 23.85 0 005.454-1.31A8.97 8.97 0 0118 9.75V9A6 6 0 006 9v.75a8.97 8.97 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.26 24.26 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg>
+          <span class="absolute top-2 right-2 w-2 h-2 rounded-full bg-sla_danger ring-2 ring-white"></span></button>
+      </div>
+      <div class="flex items-center gap-3 pl-3 border-l border-line">
+        <div class="text-right leading-tight hidden sm:block">
+          <div class="text-sm font-semibold text-navy">Marina Rocha</div>
+          <div class="text-[11px] text-muted">Cliente</div>
+        </div>
+        <div class="w-9 h-9 rounded-full grid place-items-center text-white text-sm font-bold" style="background:#41B6E6" >MR</div>
+      </div>
+    </header><main class="flex-1 p-7 max-w-[1400px] w-full">
+  <div class="rounded-xl p-6 mb-6 bg-navy-900 text-white relative overflow-hidden">
+    <div class="absolute right-6 -top-10 w-48 h-48 rounded-full border-[28px] border-white/5"></div>
+    <div class="absolute right-40 top-10 w-24 h-24 rounded-full border-[14px] border-brandgreen/15"></div>
+    <p class="text-white/70 text-sm">Olá, Marina 👋</p>
+    <h2 class="font-display font-bold text-2xl mt-1">Bem-vinda ao Portal de Chamados</h2>
+    <p class="text-white/70 text-sm mt-1.5 max-w-lg">Acompanhe seus atendimentos e abra novas solicitações de suporte para as soluções Bondmann.</p>
+    <div class="mt-5"><button class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-brandgreen-600 text-white hover:bg-brandgreen-700 shadow-soft "><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Abrir novo chamado</button></div>
+  </div>
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-5 mb-6">
+    <div class="bg-white rounded-xl shadow-card border border-line/60 "><div class="p-5">
+      <div class="flex items-start justify-between">
+        <div class="w-10 h-10 rounded-lg grid place-items-center" style="background:#2563EB1f;color:#2563EB"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6v.75m0 3v.75m0 3v.75m0 3V18m-9-5.25h5.25M7.5 15h3M3.375 5.25c-.621 0-1.125.504-1.125 1.125v3.026a3 3 0 010 5.198v3.026c0 .621.504 1.125 1.125 1.125h17.25c.621 0 1.125-.504 1.125-1.125v-3.026a3 3 0 010-5.198V6.375c0-.621-.504-1.125-1.125-1.125H3.375z"/></svg></div>
+        <span class="inline-flex items-center gap-1 text-xs font-semibold" style="color:#16A34A">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4.5 15.75l7.5-7.5 7.5 7.5"/></svg>+1</span>
+      </div>
+      <div class="mt-3 text-[28px] font-display font-bold text-navy leading-none">3</div>
+      <div class="mt-1 text-[13px] text-muted">Chamados abertos</div>
+    </div></div>
+    <div class="bg-white rounded-xl shadow-card border border-line/60 "><div class="p-5">
+      <div class="flex items-start justify-between">
+        <div class="w-10 h-10 rounded-lg grid place-items-center" style="background:#6366F11f;color:#6366F1"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+        <span class="inline-flex items-center gap-1 text-xs font-semibold" style="color:#16A34A">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4.5 15.75l7.5-7.5 7.5 7.5"/></svg>2</span>
+      </div>
+      <div class="mt-3 text-[28px] font-display font-bold text-navy leading-none">2</div>
+      <div class="mt-1 text-[13px] text-muted">Em atendimento</div>
+    </div></div>
+    <div class="bg-white rounded-xl shadow-card border border-line/60 "><div class="p-5">
+      <div class="flex items-start justify-between">
+        <div class="w-10 h-10 rounded-lg grid place-items-center" style="background:#F59E0B1f;color:#F59E0B"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.857 17.082a23.85 23.85 0 005.454-1.31A8.97 8.97 0 0118 9.75V9A6 6 0 006 9v.75a8.97 8.97 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.26 24.26 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg></div>
+        <span class="inline-flex items-center gap-1 text-xs font-semibold" style="color:#DC2626">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>1</span>
+      </div>
+      <div class="mt-3 text-[28px] font-display font-bold text-navy leading-none">1</div>
+      <div class="mt-1 text-[13px] text-muted">Aguardando você</div>
+    </div></div>
+    <div class="bg-white rounded-xl shadow-card border border-line/60 "><div class="p-5">
+      <div class="flex items-start justify-between">
+        <div class="w-10 h-10 rounded-lg grid place-items-center" style="background:#16A34A1f;color:#16A34A"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+        <span class="inline-flex items-center gap-1 text-xs font-semibold" style="color:#16A34A">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4.5 15.75l7.5-7.5 7.5 7.5"/></svg>+22%</span>
+      </div>
+      <div class="mt-3 text-[28px] font-display font-bold text-navy leading-none">14</div>
+      <div class="mt-1 text-[13px] text-muted">Resolvidos no mês</div>
+    </div></div>
+  </div>
+  <div class="flex items-center justify-between mb-3">
+    <h3 class="font-display font-bold text-lg text-navy">Meus chamados</h3>
+    <div class="flex gap-2"><button class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-white text-navy ring-1 ring-line hover:bg-surface "><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z"/></svg>Filtrar</button><button class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-navy text-white hover:bg-navy-700 shadow-soft "><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Abrir chamado</button></div>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-line/60 overflow-hidden"><div class="overflow-x-auto"><table class="w-full">
+      <thead class="bg-surface/70"><th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted">Código</th><th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted">Assunto</th><th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted">Status</th><th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted">Prioridade</th><th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-muted">SLA</th><th></th></thead>
+      <tbody><tr class="border-t border-line hover:bg-surface/60 transition">
+      
+      <td class="px-4 py-3.5"><a href="cliente-chamado-detalhe.html" class="font-mono text-[12px] font-semibold text-brandgreen-700 hover:underline">BOND-2026-00412</a></td>
+      <td class="px-4 py-3.5"><a href="cliente-chamado-detalhe.html" class="text-sm font-medium text-navy hover:underline">Falha no dosador da linha 3</a></td>
+      
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold" style="background:#6366F11a;color:#6366F1"><span class="w-1.5 h-1.5 rounded-full" style="background:#6366F1"></span>Em atendimento</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold" style="background:#F59E0B14;color:#F59E0B">Alta</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold" style="background:#F59E0B14;color:#F59E0B"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>2h 10m restantes</span></td>
+      
+      <td class="px-4 py-3.5 text-right pr-5"><button class="text-faint hover:text-navy"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"/></svg></button></td>
+    </tr><tr class="border-t border-line hover:bg-surface/60 transition">
+      
+      <td class="px-4 py-3.5"><a href="cliente-chamado-detalhe.html" class="font-mono text-[12px] font-semibold text-brandgreen-700 hover:underline">BOND-2026-00411</a></td>
+      <td class="px-4 py-3.5"><a href="cliente-chamado-detalhe.html" class="text-sm font-medium text-navy hover:underline">Solicitação de FISPQ — FLUID B90</a></td>
+      
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold" style="background:#F59E0B1a;color:#F59E0B"><span class="w-1.5 h-1.5 rounded-full" style="background:#F59E0B"></span>Aguardando cliente</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold" style="background:#2563EB14;color:#2563EB">Média</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold" style="background:#16A34A14;color:#16A34A"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>1d 4h restantes</span></td>
+      
+      <td class="px-4 py-3.5 text-right pr-5"><button class="text-faint hover:text-navy"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"/></svg></button></td>
+    </tr><tr class="border-t border-line hover:bg-surface/60 transition">
+      
+      <td class="px-4 py-3.5"><a href="cliente-chamado-detalhe.html" class="font-mono text-[12px] font-semibold text-brandgreen-700 hover:underline">BOND-2026-00409</a></td>
+      <td class="px-4 py-3.5"><a href="cliente-chamado-detalhe.html" class="text-sm font-medium text-navy hover:underline">Vazamento em bombona — lote 8841</a></td>
+      
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold" style="background:#2563EB1a;color:#2563EB"><span class="w-1.5 h-1.5 rounded-full" style="background:#2563EB"></span>Novo</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold" style="background:#DC262614;color:#DC2626">Urgente</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold animate-pulseDanger" style="background:#DC262614;color:#DC2626"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Vencido há 35m</span></td>
+      
+      <td class="px-4 py-3.5 text-right pr-5"><button class="text-faint hover:text-navy"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"/></svg></button></td>
+    </tr><tr class="border-t border-line hover:bg-surface/60 transition">
+      
+      <td class="px-4 py-3.5"><a href="cliente-chamado-detalhe.html" class="font-mono text-[12px] font-semibold text-brandgreen-700 hover:underline">BOND-2026-00408</a></td>
+      <td class="px-4 py-3.5"><a href="cliente-chamado-detalhe.html" class="text-sm font-medium text-navy hover:underline">Dúvida de diluição — BD CLEAN</a></td>
+      
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold" style="background:#6366F11a;color:#6366F1"><span class="w-1.5 h-1.5 rounded-full" style="background:#6366F1"></span>Em atendimento</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold" style="background:#2563EB14;color:#2563EB">Média</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold" style="background:#16A34A14;color:#16A34A"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>6h 20m restantes</span></td>
+      
+      <td class="px-4 py-3.5 text-right pr-5"><button class="text-faint hover:text-navy"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"/></svg></button></td>
+    </tr><tr class="border-t border-line hover:bg-surface/60 transition">
+      
+      <td class="px-4 py-3.5"><a href="cliente-chamado-detalhe.html" class="font-mono text-[12px] font-semibold text-brandgreen-700 hover:underline">BOND-2026-00405</a></td>
+      <td class="px-4 py-3.5"><a href="cliente-chamado-detalhe.html" class="text-sm font-medium text-navy hover:underline">Troca de plano SLA Bronze→Ouro</a></td>
+      
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold" style="background:#16A34A1a;color:#16A34A"><span class="w-1.5 h-1.5 rounded-full" style="background:#16A34A"></span>Resolvido</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold" style="background:#64748B14;color:#64748B">Baixa</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold" style="background:#16A34A14;color:#16A34A"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Concluído no prazo</span></td>
+      
+      <td class="px-4 py-3.5 text-right pr-5"><button class="text-faint hover:text-navy"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"/></svg></button></td>
+    </tr></tbody></table></div></div>
+</main></div></div></body></html>

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cadastro · Bondmann Química</title>
+<link rel="stylesheet" href="./assets/fonts.css">
+<link rel="stylesheet" href="./assets/app.css">
+
+<style>
+  html{scroll-behavior:smooth}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px;border:2px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:#94a3b8;background-clip:content-box}
+  .glass{backdrop-filter:saturate(1.2) blur(2px)}
+</style>
+</head>
+<body class="font-sans bg-surface text-ink antialiased">
+<div class="min-h-screen grid lg:grid-cols-2">
+      <!-- brand side -->
+      <div class="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden bg-navy-900">
+        <div class="absolute -left-24 -top-24 w-[420px] h-[420px] rounded-full border-[60px] border-white/5"></div>
+        <div class="absolute right-[-120px] bottom-[-120px] w-[380px] h-[380px] rounded-full border-[48px] border-white/5"></div>
+        <div class="absolute left-1/3 top-1/4 w-40 h-40 rounded-full border-[26px] border-brandgreen/10"></div>
+        <div class="flex items-center gap-2.5 select-none">
+      <svg viewBox="0 0 46 46" fill="none" stroke="currentColor" stroke-width="2.4" class="w-9 h-9 text-brandgreen shrink-0"><circle cx="23.0" cy="23.0" r="5.3"/><circle cx="23.00" cy="10.50" r="5.3"/><circle cx="33.83" cy="16.75" r="5.3"/><circle cx="33.83" cy="29.25" r="5.3"/><circle cx="23.00" cy="35.50" r="5.3"/><circle cx="12.17" cy="29.25" r="5.3"/><circle cx="12.17" cy="16.75" r="5.3"/></svg>
+      <div class="leading-none">
+        <div class="font-display font-black tracking-tight text-2xl" style="color:#FFFFFF">BONDMANN</div>
+        <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5" style="color:#FFFFFF;opacity:.92">QUÍMICA</div>
+      </div>
+    </div>
+        <div class="relative">
+          <h2 class="font-display font-bold text-white text-[34px] leading-tight">Portal de<br>Chamados</h2>
+          <p class="text-white/70 mt-4 max-w-sm leading-relaxed">Suporte técnico, SLA e atendimento das soluções químicas Bondmann — em um só lugar, com a agilidade que sua operação exige.</p>
+          <div class="mt-8 flex gap-2.5">
+            <span class="px-3 py-1 rounded-full text-[11px] font-semibold bg-white/10 text-white">BD CLEAN</span>
+            <span class="px-3 py-1 rounded-full text-[11px] font-semibold bg-white/10 text-white">BD FLUID</span>
+            <span class="px-3 py-1 rounded-full text-[11px] font-semibold bg-white/10 text-white">BD INDUSTRY</span>
+            <span class="px-3 py-1 rounded-full text-[11px] font-semibold bg-white/10 text-white">BD MAX</span>
+          </div>
+        </div>
+        <div class="relative h-1.5 w-full rounded-full bg-gradient-to-r from-brandgreen via-brandgreen-600 to-navy-500"></div>
+      </div>
+      <!-- form side -->
+      <div class="flex items-center justify-center p-6 sm:p-12 bg-white">
+        <div class="w-full max-w-[400px]">
+          <div class="lg:hidden mb-8"><div class="flex items-center gap-2.5 select-none">
+      <svg viewBox="0 0 46 46" fill="none" stroke="currentColor" stroke-width="2.4" class="w-9 h-9 text-brandgreen shrink-0"><circle cx="23.0" cy="23.0" r="5.3"/><circle cx="23.00" cy="10.50" r="5.3"/><circle cx="33.83" cy="16.75" r="5.3"/><circle cx="33.83" cy="29.25" r="5.3"/><circle cx="23.00" cy="35.50" r="5.3"/><circle cx="12.17" cy="29.25" r="5.3"/><circle cx="12.17" cy="16.75" r="5.3"/></svg>
+      <div class="leading-none">
+        <div class="font-display font-black tracking-tight text-xl" style="color:#2E466F">BONDMANN</div>
+        <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5" style="color:#2E466F;opacity:.92">QUÍMICA</div>
+      </div>
+    </div></div>
+          
+  <h1 class="font-display font-bold text-2xl text-navy">Solicitar acesso</h1>
+  <p class="text-muted text-sm mt-1.5">Crie sua conta de cliente para abrir e acompanhar chamados.</p>
+  <form class="mt-7 space-y-4">
+    <label class="block"><span class="block text-[13px] font-semibold text-navy mb-1.5">Nome completo</span><div class="relative"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-faint"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.93 17.93 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg></span><input type="text" value="" placeholder="Seu nome" class="w-full pl-10 pr-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint"></div></label>
+    <label class="block"><span class="block text-[13px] font-semibold text-navy mb-1.5">E-mail corporativo</span><div class="relative"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-faint"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"/></svg></span><input type="email" value="" placeholder="voce@empresa.com.br" class="w-full pl-10 pr-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint"></div></label>
+    <label class="block"><span class="block text-[13px] font-semibold text-navy mb-1.5">Empresa</span><select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Selecione sua empresa…</option><option>TecnoMetal Usinagem</option><option>Indústria Petroquímica Sul</option><option>Agro Vale Verde</option></select><span class="block text-xs text-muted mt-1">Não encontrou? Fale com o administrador da sua conta.</span></label>
+    <label class="block"><span class="block text-[13px] font-semibold text-navy mb-1.5">Senha</span><div class="relative"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-faint"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg></span><input type="password" value="" placeholder="Crie uma senha forte" class="w-full pl-10 pr-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint"></div><span class="block text-xs text-muted mt-1">Mínimo 8 caracteres, com letras e números.</span></label>
+    <label class="flex items-start gap-2 text-xs text-muted"><input type="checkbox" class="mt-0.5 rounded border-line text-navy focus:ring-navy-500"> Li e aceito os termos de uso e a política de privacidade da Bondmann Química.</label>
+    <button class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-brandgreen-600 text-white hover:bg-brandgreen-700 shadow-soft w-full"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Criar conta</button>
+  </form>
+  <p class="mt-7 text-center text-sm text-muted">Já tem conta?
+    <a href="login.html" class="font-semibold text-navy hover:underline">Entrar</a></p>
+
+          <p class="mt-10 text-center text-xs text-faint">© 2026 Bondmann Química · bondmann.com.br</p>
+        </div>
+      </div>
+    </div></body></html>

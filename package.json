@@ -1,0 +1,23 @@
+{
+  "name": "portal-chamados-bondmann-prototipos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Protótipo de alta fidelidade das telas do Portal de Chamados Bondmann Química",
+  "scripts": {
+    "build:html": "python3 prototipos/build.py",
+    "build:css": "tailwindcss -c prototipos/tailwind.config.js -i prototipos/src.css -o prototipos/assets/app.css --minify",
+    "build": "npm run build:html && npm run build:css",
+    "serve": "python3 -m http.server 8000 --directory prototipos"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:41729/git/OsvaldoBello/Portal-chamados-Bondmann"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  },
+  "dependencies": {
+    "chart.js": "4.4.1"
+  }
+}

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard · Bondmann Química</title>
+<link rel="stylesheet" href="./assets/fonts.css">
+<link rel="stylesheet" href="./assets/app.css">
+<script src="./assets/chart.umd.js"></script><script>
+window.addEventListener('DOMContentLoaded',()=>{
+  const navy='#2E466F', green='#7FA53D', grid='#E2E8F0', muted='#64748B';
+  Chart.defaults.font.family='Inter'; Chart.defaults.color=muted; Chart.defaults.font.size=11;
+  new Chart(document.getElementById('cVol'),{type:'line',data:{labels:['01','05','09','13','17','21','25','27'],
+    datasets:[{label:'Abertos',data:[12,18,15,22,19,26,21,24],borderColor:navy,backgroundColor:'rgba(46,70,111,.08)',fill:true,tension:.4,borderWidth:2,pointRadius:0},
+    {label:'Resolvidos',data:[8,14,16,18,20,22,23,25],borderColor:green,backgroundColor:'rgba(127,165,61,.08)',fill:true,tension:.4,borderWidth:2,pointRadius:0}]},
+    options:{plugins:{legend:{position:'bottom',labels:{usePointStyle:true,boxWidth:6,padding:16}}},scales:{x:{grid:{display:false}},y:{grid:{color:grid},border:{display:false}}},maintainAspectRatio:false}});
+  new Chart(document.getElementById('cStatus'),{type:'doughnut',data:{labels:['Novo','Em atendimento','Aguardando','Resolvido'],
+    datasets:[{data:[8,14,9,42],backgroundColor:['#2563EB','#6366F1','#F59E0B','#16A34A'],borderWidth:0}]},
+    options:{cutout:'68%',plugins:{legend:{position:'bottom',labels:{usePointStyle:true,boxWidth:6,padding:12}}},maintainAspectRatio:false}});
+  new Chart(document.getElementById('cOp'),{type:'bar',data:{labels:['C. Freitas','M. Silva','J. Lima','P. Nunes','R. Alves'],
+    datasets:[{label:'Resolvidos',data:[42,38,29,24,18],backgroundColor:navy,borderRadius:6,barThickness:22}]},
+    options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{grid:{color:grid},border:{display:false}},y:{grid:{display:false}}},maintainAspectRatio:false}});
+});
+</script>
+<style>
+  html{scroll-behavior:smooth}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px;border:2px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:#94a3b8;background-clip:content-box}
+  .glass{backdrop-filter:saturate(1.2) blur(2px)}
+</style>
+</head>
+<body class="font-sans bg-surface text-ink antialiased">
+<div class="flex min-h-screen"><aside class="w-[248px] shrink-0 bg-navy-900 min-h-screen flex flex-col sticky top-0 self-start">
+      <div class="px-5 h-16 flex items-center border-b border-white/10"><div class="flex items-center gap-2.5 select-none">
+      <svg viewBox="0 0 46 46" fill="none" stroke="currentColor" stroke-width="2.4" class="w-9 h-9 text-brandgreen shrink-0"><circle cx="23.0" cy="23.0" r="5.3"/><circle cx="23.00" cy="10.50" r="5.3"/><circle cx="33.83" cy="16.75" r="5.3"/><circle cx="33.83" cy="29.25" r="5.3"/><circle cx="23.00" cy="35.50" r="5.3"/><circle cx="12.17" cy="29.25" r="5.3"/><circle cx="12.17" cy="16.75" r="5.3"/></svg>
+      <div class="leading-none">
+        <div class="font-display font-black tracking-tight text-[19px]" style="color:#FFFFFF">BONDMANN</div>
+        <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5" style="color:#FFFFFF;opacity:.92">QUÍMICA</div>
+      </div>
+    </div></div>
+      <nav class="flex-1 p-3 space-y-1"><a href="admin-dashboard.html" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition bg-white/10 text-white"><span class="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-brandgreen"></span><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg><span>Dashboard</span></a><a href="operador-fila-lista.html" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition text-white/70 hover:text-white hover:bg-white/5"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6v.75m0 3v.75m0 3v.75m0 3V18m-9-5.25h5.25M7.5 15h3M3.375 5.25c-.621 0-1.125.504-1.125 1.125v3.026a3 3 0 010 5.198v3.026c0 .621.504 1.125 1.125 1.125h17.25c.621 0 1.125-.504 1.125-1.125v-3.026a3 3 0 010-5.198V6.375c0-.621-.504-1.125-1.125-1.125H3.375z"/></svg><span>Chamados</span></a><a href="admin-empresas.html" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition text-white/70 hover:text-white hover:bg-white/5"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21"/></svg><span>Empresas</span></a><a href="admin-planos-sla.html" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition text-white/70 hover:text-white hover:bg-white/5"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span>Planos de SLA</span></a><a href="admin-categorias.html" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition text-white/70 hover:text-white hover:bg-white/5"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.1 18.1 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z"/></svg><span>Categorias</span></a><a href="admin-usuarios.html" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition text-white/70 hover:text-white hover:bg-white/5"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 19.128a9.38 9.38 0 002.625.372 9.34 9.34 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.32 12.32 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg><span>Usuários</span></a><a href="admin-relatorios.html" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition text-white/70 hover:text-white hover:bg-white/5"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg><span>Relatórios</span></a></nav>
+      <div class="p-3 border-t border-white/10">
+        <a href="login.html" class="flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 transition"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/></svg><span>Sair</span></a>
+      </div>
+    </aside><div class="flex-1 min-w-0 flex flex-col"><header class="h-16 bg-white border-b border-line sticky top-0 z-20 flex items-center gap-4 px-7">
+      <div class="min-w-0">
+        <h1 class="font-display font-bold text-[17px] text-navy leading-tight truncate">Dashboard</h1>
+        <p class="text-xs text-muted truncate">Indicadores e KPIs do service desk</p>
+      </div>
+      <div class="flex-1"></div>
+      <button class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-white text-navy ring-1 ring-line hover:bg-surface "><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/></svg>Exportar CSV</button>
+      <div class="relative">
+        <button class="relative w-10 h-10 grid place-items-center rounded-lg text-muted hover:bg-surface hover:text-navy transition"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.857 17.082a23.85 23.85 0 005.454-1.31A8.97 8.97 0 0118 9.75V9A6 6 0 006 9v.75a8.97 8.97 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.26 24.26 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg>
+          <span class="absolute top-2 right-2 w-2 h-2 rounded-full bg-sla_danger ring-2 ring-white"></span></button>
+      </div>
+      <div class="flex items-center gap-3 pl-3 border-l border-line">
+        <div class="text-right leading-tight hidden sm:block">
+          <div class="text-sm font-semibold text-navy">Ana Bondmann</div>
+          <div class="text-[11px] text-muted">Administrador</div>
+        </div>
+        <div class="w-9 h-9 rounded-full grid place-items-center text-white text-sm font-bold" style="background:#7FA53D" >AB</div>
+      </div>
+    </header><main class="flex-1 p-7 max-w-[1400px] w-full">
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-5 mb-6">
+    <div class="bg-white rounded-xl shadow-card border border-line/60 "><div class="p-5">
+      <div class="flex items-start justify-between">
+        <div class="w-10 h-10 rounded-lg grid place-items-center" style="background:#16A34A1f;color:#16A34A"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.96 11.96 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg></div>
+        <span class="inline-flex items-center gap-1 text-xs font-semibold" style="color:#16A34A">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4.5 15.75l7.5-7.5 7.5 7.5"/></svg>+3,1%</span>
+      </div>
+      <div class="mt-3 text-[28px] font-display font-bold text-navy leading-none">94,2%</div>
+      <div class="mt-1 text-[13px] text-muted">Conformidade SLA</div>
+    </div></div>
+    <div class="bg-white rounded-xl shadow-card border border-line/60 "><div class="p-5">
+      <div class="flex items-start justify-between">
+        <div class="w-10 h-10 rounded-lg grid place-items-center" style="background:#2E466F1f;color:#2E466F"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+        <span class="inline-flex items-center gap-1 text-xs font-semibold" style="color:#16A34A">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4.5 15.75l7.5-7.5 7.5 7.5"/></svg>-18m</span>
+      </div>
+      <div class="mt-3 text-[28px] font-display font-bold text-navy leading-none">3h 12m</div>
+      <div class="mt-1 text-[13px] text-muted">Tempo médio atend.</div>
+    </div></div>
+    <div class="bg-white rounded-xl shadow-card border border-line/60 "><div class="p-5">
+      <div class="flex items-start justify-between">
+        <div class="w-10 h-10 rounded-lg grid place-items-center" style="background:#5560B01f;color:#5560B0"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 6v.75m0 3v.75m0 3v.75m0 3V18m-9-5.25h5.25M7.5 15h3M3.375 5.25c-.621 0-1.125.504-1.125 1.125v3.026a3 3 0 010 5.198v3.026c0 .621.504 1.125 1.125 1.125h17.25c.621 0 1.125-.504 1.125-1.125v-3.026a3 3 0 010-5.198V6.375c0-.621-.504-1.125-1.125-1.125H3.375z"/></svg></div>
+        <span class="inline-flex items-center gap-1 text-xs font-semibold" style="color:#16A34A">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4.5 15.75l7.5-7.5 7.5 7.5"/></svg>+12%</span>
+      </div>
+      <div class="mt-3 text-[28px] font-display font-bold text-navy leading-none">312</div>
+      <div class="mt-1 text-[13px] text-muted">Chamados no mês</div>
+    </div></div>
+    <div class="bg-white rounded-xl shadow-card border border-line/60 "><div class="p-5">
+      <div class="flex items-start justify-between">
+        <div class="w-10 h-10 rounded-lg grid place-items-center" style="background:#7FA53D1f;color:#7FA53D"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+        <span class="inline-flex items-center gap-1 text-xs font-semibold" style="color:#16A34A">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4.5 15.75l7.5-7.5 7.5 7.5"/></svg>+0,2</span>
+      </div>
+      <div class="mt-3 text-[28px] font-display font-bold text-navy leading-none">4,6 / 5</div>
+      <div class="mt-1 text-[13px] text-muted">CSAT</div>
+    </div></div>
+  </div>
+  <div class="grid lg:grid-cols-3 gap-6 mb-6">
+    <div class="bg-white rounded-xl shadow-card border border-line/60 lg:col-span-2"><div class="p-5"><div class="flex items-center justify-between mb-4"><h3 class="font-display font-bold text-navy">Volume de chamados</h3><span class="text-xs text-muted">Junho/2026</span></div><div class="h-[260px]"><canvas id="cVol"></canvas></div></div></div>
+    <div class="bg-white rounded-xl shadow-card border border-line/60 "><div class="p-5"><h3 class="font-display font-bold text-navy mb-4">Por status</h3><div class="h-[260px]"><canvas id="cStatus"></canvas></div></div></div>
+  </div>
+  <div class="grid lg:grid-cols-3 gap-6">
+    <div class="bg-white rounded-xl shadow-card border border-line/60 "><div class="p-5"><h3 class="font-display font-bold text-navy mb-4">Produtividade por operador</h3><div class="h-[240px]"><canvas id="cOp"></canvas></div></div></div>
+    <div class="bg-white rounded-xl shadow-card border border-line/60 lg:col-span-2 overflow-hidden"><div class="p-5"><div class="flex items-center justify-between mb-2"><h3 class="font-display font-bold text-navy">Chamados recentes</h3><a href="operador-fila-lista.html" class="text-sm font-semibold text-brandgreen-700 hover:underline">Ver todos</a></div></div><div class="overflow-x-auto"><table class="w-full"><tbody><tr class="border-t border-line hover:bg-surface/60 transition">
+      <td class="pl-4 py-3.5"><input type="checkbox" class="rounded border-line text-navy focus:ring-navy-500"></td>
+      <td class="px-4 py-3.5"><a href="operador-atendimento.html" class="font-mono text-[12px] font-semibold text-brandgreen-700 hover:underline">BOND-2026-00412</a></td>
+      <td class="px-4 py-3.5"><a href="operador-atendimento.html" class="text-sm font-medium text-navy hover:underline">Falha no dosador da linha 3</a></td>
+      <td class="px-4 py-3.5 text-sm text-muted">Indústria Petroquímica Sul</td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold" style="background:#6366F11a;color:#6366F1"><span class="w-1.5 h-1.5 rounded-full" style="background:#6366F1"></span>Em atendimento</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold" style="background:#F59E0B14;color:#F59E0B">Alta</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold" style="background:#F59E0B14;color:#F59E0B"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>2h 10m restantes</span></td>
+      <td class="px-4 py-3.5"><div class="w-7 h-7 text-[11px] rounded-full grid place-items-center text-white font-bold shrink-0" style="background:#5560B0">CF</div></td>
+      <td class="px-4 py-3.5 text-right pr-5"><button class="text-faint hover:text-navy"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"/></svg></button></td>
+    </tr><tr class="border-t border-line hover:bg-surface/60 transition">
+      <td class="pl-4 py-3.5"><input type="checkbox" class="rounded border-line text-navy focus:ring-navy-500"></td>
+      <td class="px-4 py-3.5"><a href="operador-atendimento.html" class="font-mono text-[12px] font-semibold text-brandgreen-700 hover:underline">BOND-2026-00411</a></td>
+      <td class="px-4 py-3.5"><a href="operador-atendimento.html" class="text-sm font-medium text-navy hover:underline">Solicitação de FISPQ — FLUID B90</a></td>
+      <td class="px-4 py-3.5 text-sm text-muted">TecnoMetal Usinagem</td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold" style="background:#F59E0B1a;color:#F59E0B"><span class="w-1.5 h-1.5 rounded-full" style="background:#F59E0B"></span>Aguardando cliente</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold" style="background:#2563EB14;color:#2563EB">Média</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold" style="background:#16A34A14;color:#16A34A"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>1d 4h restantes</span></td>
+      <td class="px-4 py-3.5"><div class="w-7 h-7 text-[11px] rounded-full grid place-items-center text-white font-bold shrink-0" style="background:#5560B0">CF</div></td>
+      <td class="px-4 py-3.5 text-right pr-5"><button class="text-faint hover:text-navy"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"/></svg></button></td>
+    </tr><tr class="border-t border-line hover:bg-surface/60 transition">
+      <td class="pl-4 py-3.5"><input type="checkbox" class="rounded border-line text-navy focus:ring-navy-500"></td>
+      <td class="px-4 py-3.5"><a href="operador-atendimento.html" class="font-mono text-[12px] font-semibold text-brandgreen-700 hover:underline">BOND-2026-00409</a></td>
+      <td class="px-4 py-3.5"><a href="operador-atendimento.html" class="text-sm font-medium text-navy hover:underline">Vazamento em bombona — lote 8841</a></td>
+      <td class="px-4 py-3.5 text-sm text-muted">Agro Vale Verde</td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold" style="background:#2563EB1a;color:#2563EB"><span class="w-1.5 h-1.5 rounded-full" style="background:#2563EB"></span>Novo</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold" style="background:#DC262614;color:#DC2626">Urgente</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold animate-pulseDanger" style="background:#DC262614;color:#DC2626"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Vencido há 35m</span></td>
+      <td class="px-4 py-3.5"><span class="text-faint text-sm">Sem operador</span></td>
+      <td class="px-4 py-3.5 text-right pr-5"><button class="text-faint hover:text-navy"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"/></svg></button></td>
+    </tr><tr class="border-t border-line hover:bg-surface/60 transition">
+      <td class="pl-4 py-3.5"><input type="checkbox" class="rounded border-line text-navy focus:ring-navy-500"></td>
+      <td class="px-4 py-3.5"><a href="operador-atendimento.html" class="font-mono text-[12px] font-semibold text-brandgreen-700 hover:underline">BOND-2026-00408</a></td>
+      <td class="px-4 py-3.5"><a href="operador-atendimento.html" class="text-sm font-medium text-navy hover:underline">Dúvida de diluição — BD CLEAN</a></td>
+      <td class="px-4 py-3.5 text-sm text-muted">Frigorífico Boi Dourado</td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold" style="background:#6366F11a;color:#6366F1"><span class="w-1.5 h-1.5 rounded-full" style="background:#6366F1"></span>Em atendimento</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold" style="background:#2563EB14;color:#2563EB">Média</span></td>
+      <td class="px-4 py-3.5"><span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold" style="background:#16A34A14;color:#16A34A"><svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>6h 20m restantes</span></td>
+      <td class="px-4 py-3.5"><div class="w-7 h-7 text-[11px] rounded-full grid place-items-center text-white font-bold shrink-0" style="background:#5560B0">MS</div></td>
+      <td class="px-4 py-3.5 text-right pr-5"><button class="text-faint hover:text-navy"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM12.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM18.75 12a.75.75 0 11-1.5 0 .75.75 0 011.5 0z"/></svg></button></td>
+    </tr></tbody></table></div></div>
+  </div>
+</main></div></div></body></html>
