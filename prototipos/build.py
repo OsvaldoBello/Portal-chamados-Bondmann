@@ -491,10 +491,7 @@ novo_content = f'''
       {card(f'<div class="p-6 space-y-5"><h3 class="font-display font-bold text-lg text-navy">Dados do chamado</h3>'
         + field("Categoria", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Selecione a categoria…</option><option>Suporte técnico de produto</option><option>Solicitação de documento (FISPQ/Laudo)</option><option>Logística / Entrega</option><option>Comercial / Plano</option></select>',"A categoria pode exibir campos adicionais (HTMX).")
         + field("Assunto", input_ctl("Resuma o problema em uma frase"))
-        + '<div class="grid sm:grid-cols-2 gap-4">'
-        + field("Produto relacionado", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>BD CLEAN</option><option>BD FLUID — FLUID B90</option><option>BD INDUSTRY</option><option>BD MAX</option><option>BD AUTO</option><option>BD SERVICE</option></select>')
         + field("Prioridade", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Baixa</option><option selected>Média</option><option>Alta</option><option>Urgente</option></select>')
-        + '</div>'
         + field("Descrição detalhada", '<textarea rows="5" placeholder="Descreva o que aconteceu, lote, linha de produção, etc." class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint resize-none"></textarea>')
         + '</div>')}
       {card(f'<div class="p-6"><h3 class="font-display font-bold text-lg text-navy mb-4">Anexos</h3>{dropzone()}</div>')}

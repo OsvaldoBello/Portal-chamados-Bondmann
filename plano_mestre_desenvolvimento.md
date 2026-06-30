@@ -239,6 +239,7 @@ Matriz consolidada (das Seções 4.3 e 5 da spec):
 | Ver mensagens `is_interna = true` | **Não** | Sim | Sim |
 | Criar mensagem pública | Sim (nos seus chamados) | Sim | Sim |
 | Criar nota interna (`is_interna = true`) | **Não** | Sim | Sim |
+| **Avaliar chamado (1–5 ★, CSAT)** | **Só o autor**, e só quando `RESOLVIDO` | Não | Não |
 | Ver histórico/auditoria do chamado | Da própria empresa | Todos | Todos |
 | Gerir Planos de SLA | Não | Não | **Sim** |
 | Gerir Empresas | Não | Não | **Sim** |
@@ -258,6 +259,7 @@ RLS **habilitado nas 7 tabelas**. Princípio do menor privilégio. Resumo das po
   - `INSERT chamados`: `cliente_id = auth.uid()` **e** `empresa_id` = empresa do perfil.
   - `SELECT mensagens`: do chamado da sua empresa **e** `is_interna = false`.
   - **Sem** `UPDATE` de status/prioridade/operador.
+  - **`UPDATE chamados` (avaliação)**: permitido **apenas** no chamado próprio (`cliente_id = auth.uid()`) e **só quando `status = 'RESOLVIDO'`** (policy `chamados_update_cliente_avaliacao`). Como RLS não restringe colunas, o trigger `enforce_cliente_so_avaliacao` (Seção 5.3) garante que o CLIENTE só altere `avaliacao_nota`/`avaliacao_comentario`/`avaliacao_em` — qualquer mudança em status/prioridade/título/etc. é rejeitada. Defesa em profundidade: a rota também checa autor + `RESOLVIDO` antes de gravar.
 - **OPERADOR**
   - `SELECT/UPDATE chamados`: todos. `UPDATE` permitido em `status`, `prioridade`, `operador_id`.
   - `SELECT/INSERT mensagens`: todas, incluindo `is_interna`.
@@ -455,6 +457,10 @@ CREATE TABLE chamados (
   limite_resolucao timestamptz,                     -- calculado por calcular_sla_chamado
   respondido_em    timestamptz,                     -- primeira resposta do operador (para conformidade SLA)
   resolvido_em     timestamptz,
+  -- Avaliação (CSAT) do AUTOR, só quando RESOLVIDO (migration 0006 / Fase 3)
+  avaliacao_nota       smallint CHECK (avaliacao_nota BETWEEN 1 AND 5),
+  avaliacao_comentario text,
+  avaliacao_em         timestamptz,
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now()
 );
@@ -464,7 +470,22 @@ CREATE INDEX idx_chamados_operador     ON chamados(operador_id);
 CREATE INDEX idx_chamados_prioridade   ON chamados(prioridade);
 CREATE INDEX idx_chamados_limite_resol ON chamados(limite_resolucao);
 CREATE INDEX idx_chamados_empresa_status ON chamados(empresa_id, status);  -- fila filtrada por tenant
+CREATE INDEX idx_chamados_avaliacao ON chamados(avaliacao_nota) WHERE avaliacao_nota IS NOT NULL;  -- KPI CSAT
 ```
+
+> **`[DECISÃO DE PRODUTO]` Abertura por Categoria + Assunto (sem "Produto"):** o
+> chamado é classificado por **categoria** (`categoria_id`) e **assunto**
+> (`titulo`) — **não** existe dimensão de "produto" na abertura. O protótipo
+> aprovado trazia um campo "Produto relacionado" (lista de sub-marcas BD …) que
+> foi **removido** na aprovação; o schema canônico nunca teve essa coluna, então
+> a decisão apenas confirma o modelo. A tela de produção (`/portal/chamados/novo`)
+> e o protótipo de referência foram alinhados a essa regra.
+
+> **`[DECISÃO]` Avaliação (CSAT) no próprio `chamados`:** a nota 1–5 do autor é
+> persistida em `avaliacao_nota` (+ comentário e timestamp) na própria linha do
+> chamado, não em tabela à parte — leitura simples para o histórico do cliente e
+> fonte direta do KPI CSAT (Fase 5), sem depender de e-mail transacional. Regras
+> de quem/quando avalia: Seções 3.2/3.3; trava de coluna: Seção 5.3.
 
 #### 6. `mensagens`
 
@@ -519,6 +540,7 @@ CREATE INDEX idx_historico_chamado ON historico_chamados(chamado_id, created_at)
 2. **`gerar_codigo_chamado`** — `BEFORE INSERT` em `chamados`: gera `codigo` no formato **`BOND-YYYY-NNNNN`** via **sequence dedicada** (sem `SELECT MAX()+1` — seria *racy*).
 3. **`calcular_sla_chamado`** — `BEFORE INSERT` (e em mudança de prioridade) em `chamados`: calcula `limite_resposta`/`limite_resolucao` conforme 5.2 + escada C1.
 4. **`handle_new_user`** — `AFTER INSERT` em `auth.users`: cria `perfis` com `role = 'CLIENTE'`.
+5. **`enforce_cliente_so_avaliacao`** *(adicionado na Fase 3, migration 0006)* — `BEFORE UPDATE` em `chamados`: quando `auth_role() = 'CLIENTE'`, rejeita qualquer `UPDATE` que altere colunas que não sejam de avaliação (`avaliacao_nota`/`avaliacao_comentario`/`avaliacao_em`). Complementa a policy `chamados_update_cliente_avaliacao` (RLS não restringe colunas). `REVOKE EXECUTE` aplicado (não é RPC), como nas demais functions de trigger (Seção 0005).
 
 #### `gerar_codigo_chamado` — concorrência, escopo, reset, overflow `[LACUNA]`
 
@@ -587,7 +609,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 **Entregáveis (spec):** KPIs com gráficos; gestão de SLAs/Empresas; export CSV.
 **Critério de aceite (spec):** admin gera relatório do mês, exporta CSV e altera plano de SLA com efeito imediato nos novos chamados.
 **DoD adicional:**
-- [ ] KPIs: TMA, conformidade de SLA (% dentro de `limite_resolucao`), CSAT (`⚠️` requer e-mail transacional — pode ir a backlog se e-mail não estiver pronto), produtividade por operador.
+- [ ] KPIs: TMA, conformidade de SLA (% dentro de `limite_resolucao`), **CSAT** (média de `chamados.avaliacao_nota` — coletado no Portal do Cliente desde a Fase 3, **sem depender de e-mail transacional**), produtividade por operador.
 - [ ] Gestão de Empresas/Planos/Categorias (ativar/desativar sem excluir histórico); convite de usuários com role.
 - [ ] `GET /admin/export/csv` com filtro por datas e campos da spec (5.3).
 - [ ] Gráficos com Chart.js 4.
@@ -646,6 +668,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | 2026-06-26 | 5.1 / 5.4 / 6.2 / Estado | Início da produção (Fase 1). Aplicadas migrations `0001_init_enums` (3 enums) e `0002_tables_core` (7 tabelas + índices) no projeto Supabase `iurlzlhbnoemkzgexcfk`, materializando o schema canônico da Seção 5.1; `.sql` versionados em `supabase/migrations/`. Adicionada **regra dura de segurança** (6.2): chaves de API nunca expostas em código, docs ou qualquer artefato — só em env vars. RLS ainda **desabilitado** nas 7 tabelas (trabalho da Fase 2). |
 | 2026-06-26 | 0.2 / 1 / 2 / 3 / 6 / Estado | Fundação do backend (Fase 1 + Fase 2 backend). Scaffolding FastAPI (`app/`), `requirements.txt` com versões fixadas, Dockerfile multi-stage (Tailwind CLI + Python 3.12 slim + libmagic, porta 8080), Pydantic Settings, **camada de dados `asyncpg` com `SET LOCAL ROLE authenticated` + claims por transação** (Seção 3.1), cliente Supabase async só para Auth, **verificação local de JWT** (PyJWT, JWKS+HS256), **CSRF double-submit**, **security headers + CSP estrita**, cookies de sessão, rate limiting (slowapi em /login e /cadastro), logging JSON com request-id, `/health` + `/health/ready`, rotas `/login` `/logout` `/cadastro` e templates base. Suíte pytest (9 testes: health, CSP, CSRF, JWT) verde; build do Tailwind validado. Adicionado PyJWT à Seção 0.2. |
 | 2026-06-26 | 3.3 / 5.3 / 5.4 / Estado | Fase 2 (banco). Aplicadas `0003_triggers` (`trigger_set_timestamp`, `gerar_codigo_chamado` com contador anual atômico, `calcular_sla_chamado` com escada C1, `handle_new_user`), `0004_rls_policies` (helpers `auth_role`/`auth_empresa_id` SECURITY DEFINER, **RLS habilitado nas 7 tabelas + `contador_chamados`**, policies por papel da Seção 3.3, grants com `anon` sem acesso e imutabilidade de `mensagens`/`historico`) e `0005_harden_functions` (search_path fixo + REVOKE de EXECUTE nas functions de trigger). Smoke test em transação revertida confirmou código `BOND-YYYY-00001`, SLA URGENTE = 50% de ALTA e perfil CLIENTE automático. Advisor de segurança: 0 erros (resta apenas INFO de `contador_chamados` deny-all, intencional). |
+| 2026-06-30 | Consolidação de branches / 3.2 / 3.3 / 5.1 / 5.3 / 6 / Estado | **Consolidação:** backend (branch `supabase-table-setup`) + protótipos (branch `portal-screen-prototypes`) reunidos na branch de trabalho, com **um único MD autoritativo** para todo o projeto (as outras branches tinham cópias desatualizadas — esta passa a ser a fonte de verdade). **Avaliação (CSAT 1–5):** migration `0006_avaliacao_chamado` (colunas `avaliacao_*` em `chamados` + CHECK 1–5, policy `chamados_update_cliente_avaliacao` restrita a autor + `RESOLVIDO`, trigger `enforce_cliente_so_avaliacao` travando colunas, índice CSAT) aplicada no projeto `iurlzlhbnoemkzgexcfk`; advisors sem novos erros. **Decisão de produto:** abertura de chamado é por **Categoria + Assunto** — campo "Produto relacionado" removido do protótipo (`build.py` + `cliente-novo-chamado.html`). **Fase 3 (início):** Portal do Cliente em produção — rotas `/portal` (dashboard, novo chamado, detalhe, mensagens, avaliação), repositório `asyncpg`+RLS, templates Jinja com tokens da marca e widget de estrelas; CSAT deixa de depender de e-mail (Fase 5). Suíte pytest 30 testes verde (9 anteriores + 21 do portal/avaliação). |
 
 ---
 
@@ -664,8 +687,11 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | Camada de dados asyncpg + `SET LOCAL` (RLS sob pooling) | ✅ Implementado | 2 | `app/db.py`: transaction mode, `statement_cache_size=0`, claims por transação. |
 | Rate limiting (slowapi) — backend | ✅ Implementado | 2 | Aplicado em /login (5/min) e /cadastro (3/min); IP real via X-Forwarded-For. |
 | Observabilidade (logs JSON + request-id) | ✅ Implementado | 1 | Middleware de contexto + formatter JSON. |
-| Teste de isolamento multi-tenant | Planejado | 2 | **Bloqueia** Fase 3. |
-| Portal do Cliente (dashboard/abertura/chat) | Planejado | 3 | Upload validado server-side. |
+| Teste de isolamento multi-tenant | Planejado | 2 | **Bloqueia** validação final da Fase 3 (RLS real contra Supabase local). |
+| Portal do Cliente — dashboard + abertura + detalhe | 🟡 Em produção | 3 | Rotas `/portal` (FastAPI/Jinja2), repositório `asyncpg`+RLS, templates com tokens da marca. Falta: chat Realtime e upload de anexos. |
+| **Avaliação do chamado (CSAT 1–5)** | ✅ Implementado | 3 | Migration `0006`; só autor + `RESOLVIDO`; widget de estrelas no detalhe; 30 testes verdes. |
+| Abertura por Categoria + Assunto (sem "Produto") | ✅ Implementado | 3 | Decisão de produto; campo "Produto relacionado" removido (produção + protótipo). |
+| Vendoring HTMX 2.0 + Alpine CSP (self-host) | Planejado | 3 | Rating já funciona sem JS (form PRG) e com HTMX (header `HX-Request`). Faltam os bundles em `/static` com SRI. |
 | Storage privado + signed URLs (TTL 1h) | Planejado | 3 | Path `{empresa_id}/{chamado_id}/{arquivo}`. |
 | Workspace Operador (Kanban/Lista + SLA visual) | Planejado | 4 | Sortable.js + HTMX. |
 | Notas internas (`is_interna`) | Planejado | 4 | Invisível ao CLIENTE (RLS + Realtime). |

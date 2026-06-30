@@ -1,0 +1,68 @@
+{% extends "portal/app_base.html" %}
+{% from "portal/_macros.html" import status_badge, prioridade_badge, estrelas %}
+{% set active = "dashboard" %}
+{% block title %}Meus chamados — Portal Bondmann{% endblock %}
+{% block heading %}Meus chamados{% endblock %}
+{% block content %}
+
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+  {% set cards = [
+    ("Total", stats.total, "text-navy"),
+    ("Novos", stats.novo, "text-st_novo"),
+    ("Em atendimento", stats.em_atendimento, "text-st_atend"),
+    ("Resolvidos", stats.resolvido, "text-st_resolv"),
+  ] %}
+  {% for label, valor, cor in cards %}
+  <div class="bg-white rounded-xl shadow-card border border-line/60 p-4">
+    <div class="text-2xl font-display font-bold {{ cor }}">{{ valor }}</div>
+    <div class="text-xs text-muted mt-1">{{ label }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="flex items-center justify-between mb-3">
+  <h2 class="font-display font-bold text-navy">Histórico</h2>
+  <a href="/portal/chamados/novo"
+     class="px-3.5 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+    + Abrir chamado
+  </a>
+</div>
+
+<div class="bg-white rounded-xl shadow-card border border-line/60 overflow-hidden">
+  {% if chamados %}
+  <table class="w-full text-sm">
+    <thead class="bg-surface2 text-muted text-xs uppercase tracking-wide">
+      <tr>
+        <th class="text-left font-semibold px-4 py-3">Código</th>
+        <th class="text-left font-semibold px-4 py-3">Assunto</th>
+        <th class="text-left font-semibold px-4 py-3">Categoria</th>
+        <th class="text-left font-semibold px-4 py-3">Status</th>
+        <th class="text-left font-semibold px-4 py-3">Aberto em</th>
+        <th class="text-left font-semibold px-4 py-3">Avaliação</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-line">
+      {% for c in chamados %}
+      <tr class="hover:bg-surface/60">
+        <td class="px-4 py-3 font-mono text-xs text-muted">{{ c.codigo }}</td>
+        <td class="px-4 py-3">
+          <a href="/portal/chamados/{{ c.id }}" class="font-medium text-navy hover:underline">{{ c.titulo }}</a>
+        </td>
+        <td class="px-4 py-3 text-muted">{{ c.categoria or "—" }}</td>
+        <td class="px-4 py-3">{{ status_badge(c.status) }}</td>
+        <td class="px-4 py-3 text-muted">{{ fmt_dt(c.created_at) }}</td>
+        <td class="px-4 py-3">
+          {% if c.avaliacao_nota %}{{ estrelas(c.avaliacao_nota) }}{% else %}<span class="text-faint text-xs">—</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="p-10 text-center text-muted">
+    <p class="mb-3">Você ainda não abriu nenhum chamado.</p>
+    <a href="/portal/chamados/novo" class="text-navy font-semibold hover:underline">Abrir o primeiro chamado</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

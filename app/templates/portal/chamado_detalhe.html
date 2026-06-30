@@ -1,0 +1,69 @@
+{% extends "portal/app_base.html" %}
+{% from "portal/_macros.html" import status_badge, prioridade_badge %}
+{% set active = "dashboard" %}
+{% block title %}{{ chamado.codigo }} — Portal Bondmann{% endblock %}
+{% block heading %}Detalhe do chamado{% endblock %}
+{% block content %}
+
+<div class="mb-4">
+  <a href="/portal" class="text-sm text-muted hover:text-navy">&larr; Voltar aos chamados</a>
+</div>
+
+{# Cabeçalho do chamado #}
+<div class="bg-white rounded-xl shadow-card border border-line/60 p-6 mb-5">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <div class="font-mono text-xs text-muted mb-1">{{ chamado.codigo }}</div>
+      <h2 class="font-display font-bold text-xl text-navy">{{ chamado.titulo }}</h2>
+      <div class="flex flex-wrap items-center gap-3 mt-2 text-sm">
+        {{ status_badge(chamado.status) }}
+        <span class="text-muted">Prioridade: {{ prioridade_badge(chamado.prioridade) }}</span>
+        <span class="text-muted">Categoria: {{ chamado.categoria or "—" }}</span>
+      </div>
+    </div>
+    <div class="text-right text-xs text-muted shrink-0">
+      <div>Aberto em {{ fmt_dt(chamado.created_at) }}</div>
+      <div>Prazo de resolução: {{ fmt_dt(chamado.limite_resolucao) }}</div>
+    </div>
+  </div>
+  <p class="mt-4 text-sm text-ink whitespace-pre-line">{{ chamado.descricao }}</p>
+</div>
+
+{# Conversa #}
+<div class="bg-white rounded-xl shadow-card border border-line/60 p-6 mb-5">
+  <h3 class="font-display font-bold text-navy mb-4">Conversa</h3>
+  <div class="space-y-4">
+    {% for m in mensagens %}
+    <div class="flex gap-3">
+      <div class="w-9 h-9 rounded-full bg-surface2 grid place-items-center text-xs font-semibold text-navy shrink-0">
+        {{ (m.remetente_nome or "?")[:1] | upper }}
+      </div>
+      <div class="min-w-0">
+        <div class="text-xs text-muted">
+          <span class="font-semibold text-navy">{{ m.remetente_nome or "Usuário" }}</span>
+          · {{ fmt_dt(m.created_at) }}
+        </div>
+        <p class="text-sm text-ink whitespace-pre-line mt-0.5">{{ m.conteudo }}</p>
+      </div>
+    </div>
+    {% else %}
+    <p class="text-sm text-muted">Ainda não há mensagens neste chamado.</p>
+    {% endfor %}
+  </div>
+
+  {% if chamado.status != 'RESOLVIDO' %}
+  <form method="post" action="/portal/chamados/{{ chamado.id }}/mensagens" class="mt-5 flex gap-3">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="text" name="conteudo" required placeholder="Escreva uma mensagem…"
+           class="flex-1 px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+    <button type="submit"
+            class="px-5 py-2.5 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+      Enviar
+    </button>
+  </form>
+  {% endif %}
+</div>
+
+{# Avaliação (CSAT) — fragmento isolado para swap HTMX #}
+{% include "portal/_avaliacao.html" %}
+{% endblock %}

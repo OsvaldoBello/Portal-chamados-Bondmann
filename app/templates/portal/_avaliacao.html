@@ -1,0 +1,61 @@
+{% from "portal/_macros.html" import estrelas %}
+{# Fragmento de avaliação (CSAT 1–5). Alvo de swap HTMX por id="avaliacao". #}
+<div id="avaliacao" class="bg-white rounded-xl shadow-card border border-line/60 p-6">
+  <h3 class="font-display font-bold text-navy mb-3">Avaliação do atendimento</h3>
+
+  {% if erro %}
+  <p class="mb-3 rounded-lg bg-pr_urgente/10 px-3.5 py-2.5 text-sm text-pr_urgente">{{ erro }}</p>
+  {% endif %}
+
+  {% if chamado.avaliacao_nota %}
+    {# Já avaliado: leitura. #}
+    <div class="flex items-center gap-3">
+      {{ estrelas(chamado.avaliacao_nota) }}
+      <span class="text-sm font-semibold text-navy">{{ chamado.avaliacao_nota }}/5</span>
+    </div>
+    {% if chamado.avaliacao_comentario %}
+    <p class="mt-2 text-sm text-muted">“{{ chamado.avaliacao_comentario }}”</p>
+    {% endif %}
+    <p class="mt-2 text-xs text-faint">Avaliado em {{ fmt_dt(chamado.avaliacao_em) }}.</p>
+
+  {% elif pode_avaliar %}
+    {# Resolvido e ainda não avaliado: formulário. #}
+    <p class="text-sm text-muted mb-3">Como você avalia a resolução deste chamado?</p>
+    <form method="post" action="/portal/chamados/{{ chamado.id }}/avaliacao"
+          hx-post="/portal/chamados/{{ chamado.id }}/avaliacao"
+          hx-target="#avaliacao" hx-swap="outerHTML" class="space-y-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <fieldset class="flex items-center gap-2">
+        <legend class="sr-only">Nota de 1 a 5 estrelas</legend>
+        {% for i in range(1, 6) %}
+        <label class="cursor-pointer">
+          <input type="radio" name="nota" value="{{ i }}" required class="peer sr-only">
+          <span class="inline-flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg ring-1 ring-line
+                       text-faint hover:text-brandgreen-600
+                       peer-checked:text-brandgreen-700 peer-checked:ring-2 peer-checked:ring-brandgreen-600">
+            <svg class="w-6 h-6" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path d="M10 1.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L10 14.77 4.99 17.5l.99-5.79-4.21-4.1 5.82-.85z"/>
+            </svg>
+            <span class="text-xs font-semibold">{{ i }}</span>
+          </span>
+        </label>
+        {% endfor %}
+      </fieldset>
+      <label class="block">
+        <span class="block text-[13px] font-semibold text-navy mb-1.5">Comentário (opcional)</span>
+        <textarea name="comentario" rows="3" maxlength="500"
+                  placeholder="Conte como foi o atendimento"
+                  class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint resize-none"></textarea>
+      </label>
+      <button type="submit"
+              class="px-5 py-2.5 rounded-lg bg-brandgreen-600 text-white text-sm font-semibold hover:bg-brandgreen-700">
+        Enviar avaliação
+      </button>
+    </form>
+
+  {% else %}
+    <p class="text-sm text-muted">
+      A avaliação fica disponível assim que o chamado for <strong>resolvido</strong>.
+    </p>
+  {% endif %}
+</div>

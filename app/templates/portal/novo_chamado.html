@@ -1,0 +1,73 @@
+{% extends "portal/app_base.html" %}
+{% set active = "novo" %}
+{% block title %}Abrir chamado — Portal Bondmann{% endblock %}
+{% block heading %}Abrir chamado{% endblock %}
+{% block content %}
+
+<div class="max-w-2xl">
+  {% if erro %}
+  <p class="mb-4 rounded-lg bg-pr_urgente/10 px-3.5 py-2.5 text-sm text-pr_urgente">{{ erro }}</p>
+  {% endif %}
+
+  <form method="post" action="/portal/chamados"
+        class="bg-white rounded-xl shadow-card border border-line/60 p-6 space-y-5">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <div>
+      <h3 class="font-display font-bold text-lg text-navy">Dados do chamado</h3>
+      <p class="text-xs text-muted mt-1">
+        Os chamados são classificados por <strong>categoria</strong> e <strong>assunto</strong>.
+      </p>
+    </div>
+
+    {# Categoria #}
+    <label class="block">
+      <span class="block text-[13px] font-semibold text-navy mb-1.5">Categoria</span>
+      <select name="categoria_id"
+              class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+        <option value="">Selecione a categoria…</option>
+        {% for cat in categorias %}
+        <option value="{{ cat.id }}">{{ cat.nome }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    {# Assunto (titulo) #}
+    <label class="block">
+      <span class="block text-[13px] font-semibold text-navy mb-1.5">Assunto</span>
+      <input type="text" name="titulo" required maxlength="160"
+             placeholder="Resuma o problema em uma frase"
+             class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+    </label>
+
+    {# Prioridade #}
+    <label class="block">
+      <span class="block text-[13px] font-semibold text-navy mb-1.5">Prioridade</span>
+      <select name="prioridade"
+              class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+        {% for p in prioridades %}
+        <option value="{{ p }}" {% if p == 'MEDIA' %}selected{% endif %}>
+          {{ PRIORIDADE_META.get(p, {}).get('label', p) }}
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+
+    {# Descrição #}
+    <label class="block">
+      <span class="block text-[13px] font-semibold text-navy mb-1.5">Descrição detalhada</span>
+      <textarea name="descricao" rows="5" required
+                placeholder="Descreva o que aconteceu, lote, linha de produção, etc."
+                class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint resize-none"></textarea>
+    </label>
+
+    <div class="flex items-center justify-end gap-3 pt-2">
+      <a href="/portal" class="px-4 py-2.5 rounded-lg text-sm text-muted hover:text-navy">Cancelar</a>
+      <button type="submit"
+              class="px-5 py-2.5 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+        Abrir chamado
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}

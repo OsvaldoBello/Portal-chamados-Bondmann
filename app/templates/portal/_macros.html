@@ -1,0 +1,25 @@
+{# Componentes reutilizáveis de UI do portal (badges, estrelas). #}
+
+{% macro status_badge(status) -%}
+  {% set m = STATUS_META.get(status, {"label": status, "dot": "bg-faint", "text": "text-muted"}) %}
+  <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface2 text-xs font-semibold {{ m.text }}">
+    <span class="w-1.5 h-1.5 rounded-full {{ m.dot }}"></span>{{ m.label }}
+  </span>
+{%- endmacro %}
+
+{% macro prioridade_badge(prioridade) -%}
+  {% set m = PRIORIDADE_META.get(prioridade, {"label": prioridade, "text": "text-muted"}) %}
+  <span class="text-xs font-semibold {{ m.text }}">{{ m.label }}</span>
+{%- endmacro %}
+
+{# Estrelas estáticas (somente leitura), nota 0–5. #}
+{% macro estrelas(nota) -%}
+  <span class="inline-flex items-center gap-0.5" aria-label="{{ nota }} de 5 estrelas">
+    {% for i in range(1, 6) %}
+      <svg class="w-4 h-4 {{ 'text-brandgreen-600' if i <= (nota or 0) else 'text-line' }}"
+           viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path d="M10 1.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L10 14.77 4.99 17.5l.99-5.79-4.21-4.1 5.82-.85z"/>
+      </svg>
+    {% endfor %}
+  </span>
+{%- endmacro %}

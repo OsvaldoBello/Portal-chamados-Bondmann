@@ -24,6 +24,7 @@ from app.config import get_settings
 from app.db import close_pool, init_pool
 from app.observability import RequestContextMiddleware, configure_logging
 from app.routes.health import router as health_router
+from app.routes.portal import register_portal_routes
 from app.security.csrf import init_csrf
 from app.security.headers import SecurityHeadersMiddleware
 from app.security.jwt import init_verifier
@@ -92,6 +93,7 @@ def create_app() -> FastAPI:
     # Routers
     app.include_router(health_router)
     register_auth_routes(app, limiter)
+    register_portal_routes(app)
 
     # Tratamento de erro centralizado (Seção 6.3): sem vazar stack/segredos.
     app.add_exception_handler(HTTPException, _http_exception_handler)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -10,10 +12,38 @@ from fastapi.templating import Jinja2Templates
 from app.security.csrf import CSRF_HEADER, get_csrf
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+_TZ = ZoneInfo("America/Sao_Paulo")  # exibição em horário de Brasília (Seção 5.2)
+
+# Metadados de UI por status/prioridade (tokens da marca; Seção 5.1).
+STATUS_META = {
+    "NOVO":           {"label": "Novo",            "dot": "bg-st_novo",   "text": "text-st_novo"},
+    "EM_ATENDIMENTO": {"label": "Em atendimento",  "dot": "bg-st_atend",  "text": "text-st_atend"},
+    "AGUARDANDO":     {"label": "Aguardando",      "dot": "bg-st_aguard", "text": "text-st_aguard"},
+    "RESOLVIDO":      {"label": "Resolvido",       "dot": "bg-st_resolv", "text": "text-st_resolv"},
+}
+PRIORIDADE_META = {
+    "BAIXA":   {"label": "Baixa",   "text": "text-pr_baixa"},
+    "MEDIA":   {"label": "Média",   "text": "text-pr_media"},
+    "ALTA":    {"label": "Alta",    "text": "text-pr_alta"},
+    "URGENTE": {"label": "Urgente", "text": "text-pr_urgente"},
+}
+
+
+def fmt_dt(value: datetime | None, fmt: str = "%d/%m/%Y %H:%M") -> str:
+    """Formata um ``timestamptz`` (UTC no banco) em horário de Brasília."""
+    if value is None:
+        return "—"
+    return value.astimezone(_TZ).strftime(fmt)
+
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 # Jinja2Templates já liga autoescape para .html; reforçado explicitamente.
 templates.env.autoescape = True
+templates.env.globals.update(
+    STATUS_META=STATUS_META,
+    PRIORIDADE_META=PRIORIDADE_META,
+    fmt_dt=fmt_dt,
+)
 
 
 def render(request: Request, name: str, context: dict | None = None, status_code: int = 200):
