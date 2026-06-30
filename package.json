@@ -1,13 +1,15 @@
 {
-  "name": "portal-chamados-bondmann-prototipos",
-  "version": "1.0.0",
+  "name": "portal-chamados-bondmann",
+  "version": "0.1.0",
   "private": true,
-  "description": "Protótipo de alta fidelidade das telas do Portal de Chamados Bondmann Química",
+  "description": "Portal de Chamados Bondmann Química — frontend assets (Tailwind CLI build, Seção 0.4 / C3) e protótipos de referência",
   "scripts": {
-    "build:html": "python3 prototipos/build.py",
-    "build:css": "tailwindcss -c prototipos/tailwind.config.js -i prototipos/src.css -o prototipos/assets/app.css --minify",
-    "build": "npm run build:html && npm run build:css",
-    "serve": "python3 -m http.server 8000 --directory prototipos"
+    "build:css": "tailwindcss -i ./app/static/src/input.css -o ./app/static/css/app.css --minify",
+    "watch:css": "tailwindcss -i ./app/static/src/input.css -o ./app/static/css/app.css --watch",
+    "proto:build:html": "python3 prototipos/build.py",
+    "proto:build:css": "tailwindcss -c prototipos/tailwind.config.js -i prototipos/src.css -o prototipos/assets/app.css --minify",
+    "proto:build": "npm run proto:build:html && npm run proto:build:css",
+    "proto:serve": "python3 -m http.server 8000 --directory prototipos"
   },
   "repository": {
     "type": "git",

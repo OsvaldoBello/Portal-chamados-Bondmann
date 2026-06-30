@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Cadastro — Portal de Chamados{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-semibold mb-6">Criar conta</h1>
+
+{% if erro %}<p class="mb-4 rounded bg-red-100 px-3 py-2 text-red-800">{{ erro }}</p>{% endif %}
+
+<form method="post" action="/cadastro" class="space-y-4">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div>
+    <label for="nome" class="block text-sm font-medium">Nome</label>
+    <input id="nome" name="nome" type="text" required autocomplete="name"
+           class="mt-1 w-full rounded border-gray-300 px-3 py-2 border">
+  </div>
+  <div>
+    <label for="email" class="block text-sm font-medium">E-mail</label>
+    <input id="email" name="email" type="email" required autocomplete="email"
+           class="mt-1 w-full rounded border-gray-300 px-3 py-2 border">
+  </div>
+  <div>
+    <label for="password" class="block text-sm font-medium">Senha</label>
+    <input id="password" name="password" type="password" required minlength="8"
+           autocomplete="new-password"
+           class="mt-1 w-full rounded border-gray-300 px-3 py-2 border">
+  </div>
+  <button type="submit"
+          class="w-full rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700">
+    Cadastrar
+  </button>
+</form>
+
+<p class="mt-4 text-sm text-gray-600">
+  Já tem conta? <a href="/login" class="text-blue-600 hover:underline">Entrar</a>
+</p>
+{% endblock %}

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Portal de Chamados — Bondmann{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  {# Token CSRF disponível globalmente para mutações HTMX (Seção 3.5).
+     Em 2.0, hx-headers lê via expressão; aqui injetamos o valor já assinado. #}
+</head>
+<body class="min-h-screen bg-gray-50 text-gray-900"
+      hx-headers='{"{{ csrf_header }}": "{{ csrf_token }}"}'>
+  <main class="mx-auto max-w-md px-4 py-10">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

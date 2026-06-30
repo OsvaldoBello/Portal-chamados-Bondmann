@@ -1,0 +1,19 @@
+# Portal de Chamados Bondmann — runtime (versões fixadas, Seção 0 do plano mestre)
+# Backend (Python 3.12 no Docker)
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+supabase==2.11.0
+jinja2==3.1.5
+pydantic==2.10.4
+pydantic-settings==2.7.1
+asyncpg==0.30.0
+slowapi==0.1.9
+python-multipart==0.0.20
+python-magic==0.4.27
+itsdangerous==2.2.0
+httpx==0.27.2
+# Verificação de JWT local (JWKS RS256/ES256 + fallback HS256) — Seção 3.6.
+# [DECISÃO DE ENGENHARIA] adicionado ao stack: a spec exige verificação local
+# de assinatura/exp/aud por request; chamar a API do Supabase a cada request
+# seria gargalo. PyJWT[crypto] cobre JWKS e HS256.
+pyjwt[crypto]==2.10.1

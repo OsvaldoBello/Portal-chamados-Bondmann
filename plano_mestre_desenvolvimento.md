@@ -46,6 +46,7 @@ Toda biblioteca usada no projeto **deve** ter versão-alvo fixada em `requiremen
 | python-magic | `python-magic==0.4.*` | Validação de MIME por *magic bytes* (Seção 3.9). Requer `libmagic` na imagem Docker. |
 | itsdangerous | `itsdangerous==2.*` | Assinatura de token CSRF e/ou cookie de sessão. |
 | httpx | `httpx==0.27.*` | Cliente HTTP (testes e chamadas REST eventuais). `⚠️ VERSÃO A CONFIRMAR`. |
+| PyJWT | `pyjwt[crypto]==2.10.1` | `[DECISÃO DE ENGENHARIA]` adicionado ao stack (não estava na spec): verificação **local** de JWT por request (JWKS RS256/ES256 + fallback HS256, Seção 3.6). Validar via API do Supabase a cada request seria gargalo. Travado no lockfile. |
 
 ### 0.3 Testes
 
@@ -514,7 +515,7 @@ CREATE INDEX idx_historico_chamado ON historico_chamados(chamado_id, created_at)
 
 ### 5.3 Triggers/Functions (nomes exatos da spec)
 
-1. **`trigger_set_timestamp`** — `BEFORE UPDATE` em `empresas`, `perfis`, `chamados`: seta `updated_at = now()`.
+1. **`trigger_set_timestamp`** — `BEFORE UPDATE` em `planos_sla`, `empresas`, `perfis`, `chamados`: seta `updated_at = now()`. (`planos_sla` incluída na implementação por também possuir `updated_at`; estende a lista da spec.)
 2. **`gerar_codigo_chamado`** — `BEFORE INSERT` em `chamados`: gera `codigo` no formato **`BOND-YYYY-NNNNN`** via **sequence dedicada** (sem `SELECT MAX()+1` — seria *racy*).
 3. **`calcular_sla_chamado`** — `BEFORE INSERT` (e em mudança de prioridade) em `chamados`: calcula `limite_resposta`/`limite_resolucao` conforme 5.2 + escada C1.
 4. **`handle_new_user`** — `AFTER INSERT` em `auth.users`: cria `perfis` com `role = 'CLIENTE'`.
@@ -606,6 +607,16 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 - **Pydantic Settings** para toda configuração; **`.env` nunca commitado**; segredos via **env do Railway**.
 - **Regra dura:** a **`service_role` key NUNCA chega ao browser** e nunca é usada para servir dados de usuário (Seção 3.1). No browser só vão `SUPABASE_URL` + **anon key** (necessários ao `supabase-js` do Realtime) e o **JWT do usuário**.
 
+> ### 🔒 REGRA DURA DE SEGURANÇA — Chaves de API NUNCA expostas (vale para TODAS as fases)
+>
+> **Nenhuma chave de API, token, segredo ou string de conexão pode aparecer em texto claro em parte alguma do projeto.** Isto inclui — sem exceção — código-fonte, templates, arquivos de configuração versionados, **este e qualquer outro `.md`/documentação**, comentários, mensagens de commit, descrições de PR, logs, prints/screenshots e exemplos. Aplica-se a `anon key`, **chave publishable/`sb_publishable_...`**, `service_role key`, JWT secret, `DATABASE_URL` e quaisquer credenciais de terceiros.
+>
+> - **Único local permitido:** variáveis de ambiente (env do Railway em produção; `.env` local **no `.gitignore`**, nunca commitado), carregadas via Pydantic Settings.
+> - **Em documentação/exemplos:** usar sempre placeholders (`SUPABASE_ANON_KEY`, `<sua-anon-key>`), nunca o valor real.
+> - **Mesmo a `anon key`/publishable** (apesar de "pública") **não** deve ser hard-coded em arquivos versionados — entra no HTML servido **em runtime** a partir de env var, para permitir rotação sem alterar o repositório.
+> - **Se uma chave for exposta acidentalmente** (commit, log, chat): tratá-la como **comprometida** → **rotacionar imediatamente** no painel Supabase e purgar do histórico antes de qualquer outra ação.
+> - **Chaves recebidas via chat/issue** (como no setup inicial) servem **apenas** para a operação pontual e **não** devem ser persistidas no repositório.
+
 ### 6.3 Observabilidade
 
 - **Logging estruturado** (JSON) com **request-id** por requisição (correlação ponta a ponta).
@@ -632,6 +643,9 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | Data | Seção alterada | Resumo |
 |---|---|---|
 | 2026-06-26 | Todas | Criação do plano mestre a partir da spec v2.0. Contradições C1–C3 resolvidas; decisões de RLS×pooling, cache tenant-scoped, CSRF/CSP/headers, Storage, schema canônico das 7 tabelas, código BOND seguro sob concorrência, topologia Realtime e cronograma com DoD por fase. |
+| 2026-06-26 | 5.1 / 5.4 / 6.2 / Estado | Início da produção (Fase 1). Aplicadas migrations `0001_init_enums` (3 enums) e `0002_tables_core` (7 tabelas + índices) no projeto Supabase `iurlzlhbnoemkzgexcfk`, materializando o schema canônico da Seção 5.1; `.sql` versionados em `supabase/migrations/`. Adicionada **regra dura de segurança** (6.2): chaves de API nunca expostas em código, docs ou qualquer artefato — só em env vars. RLS ainda **desabilitado** nas 7 tabelas (trabalho da Fase 2). |
+| 2026-06-26 | 0.2 / 1 / 2 / 3 / 6 / Estado | Fundação do backend (Fase 1 + Fase 2 backend). Scaffolding FastAPI (`app/`), `requirements.txt` com versões fixadas, Dockerfile multi-stage (Tailwind CLI + Python 3.12 slim + libmagic, porta 8080), Pydantic Settings, **camada de dados `asyncpg` com `SET LOCAL ROLE authenticated` + claims por transação** (Seção 3.1), cliente Supabase async só para Auth, **verificação local de JWT** (PyJWT, JWKS+HS256), **CSRF double-submit**, **security headers + CSP estrita**, cookies de sessão, rate limiting (slowapi em /login e /cadastro), logging JSON com request-id, `/health` + `/health/ready`, rotas `/login` `/logout` `/cadastro` e templates base. Suíte pytest (9 testes: health, CSP, CSRF, JWT) verde; build do Tailwind validado. Adicionado PyJWT à Seção 0.2. |
+| 2026-06-26 | 3.3 / 5.3 / 5.4 / Estado | Fase 2 (banco). Aplicadas `0003_triggers` (`trigger_set_timestamp`, `gerar_codigo_chamado` com contador anual atômico, `calcular_sla_chamado` com escada C1, `handle_new_user`), `0004_rls_policies` (helpers `auth_role`/`auth_empresa_id` SECURITY DEFINER, **RLS habilitado nas 7 tabelas + `contador_chamados`**, policies por papel da Seção 3.3, grants com `anon` sem acesso e imutabilidade de `mensagens`/`historico`) e `0005_harden_functions` (search_path fixo + REVOKE de EXECUTE nas functions de trigger). Smoke test em transação revertida confirmou código `BOND-YYYY-00001`, SLA URGENTE = 50% de ALTA e perfil CLIENTE automático. Advisor de segurança: 0 erros (resta apenas INFO de `contador_chamados` deny-all, intencional). |
 
 ---
 
@@ -639,14 +653,17 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 
 | Feature | Status | Fase | Observações |
 |---|---|---|---|
-| Setup FastAPI + Dockerfile (porta 8080) | Planejado | 1 | Inclui Tailwind CLI build e `libmagic`. |
-| `GET /health` | Planejado | 1 | Railway healthcheck. |
-| Migrations base (enums + 7 tabelas + índices) | Planejado | 1–2 | Schema canônico Seção 5. |
-| Triggers (`trigger_set_timestamp`, `gerar_codigo_chamado`, `calcular_sla_chamado`, `handle_new_user`) | Planejado | 2 | Código BOND com contador anual atômico. |
-| Auth (login/logout/cadastro) + cookies de sessão | Planejado | 2 | httpOnly+Secure+SameSite. |
-| Verificação JWT (JWKS/HS256) | Planejado | 2 | Decisão Seção 3.6, confirmar modo do projeto. |
-| RLS nas 7 tabelas + policies por papel | Planejado | 2 | Acesso via asyncpg + `SET LOCAL`. |
-| CSRF + Security headers + CSP estrita | Planejado | 2 | Alpine CSP build, HTMX 2.0. |
+| Setup FastAPI + Dockerfile (porta 8080) | ✅ Implementado | 1 | Scaffolding `app/`, Dockerfile multi-stage (Tailwind CLI + libmagic), deps fixadas. Deploy Railway pendente. |
+| `GET /health` | ✅ Implementado | 1 | `/health` (liveness) + `/health/ready` (pool). Testado. |
+| Migrations base (enums + 7 tabelas + índices) | ✅ Implementado | 1–2 | Schema canônico Seção 5. Migrations `0001_init_enums` + `0002_tables_core` aplicadas no projeto `iurlzlhbnoemkzgexcfk` e versionadas em `supabase/migrations/`. RLS habilitado na Fase 2 (`0004`). |
+| Triggers (`trigger_set_timestamp`, `gerar_codigo_chamado`, `calcular_sla_chamado`, `handle_new_user`) | ✅ Implementado | 2 | Migration `0003_triggers`. Código BOND com contador anual atômico; SLA com escada C1; smoke test verde. |
+| Auth (login/logout/cadastro) + cookies de sessão | 🟡 Backend pronto | 2 | Rotas + cookies httpOnly+Secure+SameSite implementados. Falta validação e2e contra Supabase live e fluxo de refresh. |
+| Verificação JWT (JWKS/HS256) | ✅ Implementado | 2 | PyJWT, JWKS assimétrico + fallback HS256; testado (HS256). Confirmar modo do projeto live. |
+| RLS nas 7 tabelas + policies por papel | ✅ Implementado | 2 | Migrations `0004_rls_policies` + `0005_harden_functions`. Helpers `auth_role`/`auth_empresa_id`; `anon` sem acesso. Acesso de domínio via asyncpg + `SET LOCAL` (a implementar no backend). |
+| CSRF + Security headers + CSP estrita | ✅ Implementado | 2 | Double-submit + middleware de headers/CSP. Testado. Alpine/HTMX self-hosted pendente (Fase 3). |
+| Camada de dados asyncpg + `SET LOCAL` (RLS sob pooling) | ✅ Implementado | 2 | `app/db.py`: transaction mode, `statement_cache_size=0`, claims por transação. |
+| Rate limiting (slowapi) — backend | ✅ Implementado | 2 | Aplicado em /login (5/min) e /cadastro (3/min); IP real via X-Forwarded-For. |
+| Observabilidade (logs JSON + request-id) | ✅ Implementado | 1 | Middleware de contexto + formatter JSON. |
 | Teste de isolamento multi-tenant | Planejado | 2 | **Bloqueia** Fase 3. |
 | Portal do Cliente (dashboard/abertura/chat) | Planejado | 3 | Upload validado server-side. |
 | Storage privado + signed URLs (TTL 1h) | Planejado | 3 | Path `{empresa_id}/{chamado_id}/{arquivo}`. |
