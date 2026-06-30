@@ -6,9 +6,11 @@
 <title>Cadastro · Bondmann Química</title>
 <link rel="stylesheet" href="./assets/fonts.css">
 <link rel="stylesheet" href="./assets/app.css">
+<script defer src="./assets/alpine.min.js"></script>
 
 <style>
   html{scroll-behavior:smooth}
+  [x-cloak]{display:none!important}
   ::-webkit-scrollbar{width:10px;height:10px}
   ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px;border:2px solid transparent;background-clip:content-box}
   ::-webkit-scrollbar-thumb:hover{background:#94a3b8;background-clip:content-box}
@@ -60,7 +62,7 @@
     <label class="block"><span class="block text-[13px] font-semibold text-navy mb-1.5">Empresa</span><select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Selecione sua empresa…</option><option>TecnoMetal Usinagem</option><option>Indústria Petroquímica Sul</option><option>Agro Vale Verde</option></select><span class="block text-xs text-muted mt-1">Não encontrou? Fale com o administrador da sua conta.</span></label>
     <label class="block"><span class="block text-[13px] font-semibold text-navy mb-1.5">Senha</span><div class="relative"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-faint"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg></span><input type="password" value="" placeholder="Crie uma senha forte" class="w-full pl-10 pr-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint"></div><span class="block text-xs text-muted mt-1">Mínimo 8 caracteres, com letras e números.</span></label>
     <label class="flex items-start gap-2 text-xs text-muted"><input type="checkbox" class="mt-0.5 rounded border-line text-navy focus:ring-navy-500"> Li e aceito os termos de uso e a política de privacidade da Bondmann Química.</label>
-    <button class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-brandgreen-600 text-white hover:bg-brandgreen-700 shadow-soft w-full"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Criar conta</button>
+    <button  class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-brandgreen-600 text-white hover:bg-brandgreen-700 shadow-soft w-full"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Criar conta</button>
   </form>
   <p class="mt-7 text-center text-sm text-muted">Já tem conta?
     <a href="login.html" class="font-semibold text-navy hover:underline">Entrar</a></p>

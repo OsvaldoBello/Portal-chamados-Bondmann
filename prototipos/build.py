@@ -86,6 +86,9 @@ ICONS = {
  "calendar":"M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5",
  "shield":"M9 12.75L11.25 15 15 9.75m-3-7.036A11.96 11.96 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z",
  "doc":"M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z",
+ "menu":"M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5",
+ "cog":"M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.03 7.03 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.93 6.93 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.281z M15 12a3 3 0 11-6 0 3 3 0 016 0z",
+ "home":"M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25",
 }
 
 def icon(name, cls="w-5 h-5", sw="1.6"):
@@ -104,9 +107,11 @@ HEAD = """<!doctype html>
 <title>__TITLE__ · Bondmann Química</title>
 <link rel="stylesheet" href="./assets/fonts.css">
 <link rel="stylesheet" href="./assets/app.css">
+<script defer src="./assets/alpine.min.js"></script>
 __EXTRA__
 <style>
   html{scroll-behavior:smooth}
+  [x-cloak]{display:none!important}
   ::-webkit-scrollbar{width:10px;height:10px}
   ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px;border:2px solid transparent;background-clip:content-box}
   ::-webkit-scrollbar-thumb:hover{background:#94a3b8;background-clip:content-box}
@@ -154,9 +159,10 @@ def sidebar(role, active):
         bar = '<span class="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-brandgreen"></span>' if on else ''
         items += (f'<a href="{href}" class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition {cls}">'
                   f'{bar}{icon(ic,"w-5 h-5")}<span>{label}</span></a>')
-    return f'''<aside class="w-[248px] shrink-0 bg-navy-900 min-h-screen flex flex-col sticky top-0 self-start">
-      <div class="px-5 h-16 flex items-center border-b border-white/10">{logo("dark","text-[19px]")}</div>
-      <nav class="flex-1 p-3 space-y-1">{items}</nav>
+    return f'''<aside class="w-[248px] shrink-0 bg-navy-900 min-h-screen flex flex-col fixed lg:sticky top-0 self-start z-40 transition-transform -translate-x-full lg:translate-x-0" :class="{{'translate-x-0':sidebar}}">
+      <div class="px-5 h-16 flex items-center justify-between border-b border-white/10">{logo("dark","text-[19px]")}
+        <button @click="sidebar=false" class="lg:hidden text-white/60 hover:text-white">✕</button></div>
+      <nav class="flex-1 p-3 space-y-1 overflow-y-auto">{items}</nav>
       <div class="p-3 border-t border-white/10">
         <a href="login.html" class="flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 transition">{icon("logout")}<span>Sair</span></a>
       </div>
@@ -166,25 +172,50 @@ AVATARS = {"cliente":("MR","Marina Rocha","ac_auto"),"operador":("CF","Carlos Fr
 
 def topbar(role, title, subtitle="", actions=""):
     ini, name, color = AVATARS[role]
-    return f'''<header class="h-16 bg-white border-b border-line sticky top-0 z-20 flex items-center gap-4 px-7">
+    notifs = [
+      ("sla_danger","BOND-2026-00409 venceu o SLA","Agro Vale Verde · há 35m"),
+      ("st_novo","Novo chamado atribuído a você","Metalúrgica Horizonte · há 1h"),
+      ("st_resolv","Chamado BOND-2026-00405 resolvido","TecnoMetal · há 3h"),
+    ]
+    nrows = ""
+    for c,t,m in notifs:
+        nrows += (f'<a class="flex gap-3 px-4 py-3 hover:bg-surface border-b border-line/70 last:border-0">'
+                  f'<span class="mt-1.5 w-2 h-2 rounded-full shrink-0" style="background:{_hex(c)}"></span>'
+                  f'<div><div class="text-sm font-medium text-navy leading-snug">{t}</div><div class="text-xs text-muted mt-0.5">{m}</div></div></a>')
+    menu_item = lambda ic,label,href: f'<a href="{href}" class="flex items-center gap-2.5 px-4 py-2.5 text-sm text-ink hover:bg-surface">{icon(ic,"w-4 h-4")}{label}</a>'
+    return f'''<header class="h-16 bg-white border-b border-line sticky top-0 z-20 flex items-center gap-3 px-5 sm:px-7">
+      <button @click="sidebar=true" class="lg:hidden w-10 h-10 -ml-2 grid place-items-center rounded-lg text-muted hover:bg-surface hover:text-navy">{icon("menu")}</button>
       <div class="min-w-0">
         <h1 class="font-display font-bold text-[17px] text-navy leading-tight truncate">{title}</h1>
         {f'<p class="text-xs text-muted truncate">{subtitle}</p>' if subtitle else ''}
       </div>
       <div class="flex-1"></div>
       {actions}
-      <div class="relative">
-        <button class="relative w-10 h-10 grid place-items-center rounded-lg text-muted hover:bg-surface hover:text-navy transition">{icon("bell")}
+      <div class="relative" @click.outside="notif=false">
+        <button @click="notif=!notif" class="relative w-10 h-10 grid place-items-center rounded-lg text-muted hover:bg-surface hover:text-navy transition">{icon("bell")}
           <span class="absolute top-2 right-2 w-2 h-2 rounded-full bg-sla_danger ring-2 ring-white"></span></button>
-      </div>
-      <div class="flex items-center gap-3 pl-3 border-l border-line">
-        <div class="text-right leading-tight hidden sm:block">
-          <div class="text-sm font-semibold text-navy">{name}</div>
-          <div class="text-[11px] text-muted">{ROLE_LABEL[role]}</div>
+        <div x-show="notif" x-cloak x-transition.origin.top.right class="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-card border border-line overflow-hidden z-30">
+          <div class="px-4 py-3 border-b border-line flex items-center justify-between"><span class="font-display font-bold text-sm text-navy">Notificações</span><span class="text-[11px] font-semibold text-brandgreen-700">3 novas</span></div>
+          {nrows}
+          <a class="block text-center text-sm font-semibold text-navy py-2.5 hover:bg-surface">Ver todas</a>
         </div>
-        <div class="w-9 h-9 rounded-full grid place-items-center text-white text-sm font-bold" style="background:var(--av)" >{ini}</div>
       </div>
-    </header>'''.replace("var(--av)", _color(color))
+      <div class="relative pl-2 sm:pl-3 border-l border-line" @click.outside="user=false">
+        <button @click="user=!user" class="flex items-center gap-3">
+          <div class="text-right leading-tight hidden sm:block">
+            <div class="text-sm font-semibold text-navy">{name}</div>
+            <div class="text-[11px] text-muted">{ROLE_LABEL[role]}</div>
+          </div>
+          <div class="w-9 h-9 rounded-full grid place-items-center text-white text-sm font-bold" style="background:{_color(color)}">{ini}</div>
+        </button>
+        <div x-show="user" x-cloak x-transition.origin.top.right class="absolute right-0 mt-2 w-52 bg-white rounded-xl shadow-card border border-line overflow-hidden z-30 py-1">
+          <div class="px-4 py-2 border-b border-line mb-1"><div class="text-sm font-semibold text-navy">{name}</div><div class="text-[11px] text-muted">{ROLE_LABEL[role]}</div></div>
+          {menu_item("user","Meu perfil","perfil.html")}
+          {menu_item("cog","Configurações","perfil.html")}
+          <div class="border-t border-line mt-1 pt-1">{menu_item("logout","Sair","login.html")}</div>
+        </div>
+      </div>
+    </header>'''
 
 def _color(tok):
     m = {"ac_auto":"#41B6E6","ac_industry":"#5560B0","brandgreen":"#7FA53D","ac_clean":"#1FB98C"}
@@ -192,9 +223,11 @@ def _color(tok):
 
 def shell(role, active, title, content, subtitle="", actions="", extra=""):
     return (head(title, extra) +
-            f'<div class="flex min-h-screen">{sidebar(role, active)}'
+            f'<div class="flex min-h-screen" x-data="{{ sidebar:false, notif:false, user:false }}">'
+            f'{sidebar(role, active)}'
+            f'<div x-show="sidebar" x-cloak @click="sidebar=false" class="fixed inset-0 bg-navy-900/50 z-30 lg:hidden"></div>'
             f'<div class="flex-1 min-w-0 flex flex-col">{topbar(role, title, subtitle, actions)}'
-            f'<main class="flex-1 p-7 max-w-[1400px] w-full">{content}</main></div></div>' + FOOT)
+            f'<main class="flex-1 p-5 sm:p-7 max-w-[1400px] w-full">{content}</main></div></div>' + FOOT)
 
 # ---- átomos ----------------------------------------------------------------
 STATUS = {
@@ -225,7 +258,7 @@ def sla_chip(state, text):
     return (f'<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold{pulse}" '
             f'style="background:{_hex(c)}14;color:{_hex(c)}">{icon("clock","w-3.5 h-3.5","2")}{text}</span>')
 
-def btn(label, kind="primary", ic=None, cls=""):
+def btn(label, kind="primary", ic=None, cls="", attrs=""):
     base = "inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5"
     styles = {
       "primary":"bg-navy text-white hover:bg-navy-700 shadow-soft",
@@ -235,7 +268,20 @@ def btn(label, kind="primary", ic=None, cls=""):
       "danger":"bg-sla_danger text-white hover:opacity-90",
     }
     i = icon(ic,"w-4 h-4","2") if ic else ""
-    return f'<button class="{base} {styles[kind]} {cls}">{i}{label}</button>'
+    return f'<button {attrs} class="{base} {styles[kind]} {cls}">{i}{label}</button>'
+
+def modal(state, title, body, footer):
+    return f'''<div x-show="{state}" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div x-show="{state}" x-transition.opacity @click="{state}=false" class="absolute inset-0 bg-navy-900/60"></div>
+      <div x-show="{state}" x-transition.scale.origin.center class="relative w-full max-w-lg bg-white rounded-2xl shadow-card overflow-hidden">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-line">
+          <h3 class="font-display font-bold text-lg text-navy">{title}</h3>
+          <button @click="{state}=false" class="w-8 h-8 grid place-items-center rounded-lg text-muted hover:bg-surface hover:text-navy">✕</button>
+        </div>
+        <div class="p-6 space-y-4">{body}</div>
+        <div class="flex justify-end gap-2 px-6 py-4 bg-surface/60 border-t border-line">{footer}</div>
+      </div>
+    </div>'''
 
 def avatar(ini, color="#5560B0", size="w-9 h-9 text-sm"):
     return f'<div class="{size} rounded-full grid place-items-center text-white font-bold shrink-0" style="background:{color}">{ini}</div>'
@@ -494,13 +540,23 @@ def chat_thread(internal=False):
     return '<div class="space-y-5">'+ "".join(msgs) +'</div>'
 
 def chat_composer(internal=False):
-    toggle = ''
     if internal:
-        toggle = '''<label class="flex items-center gap-2 text-sm text-muted cursor-pointer" x-data>
-          <input type="checkbox" class="sr-only peer"><span class="w-9 h-5 rounded-full bg-line peer-checked:bg-[#F0934E] relative transition after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4 after:bg-white after:rounded-full after:transition peer-checked:after:translate-x-4"></span>
-          <span class="font-medium">Nota interna</span></label>'''
+        return f'''<div x-data="{{interna:false}}" class="border-t border-line p-4 transition-colors" :class="interna ? 'bg-[#FEF6E7]' : 'bg-white'">
+      <div class="flex items-center justify-between mb-2">
+        <label class="flex items-center gap-2 text-sm cursor-pointer select-none">
+          <input type="checkbox" x-model="interna" class="sr-only peer">
+          <span class="w-9 h-5 rounded-full bg-line peer-checked:bg-[#F0934E] relative transition after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4 after:bg-white after:rounded-full after:transition peer-checked:after:translate-x-4"></span>
+          <span class="font-medium" :class="interna ? 'text-[#b86a2a]' : 'text-muted'">Nota interna</span>
+        </label>
+        <span class="text-[11px]" :class="interna ? 'text-[#b86a2a]' : 'text-faint'" x-text="interna ? 'Visível apenas para operadores e admin' : 'Pressione Enter para enviar'"></span>
+      </div>
+      <div class="flex items-end gap-2">
+        <button class="w-10 h-10 grid place-items-center rounded-lg text-muted hover:bg-surface hover:text-navy shrink-0">{icon("clip")}</button>
+        <textarea rows="1" :placeholder="interna ? 'Escreva uma nota interna…' : 'Escreva sua mensagem…'" class="flex-1 px-3.5 py-2.5 rounded-lg ring-1 focus:ring-2 outline-none text-sm resize-none" :class="interna ? 'bg-white ring-[#F0C674] focus:ring-[#F0934E]' : 'bg-surface ring-line focus:ring-navy-500'"></textarea>
+        <button class="w-10 h-10 grid place-items-center rounded-lg text-white shrink-0 transition" :class="interna ? 'bg-[#F0934E] hover:opacity-90' : 'bg-navy hover:bg-navy-700'">{icon("send")}</button>
+      </div></div>'''
     return f'''<div class="border-t border-line p-4 bg-white">
-      <div class="flex items-center justify-between mb-2">{toggle}<span class="text-[11px] text-faint">Pressione Enter para enviar</span></div>
+      <div class="flex items-center justify-end mb-2"><span class="text-[11px] text-faint">Pressione Enter para enviar</span></div>
       <div class="flex items-end gap-2">
         <button class="w-10 h-10 grid place-items-center rounded-lg text-muted hover:bg-surface hover:text-navy shrink-0">{icon("clip")}</button>
         <textarea rows="1" placeholder="Escreva sua mensagem…" class="flex-1 px-3.5 py-2.5 rounded-lg bg-surface ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm resize-none"></textarea>
@@ -707,13 +763,23 @@ emp_rows = "".join([
   emp_row("Frigorífico Boi Dourado","78.912.345/0001-55","Bronze",4,"Ativa"),
   emp_row("Metalúrgica Horizonte","32.165.498/0001-72","Prata",11,"Inativa"),
 ])
-admin_emp = f'''
+emp_modal_body = (
+    field("Nome fantasia", input_ctl("Ex.: TecnoMetal Usinagem","building"))
+    + '<div class="grid sm:grid-cols-2 gap-4">'
+    + field("CNPJ", input_ctl("00.000.000/0001-00"))
+    + field("Plano de SLA", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Bronze</option><option>Prata</option><option selected>Ouro</option></select>')
+    + '</div>'
+    + field("Status", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Ativa</option><option>Inativa</option></select>')
+)
+emp_modal_footer = btn("Cancelar","ghost",attrs='@click="open=false"') + btn("Salvar empresa","primary","check",attrs='@click="open=false"')
+admin_emp = f'''<div x-data="{{ open:false }}">
   <div class="flex items-center justify-between mb-4">
     <div class="relative w-80"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-faint">{icon("search")}</span><input placeholder="Buscar empresa…" class="w-full pl-10 pr-3 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"></div>
-    {btn("Nova empresa","primary","plus")}
+    {btn("Nova empresa","primary","plus",attrs='@click="open=true"')}
   </div>
   {table(["Empresa","Plano de SLA","Usuários","Status"], emp_rows, "admin").replace('<th class="pl-4 py-3 w-10"><input type="checkbox" class="rounded border-line text-navy focus:ring-navy-500"></th>','')}
-'''
+  {modal("open","Nova empresa", emp_modal_body, emp_modal_footer)}
+</div>'''
 PAGES["admin-empresas.html"] = shell("admin","admin-empresas.html","Empresas",admin_emp,"Gestão de empresas (tenants)")
 
 # PLANOS SLA
@@ -783,16 +849,26 @@ user_rows = "".join([
   user_row("MR","Marina Rocha","marina@petrosul.com.br","CLIENTE","Indústria Petroquímica Sul"),
   user_row("JT","João Tavares","joao@tecnometal.com.br","CLIENTE","TecnoMetal Usinagem",ativo=False),
 ])
-admin_user = f'''
+user_modal_body = (
+    '<div class="rounded-lg p-3 text-xs flex gap-2 mb-1" style="background:#EFF6FF;color:#2563EB">' + icon("mail","w-4 h-4 shrink-0 mt-0.5","2") + '<span>O usuário receberá um e-mail com link para definir a senha e acessar o portal.</span></div>'
+    + field("E-mail", input_ctl("pessoa@empresa.com.br","mail",type="email"))
+    + '<div class="grid sm:grid-cols-2 gap-4">'
+    + field("Papel", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Cliente</option><option>Operador</option><option>Administrador</option></select>')
+    + field("Empresa", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Bondmann (interno)</option><option>TecnoMetal Usinagem</option><option>Indústria Petroquímica Sul</option></select>')
+    + '</div>'
+)
+user_modal_footer = btn("Cancelar","ghost",attrs='@click="open=false"') + btn("Enviar convite","green","send",attrs='@click="open=false"')
+admin_user = f'''<div x-data="{{ open:false }}">
   <div class="flex items-center justify-between mb-4">
     <div class="flex gap-2">
       <div class="relative w-72"><span class="absolute left-3 top-1/2 -translate-y-1/2 text-faint">{icon("search")}</span><input placeholder="Buscar usuário…" class="w-full pl-10 pr-3 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"></div>
       <select class="px-3 py-2.5 rounded-lg bg-white ring-1 ring-line text-sm text-navy outline-none focus:ring-2 focus:ring-navy-500"><option>Todos os papéis</option><option>Administrador</option><option>Operador</option><option>Cliente</option></select>
     </div>
-    {btn("Convidar usuário","primary","plus")}
+    {btn("Convidar usuário","primary","plus",attrs='@click="open=true"')}
   </div>
   {table(["Usuário","Papel","Empresa","Status"], user_rows, "admin").replace('<th class="pl-4 py-3 w-10"><input type="checkbox" class="rounded border-line text-navy focus:ring-navy-500"></th>','')}
-'''
+  {modal("open","Convidar usuário", user_modal_body, user_modal_footer)}
+</div>'''
 PAGES["admin-usuarios.html"] = shell("admin","admin-usuarios.html","Usuários",admin_user,"Gestão de usuários e papéis (ADMIN / OPERADOR / CLIENTE)")
 
 # RELATORIOS
@@ -817,6 +893,72 @@ admin_rel = f'''
 '''
 PAGES["admin-relatorios.html"] = shell("admin","admin-relatorios.html","Relatórios",admin_rel,"KPIs, conformidade de SLA e exportação CSV",
    actions=btn("Exportar CSV","green","download"))
+
+# ============================================================================
+#  PERFIL & CONFIGURAÇÕES
+# ============================================================================
+def pref_toggle(label, desc, on=True):
+    return f'''<div class="flex items-start justify-between gap-4 py-3 border-b border-line/70 last:border-0">
+      <div><div class="text-sm font-medium text-navy">{label}</div><div class="text-xs text-muted">{desc}</div></div>
+      <span class="w-9 h-5 rounded-full relative inline-block shrink-0 mt-0.5 {'bg-brandgreen-600' if on else 'bg-line'}"><span class="absolute top-0.5 {'right-0.5' if on else 'left-0.5'} w-4 h-4 bg-white rounded-full shadow"></span></span>
+    </div>'''
+perfil_content = f'''
+  {card(f'''<div class="p-6 flex flex-wrap items-center gap-5">
+    {avatar("AB","#7FA53D","w-16 h-16 text-xl")}
+    <div class="flex-1 min-w-0"><h2 class="font-display font-bold text-xl text-navy">Ana Bondmann</h2><p class="text-sm text-muted">ana@bondmann.com.br</p></div>
+    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold" style="background:#2E466F1a;color:#2E466F"><span class="w-2 h-2 rounded-full" style="background:#2E466F"></span>Administrador</span>
+  </div>''')}
+  <div class="grid lg:grid-cols-3 gap-6 mt-6">
+    <div class="lg:col-span-2 space-y-6">
+      {card(f'<div class="p-6 space-y-5"><h3 class="font-display font-bold text-lg text-navy">Dados pessoais</h3>'
+        + '<div class="grid sm:grid-cols-2 gap-4">' + field("Nome completo", input_ctl(value="Ana Bondmann",ic="user")) + field("E-mail", input_ctl(value="ana@bondmann.com.br",ic="mail",type="email")) + '</div>'
+        + '<div class="grid sm:grid-cols-2 gap-4">' + field("Telefone", input_ctl(value="(51) 99999-0000")) + field("Cargo", input_ctl(value="Gerente de Suporte")) + '</div>'
+        + '<div class="flex justify-end gap-2 pt-1">' + btn("Cancelar","ghost") + btn("Salvar alterações","primary","check") + '</div></div>')}
+      {card(f'<div class="p-6 space-y-5"><h3 class="font-display font-bold text-lg text-navy">Segurança</h3>'
+        + field("Senha atual", input_ctl("••••••••",ic="lock",type="password"))
+        + '<div class="grid sm:grid-cols-2 gap-4">' + field("Nova senha", input_ctl("Mínimo 8 caracteres",ic="lock",type="password")) + field("Confirmar nova senha", input_ctl("Repita a nova senha",ic="lock",type="password")) + '</div>'
+        + '<div class="flex justify-end pt-1">' + btn("Atualizar senha","primary","shield") + '</div></div>')}
+    </div>
+    <div class="space-y-6">
+      {card(f'<div class="p-6"><h3 class="font-display font-bold text-lg text-navy mb-3">Notificações</h3>'
+        + pref_toggle("Novo chamado atribuído","E-mail quando um chamado for atribuído a você",True)
+        + pref_toggle("SLA em risco","Alerta quando faltar menos de 25% do prazo",True)
+        + pref_toggle("SLA vencido","Alerta imediato de chamado vencido",True)
+        + pref_toggle("Resumo diário","E-mail com indicadores do dia",False)
+        + '</div>')}
+      {card(f'<div class="p-6"><h3 class="font-display font-bold text-lg text-navy mb-1">Sessão</h3><p class="text-xs text-muted mb-4">Encerrar acesso neste dispositivo.</p>' + btn("Sair da conta","danger","logout","w-full") + '</div>')}
+    </div>
+  </div>
+'''
+PAGES["perfil.html"] = shell("admin","perfil.html","Perfil & Configurações",perfil_content,"Gerencie seus dados, segurança e notificações")
+
+# ============================================================================
+#  PÁGINAS DE ERRO
+# ============================================================================
+def error_page(title, code, headline, message, primary_label, primary_href, secondary_label, secondary_href):
+    big_mark = MARK.format(cls="w-40 h-40 text-white/10")
+    return head(title) + f'''
+    <div class="min-h-screen bg-navy-900 relative overflow-hidden flex items-center justify-center p-6">
+      <div class="absolute -left-24 -top-24 w-[420px] h-[420px] rounded-full border-[60px] border-white/5"></div>
+      <div class="absolute right-[-120px] bottom-[-120px] w-[380px] h-[380px] rounded-full border-[48px] border-white/5"></div>
+      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">{big_mark}</div>
+      <div class="relative text-center max-w-md">
+        <div class="flex justify-center mb-8">{logo("dark","text-2xl")}</div>
+        <div class="font-display font-black text-white text-[96px] leading-none">{code}</div>
+        <h1 class="font-display font-bold text-2xl text-white mt-2">{headline}</h1>
+        <p class="text-white/70 mt-3 leading-relaxed">{message}</p>
+        <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
+          <a href="{primary_href}"><span class="inline-flex items-center gap-2 rounded-lg text-sm font-semibold px-5 py-2.5 bg-brandgreen-600 text-white hover:bg-brandgreen-700">{icon("home","w-4 h-4","2")}{primary_label}</span></a>
+          <a href="{secondary_href}" class="text-sm font-semibold text-white/80 hover:text-white">{secondary_label}</a>
+        </div>
+      </div>
+    </div>''' + FOOT
+PAGES["erro-403.html"] = error_page("Acesso negado","403","Acesso negado",
+   "Você não tem permissão para acessar esta área. Em um sistema multi-tenant, cada perfil (Cliente, Operador, Admin) enxerga apenas o que lhe compete.",
+   "Voltar ao início","index.html","Falar com o administrador","#")
+PAGES["erro-404.html"] = error_page("Página não encontrada","404","Página não encontrada",
+   "O endereço que você tentou acessar não existe ou foi movido. Verifique o link ou volte para a tela inicial do portal.",
+   "Voltar ao início","index.html","Ir para o login","login.html")
 
 # ============================================================================
 #  DESIGN SYSTEM
@@ -895,7 +1037,8 @@ GROUPS = [
   ("Autenticação","#41B6E6",[("login.html","Login","Acesso ao portal"),("cadastro.html","Cadastro","Solicitação de acesso do cliente"),("recuperar-senha.html","Recuperar senha","Reset por e-mail (link 1h)")]),
   ("Portal do Cliente","#1FB98C",[("cliente-dashboard.html","Dashboard","Visão geral + meus chamados"),("cliente-novo-chamado.html","Abrir chamado","Formulário + upload + SLA previsto"),("cliente-chamado-detalhe.html","Detalhe + Chat","Conversa e anexos")]),
   ("Workspace do Operador","#5560B0",[("operador-fila-lista.html","Fila — Lista","Filtros, SLA visual, ações em lote"),("operador-fila-kanban.html","Fila — Kanban","Colunas por status (drag & drop)"),("operador-atendimento.html","Atendimento","Chat + nota interna + auditoria")]),
-  ("Painel Admin","#F0934E",[("admin-dashboard.html","Dashboard / KPIs","Gráficos Chart.js"),("admin-empresas.html","Empresas","Gestão de tenants"),("admin-planos-sla.html","Planos de SLA","Tempos por prioridade"),("admin-categorias.html","Categorias","Catálogo global"),("admin-usuarios.html","Usuários","Papéis e convites"),("admin-relatorios.html","Relatórios","Filtros + export CSV")]),
+  ("Painel Admin","#F0934E",[("admin-dashboard.html","Dashboard / KPIs","Gráficos Chart.js"),("admin-empresas.html","Empresas","Gestão de tenants + modal"),("admin-planos-sla.html","Planos de SLA","Tempos por prioridade"),("admin-categorias.html","Categorias","Catálogo global"),("admin-usuarios.html","Usuários","Papéis + modal de convite"),("admin-relatorios.html","Relatórios","Filtros + export CSV")]),
+  ("Conta & Sistema","#1B8A8F",[("perfil.html","Perfil & Configurações","Dados, segurança e notificações"),("erro-403.html","Acesso negado (403)","Sem permissão / RBAC"),("erro-404.html","Não encontrado (404)","Página inexistente")]),
 ]
 def gallery_card(href, title, desc, color):
     return f'''<a href="{href}" class="group block bg-white rounded-xl shadow-card border border-line/60 overflow-hidden hover:-translate-y-0.5 hover:shadow-lg transition">

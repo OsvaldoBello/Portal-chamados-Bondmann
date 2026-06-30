@@ -23,7 +23,7 @@ npm run serve                     # http://localhost:8000
 
 Comece por **`index.html`** — é a galeria que linka todas as telas.
 
-## Telas (16)
+## Telas (19)
 
 | Grupo | Tela | Arquivo |
 |---|---|---|
@@ -38,11 +38,27 @@ Comece por **`index.html`** — é a galeria que linka todas as telas.
 | Operador | Fila — Kanban (drag & drop por status) | `operador-fila-kanban.html` |
 | Operador | Atendimento (chat + **nota interna** + auditoria) | `operador-atendimento.html` |
 | Admin | Dashboard / KPIs (gráficos Chart.js) | `admin-dashboard.html` |
-| Admin | Empresas (tenants) | `admin-empresas.html` |
+| Admin | Empresas (tenants) + **modal** Nova empresa | `admin-empresas.html` |
 | Admin | Planos de SLA (tempos por prioridade) | `admin-planos-sla.html` |
 | Admin | Categorias (catálogo global) | `admin-categorias.html` |
-| Admin | Usuários (papéis e convites) | `admin-usuarios.html` |
+| Admin | Usuários (papéis) + **modal** Convidar usuário | `admin-usuarios.html` |
 | Admin | Relatórios (filtros + export CSV) | `admin-relatorios.html` |
+| Conta & Sistema | Perfil & Configurações | `perfil.html` |
+| Conta & Sistema | Acesso negado (403) | `erro-403.html` |
+| Conta & Sistema | Página não encontrada (404) | `erro-404.html` |
+
+## Interatividade (Alpine.js)
+
+O protótipo é navegável e reativo — não são telas estáticas:
+
+- **Menu do usuário** e **painel de notificações** abrem/fecham no topo (`@click.outside`).
+- **Sidebar responsiva** — vira menu deslizante com overlay no mobile (hambúrguer no topo).
+- **Toggle "Nota interna"** muda o fundo do compositor para amarelo (Seção 1.3 do plano).
+- **Modais** de "Convidar usuário" e "Nova empresa" com transições.
+- Navegação clicável entre todas as telas a partir de `index.html` e das sidebars.
+
+> Em produção o plano usa o **Alpine CSP build** (Seção 0.4). Aqui o protótipo usa o build
+> padrão por simplicidade de visualização; os padrões de interação são equivalentes.
 
 ## Decisões de design alinhadas ao Plano Mestre
 
@@ -88,9 +104,9 @@ npm run build        # gera HTML (build.py) e recompila o app.css
 - `tailwind.config.js` — tema com os tokens da marca.
 - `assets/` — `app.css` (Tailwind compilado), `chart.umd.js`, `fonts.css` + `fonts/*.woff2`.
 
-## Sobre o Figma
+## Fonte da base visual
 
-O design system foi **iniciado no Figma** (arquivo *Portal de Chamados — Bondmann Química*):
-38 variáveis de cor da marca, estrutura de páginas e o componente do **logo molecular** já
-criados. A continuação no Figma esbarrou no limite do **plano Starter (6 chamadas MCP/mês)**;
-com upgrade para Professional o restante pode ser sincronizado a partir destes mesmos tokens.
+Este protótipo HTML/Tailwind é a **base visual oficial** do projeto — pensado para virar
+direto os templates Jinja2 do FastAPI (a marcação e os tokens já são os definitivos).
+A ideia do Figma foi descartada em favor desta abordagem, que é mais fiel à stack do plano
+e imediatamente reutilizável no desenvolvimento.
