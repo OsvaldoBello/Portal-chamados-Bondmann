@@ -33,6 +33,11 @@ class ChamadosRepo:
             return dict(row) if row else None
 
     async def listar(self, claims: dict, *, limite: int = 100) -> list[dict[str, Any]]:
+        """"Meus chamados": os que o usuário ABRIU (portal do solicitante).
+
+        Filtra por `cliente_id = auth.uid()` para que também o staff (que via RLS
+        enxerga a fila do seu setor) veja aqui apenas os próprios. A fila de
+        atendimento por departamento é o Workspace (Fase 4)."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
@@ -42,9 +47,11 @@ class ChamadosRepo:
                   FROM chamados c
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
+                 WHERE c.cliente_id = $1::uuid
                  ORDER BY c.created_at DESC
-                 LIMIT $1
+                 LIMIT $2
                 """,
+                claims["sub"],
                 limite,
             )
             return [dict(r) for r in rows]
@@ -52,7 +59,8 @@ class ChamadosRepo:
     async def stats(self, claims: dict) -> dict[str, int]:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
-                "SELECT status, count(*) AS n FROM chamados GROUP BY status"
+                "SELECT status, count(*) AS n FROM chamados WHERE cliente_id = $1::uuid GROUP BY status",
+                claims["sub"],
             )
         por_status = {r["status"]: r["n"] for r in rows}
         return {

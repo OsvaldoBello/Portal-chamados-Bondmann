@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import RedirectResponse
 
-from app.auth.dependencies import CurrentUser, require_role
+from app.auth.dependencies import CurrentUser, get_current_user
 from app.auth.session import ACCESS_COOKIE
+from app.config import get_settings
 from app.repositories.chamados import (
     PRIORIDADES,
     ChamadosRepo,
@@ -42,15 +43,21 @@ class PortalCtx:
 
 
 async def portal_context(
-    user: CurrentUser = Depends(require_role("CLIENTE")),
+    user: CurrentUser = Depends(get_current_user),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ) -> PortalCtx:
-    """Carrega o perfil do CLIENTE e exige empresa associada (multi-tenant)."""
+    """Contexto do portal (abertura + "meus chamados").
+
+    Aberto a **qualquer usuário autenticado**: funcionários e também staff
+    (RH/Marketing/TI) podem abrir chamados para qualquer departamento. A fila
+    de atendimento por departamento é o Workspace do operador (Fase 4).
+    Exige perfil com org interna associada (`empresa_id`).
+    """
     perfil = await repo.perfil(user.claims)
     if not perfil or perfil.get("empresa_id") is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Perfil sem empresa associada. Contate o administrador.",
+            detail="Perfil sem organização associada. Contate o administrador.",
         )
     return PortalCtx(user=user, perfil=perfil)
 
@@ -241,6 +248,7 @@ async def detalhe_chamado(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
     mensagens = await repo.mensagens(ctx.user.claims, chamado_id)
     await _assinar_anexos(request, mensagens)
+    settings = get_settings()
     return render(
         request,
         "portal/chamado_detalhe.html",
@@ -249,8 +257,29 @@ async def detalhe_chamado(
             "chamado": chamado,
             "mensagens": mensagens,
             "pode_avaliar": pode_avaliar(chamado, ctx.user.id),
+            # Config do Realtime no browser (Seção 6.1): anon key + JWT do usuário.
+            "supabase_url": settings.supabase_url or None,
+            "anon_key": settings.supabase_anon_key or None,
+            "access_token": _access_token(request),
         },
     )
+
+
+@router.get("/chamados/{chamado_id}/mensagens/fragmento")
+async def mensagens_fragmento(
+    request: Request,
+    chamado_id: str,
+    ctx: PortalCtx = Depends(portal_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+):
+    """Fragmento da conversa (HTMX polling + refresh disparado pelo Realtime).
+    Re-renderiza no servidor — RLS aplicada e signed URLs de anexo regeneradas."""
+    chamado = await repo.obter(ctx.user.claims, chamado_id)
+    if chamado is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+    mensagens = await repo.mensagens(ctx.user.claims, chamado_id)
+    await _assinar_anexos(request, mensagens)
+    return render(request, "portal/_mensagens.html", {"chamado": chamado, "mensagens": mensagens})
 
 
 @router.post("/chamados/{chamado_id}/mensagens")

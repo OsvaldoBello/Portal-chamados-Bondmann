@@ -20,7 +20,10 @@
     "tailwindcss": "3.4.17"
   },
   "dependencies": {
+    "@alpinejs/csp": "3.14.8",
+    "@supabase/supabase-js": "2.47.10",
     "alpinejs": "^3.14.1",
-    "chart.js": "4.4.1"
+    "chart.js": "4.4.1",
+    "htmx.org": "2.0.4"
   }
 }

@@ -5,7 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Portal de Chamados — Bondmann{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/app.css">
-  {# Token CSRF global para mutações HTMX (Seção 3.5); inofensivo sem HTMX. #}
+  {# Assets self-hosted com SRI (Seção 3.8 / vendoring). CSP: script-src 'self'.
+     HTMX 2.0 (fragmentos) + Alpine CSP build (UI, sem eval). #}
+  <script defer src="/static/vendor/htmx.min.js"
+          integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"></script>
+  <script defer src="/static/vendor/alpine-csp.min.js"
+          integrity="sha384-ToFwPnlRgZIoDDSatKvWLkecUR4Py5dma633TT4TVBQfs4nHKXXexI3v72xi5LnC"></script>
+  {% block head_scripts %}{% endblock %}
 </head>
 <body class="min-h-screen bg-surface text-ink font-sans"
       hx-headers='{"{{ csrf_header }}": "{{ csrf_token }}"}'>
@@ -50,5 +56,6 @@
       </main>
     </div>
   </div>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

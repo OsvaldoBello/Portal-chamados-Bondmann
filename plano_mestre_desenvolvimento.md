@@ -238,8 +238,12 @@ Enum de papéis (coerente com a spec): **`ADMIN`**, **`OPERADOR`**, **`CLIENTE`*
 > - **Departamentos** (`TI`, `RH`, `Marketing`) são uma **tabela gerenciável** (`departamentos`),
 >   igual a categorias. Um funcionário abre chamado escolhendo o **departamento de destino**.
 > - **Staff** (OPERADOR/ADMIN) tem um `departamento_id`; **só vê/atende os chamados do seu setor**.
-> - **Super-admin** = **ADMIN com `departamento_id` NULO** → enxerga **todos** os departamentos.
-> - **Autor** (funcionário, CLIENTE) vê **os próprios chamados**, para qualquer departamento.
+> - **`[REFINADO 0010]` Acesso total = staff no departamento `TI`** (`auth_is_ti()`): TI vê/atende
+>   **todos** os chamados e gere os catálogos. (Substitui o conceito anterior de "super-admin = ADMIN
+>   com `departamento_id` NULO" da `0008`.)
+> - **RH / Marketing** (staff): veem os chamados do **seu** departamento **+ os que eles mesmos abriram**;
+>   podem **abrir para qualquer** departamento.
+> - **Autor** (funcionário, CLIENTE, sem departamento) vê **apenas os chamados que abriu**.
 > - **`empresas`/`planos_sla`** permanecem **apenas como configuração interna de SLA** (org única
 >   = Bondmann); sem telas de venda/gestão de empresa nem de planos. `empresa_id` vira plumbing
 >   interno (uma org), mantido para o path do Storage e o motor de SLA.
@@ -252,22 +256,21 @@ Enum de papéis (coerente com a spec): **`ADMIN`**, **`OPERADOR`**, **`CLIENTE`*
 
 Matriz consolidada (das Seções 4.3 e 5 da spec, ajustada ao modelo interno):
 
-| Recurso / Ação | CLIENTE (funcionário) | OPERADOR (staff do setor) | ADMIN |
+Colunas por **tipo de usuário** (o eixo agora é o departamento, não o papel):
+
+| Recurso / Ação | Funcionário (CLIENTE) | Staff RH/Marketing | Staff **TI** (acesso total) |
 |---|---|---|---|
-| 🔁 Ver chamados | Só os **que abriu** | Só os do **seu departamento** | Do seu departamento; **NULO = todos** (super-admin) |
-| 🔁 Criar chamado | Sim, escolhendo o **departamento de destino** (`cliente_id = auth.uid()`) | Sim | Sim |
-| 🔁 Atualizar `status` / `prioridade` / `operador_id` | **Não** | **Sim**, no seu departamento | Sim (super-admin: qualquer) |
-| Ver mensagens `is_interna = true` | **Não** | Sim | Sim |
-| Criar mensagem pública | Sim (nos seus chamados) | Sim | Sim |
+| Ver chamados | Só os **que abriu** | Do **seu setor** + os que **abriu** | **Todos** |
+| Criar chamado (p/ qualquer departamento) | Sim | Sim | Sim |
+| Atualizar `status`/`prioridade`/`operador_id` | **Não** | Sim, **no seu setor** | Sim, **em todos** |
+| Ver `is_interna = true` | **Não** | Sim (do seu setor) | Sim (todos) |
+| Criar mensagem pública | Sim (nos seus) | Sim | Sim |
 | Criar nota interna (`is_interna = true`) | **Não** | Sim | Sim |
-| **Avaliar chamado (1–5 ★, CSAT)** | **Só o autor**, e só quando `RESOLVIDO` | Não | Não |
-| 🔁 Ver histórico/auditoria do chamado | Dos próprios chamados | Do seu departamento | Do seu departamento; NULO = todos |
-| 🔁 Gerir Departamentos | Não | Não | **Sim (super-admin)** |
-| Gerir Categorias | Não | Não | **Sim** |
-| 🔁 Gerir Planos de SLA (config interna) | Não | Não | **Sim** |
-| 🔁 Cadastrar usuários | — (feito direto no Supabase) | — | via banco/painel Supabase |
-| Relatórios/KPIs e Export CSV | Não | `⚠️ A VALIDAR` | **Sim** |
-| 🔁 Acesso a Storage de anexos | Anexos dos próprios chamados (path-scoped) | Do seu departamento | Todos |
+| **Avaliar chamado (1–5 ★, CSAT)** | **Só o autor**, quando `RESOLVIDO` | Não | Não |
+| Ver histórico/auditoria | Dos próprios | Do seu setor + próprios | Todos |
+| Gerir Departamentos / Categorias / Planos de SLA | Não | Não | **Sim** |
+| Cadastrar usuários | — (direto no Supabase) | — | via banco/painel Supabase |
+| Acesso a Storage de anexos | Dos próprios (path-scoped) | Do seu setor | Todos |
 
 ### 3.3 Políticas RLS por papel (a implementar como SQL nas migrations)
 
@@ -282,10 +285,14 @@ RLS **habilitado nas 8 tabelas** (as 7 canônicas + `departamentos`). Princípio
 - **OPERADOR / ADMIN departamental (staff com `departamento_id` = X)**
   - `SELECT/UPDATE chamados`: **apenas onde `departamento_id = auth_departamento_id()`**. `UPDATE` em `status`, `prioridade`, `operador_id`.
   - `SELECT/INSERT mensagens` (incl. `is_interna`) e `historico`: restritos ao mesmo escopo de departamento.
-- **SUPER-ADMIN (ADMIN com `departamento_id` NULO)**
-  - Acesso a **todos** os departamentos (chamados/mensagens/historico) e gestão de `departamentos`/`categorias`/`planos_sla`/`perfis`.
+- **`[REFINADO 0010]` ACESSO TOTAL = staff no departamento `TI`** (`auth_is_ti()`)
+  - `SELECT/UPDATE chamados`, `mensagens`, `historico` de **todos** os departamentos; gestão de `departamentos`/`categorias`/`planos_sla`.
+  - Substitui o "super-admin = ADMIN com `departamento_id` NULO" da `0008`.
+- **RH / Marketing (staff)**: além do seu setor, veem também os chamados **que abriram** (cláusula `cliente_id = auth.uid()` OR `departamento_id = auth_departamento_id()`).
 
-Helpers para as policies (SECURITY DEFINER, evitam recursão de RLS ao ler `perfis`): `auth_role()`, `auth_empresa_id()` e **🔁 `auth_departamento_id()`** (lê o `departamento_id` do perfil do `auth.uid()`).
+Helpers para as policies (SECURITY DEFINER, evitam recursão de RLS ao ler `perfis`): `auth_role()`, `auth_empresa_id()`, `auth_departamento_id()` e **🔁 `auth_is_ti()`** (o perfil do `auth.uid()` está no departamento `TI`?).
+
+> **✅ Validação e2e (2026-07-01):** contra o Supabase live, simulando os claims JWT de cada usuário via `SET LOCAL ROLE authenticated` + `set_config('request.jwt.claims', …)` (mesmo mecanismo do app), confirmou-se: funcionário vê só o próprio; RH vê o setor RH + os que abriu (mesmo em Marketing) e **não** vê Marketing alheio; RH atualiza só o próprio setor; TI vê tudo; nota interna não chega ao funcionário autor. Dados de teste revertidos.
 
 ### 3.4 Sessão e Auth (server-rendered) — `[LACUNA]`, a spec não define
 
@@ -714,6 +721,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | 2026-06-26 | 0.2 / 1 / 2 / 3 / 6 / Estado | Fundação do backend (Fase 1 + Fase 2 backend). Scaffolding FastAPI (`app/`), `requirements.txt` com versões fixadas, Dockerfile multi-stage (Tailwind CLI + Python 3.12 slim + libmagic, porta 8080), Pydantic Settings, **camada de dados `asyncpg` com `SET LOCAL ROLE authenticated` + claims por transação** (Seção 3.1), cliente Supabase async só para Auth, **verificação local de JWT** (PyJWT, JWKS+HS256), **CSRF double-submit**, **security headers + CSP estrita**, cookies de sessão, rate limiting (slowapi em /login e /cadastro), logging JSON com request-id, `/health` + `/health/ready`, rotas `/login` `/logout` `/cadastro` e templates base. Suíte pytest (9 testes: health, CSP, CSRF, JWT) verde; build do Tailwind validado. Adicionado PyJWT à Seção 0.2. |
 | 2026-06-26 | 3.3 / 5.3 / 5.4 / Estado | Fase 2 (banco). Aplicadas `0003_triggers` (`trigger_set_timestamp`, `gerar_codigo_chamado` com contador anual atômico, `calcular_sla_chamado` com escada C1, `handle_new_user`), `0004_rls_policies` (helpers `auth_role`/`auth_empresa_id` SECURITY DEFINER, **RLS habilitado nas 7 tabelas + `contador_chamados`**, policies por papel da Seção 3.3, grants com `anon` sem acesso e imutabilidade de `mensagens`/`historico`) e `0005_harden_functions` (search_path fixo + REVOKE de EXECUTE nas functions de trigger). Smoke test em transação revertida confirmou código `BOND-YYYY-00001`, SLA URGENTE = 50% de ALTA e perfil CLIENTE automático. Advisor de segurança: 0 erros (resta apenas INFO de `contador_chamados` deny-all, intencional). |
 | 2026-06-30 | Consolidação de branches / 3.2 / 3.3 / 5.1 / 5.3 / 6 / Estado | **Consolidação:** backend (branch `supabase-table-setup`) + protótipos (branch `portal-screen-prototypes`) reunidos na branch de trabalho, com **um único MD autoritativo** para todo o projeto (as outras branches tinham cópias desatualizadas — esta passa a ser a fonte de verdade). **Avaliação (CSAT 1–5):** migration `0006_avaliacao_chamado` (colunas `avaliacao_*` em `chamados` + CHECK 1–5, policy `chamados_update_cliente_avaliacao` restrita a autor + `RESOLVIDO`, trigger `enforce_cliente_so_avaliacao` travando colunas, índice CSAT) aplicada no projeto `iurlzlhbnoemkzgexcfk`; advisors sem novos erros. **Decisão de produto:** abertura de chamado é por **Categoria + Assunto** — campo "Produto relacionado" removido do protótipo (`build.py` + `cliente-novo-chamado.html`). **Fase 3 (início):** Portal do Cliente em produção — rotas `/portal` (dashboard, novo chamado, detalhe, mensagens, avaliação), repositório `asyncpg`+RLS, templates Jinja com tokens da marca e widget de estrelas; CSAT deixa de depender de e-mail (Fase 5). Suíte pytest 30 testes verde (9 anteriores + 21 do portal/avaliação). |
+| 2026-07-01 | 3.2 / 3.3 / 6.1 / Estado | **Refino do modelo de acesso + Chat Realtime + Vendoring.** (a) **Acesso (migration `0010_acesso_ti_total`):** o acesso total passa a ser do departamento **TI** (`auth_is_ti()`), não mais "ADMIN com departamento NULO"; RH/Marketing veem seu setor + os que abriram; funcionário vê só os próprios. Gestão de catálogos = TI. **Validado ponta a ponta contra o Supabase live** (simulação de claims por usuário; ver Seção 3.3). (b) **Chat Realtime (Seção 6.1, migration `0011_realtime_mensagens`):** `mensagens` adicionada à publicação `supabase_realtime`; `app/static/js/chat.js` (CSP-safe) assina `postgres_changes` filtrando por `chamado_id` com o JWT do usuário e dispara refresh HTMX; fragmento `GET /portal/chamados/{id}/mensagens/fragmento` + polling 10s de fallback; RLS aplicada (nota interna não vaza). (c) **Vendoring self-host com SRI:** HTMX 2.0.4, Alpine CSP 3.14.8 e supabase-js 2.47.10 em `app/static/vendor/` (via npm — CDNs bloqueados por egress; `registry.npmjs.org` liberado), carregados sob `script-src 'self'`. (d) Portal agora aberto a qualquer autenticado (staff também abre chamados); "meus chamados" filtra por autor. Suíte pytest **48 testes** verde. |
 | 2026-07-01 | 3.2 / 3.3 / 5.1 / 5.3 / 3.4 / Prototipos / Estado | **Pivô para SISTEMA INTERNO + roteamento por DEPARTAMENTO.** Migrations `0008_departamentos_roteamento` e `0009_harden_auth_departamento` aplicadas no projeto `iurlzlhbnoemkzgexcfk`. Nova tabela `departamentos` (seed TI/RH/Marketing, gerenciável); `perfis.departamento_id` (setor do staff; NULO = super-admin/funcionário) e `chamados.departamento_id` (destino). **RLS repontada de empresa→departamento/autor:** funcionário vê os próprios chamados; staff vê só o seu departamento; **super-admin** (ADMIN, `departamento_id` NULO) vê tudo; mensagens/histórico seguem o mesmo escopo; helper `auth_departamento_id()`. `empresas`/`planos_sla` viram **config interna de SLA** (org única `Bondmann Química` semeada); `handle_new_user` vincula o novo usuário a ela. **Sem signup público** — cadastro direto no Supabase + `supabase/registro_usuarios.sql` (promoção de papel/departamento). Backend: `chamados.criar` exige `departamento_id`; `departamentos_ativos`; portal com seletor de departamento; detalhe exibe o setor; rotas `/cadastro` removidas. **Protótipos** (`build.py`): removidas telas de Empresas, Planos de SLA e Cadastro; abertura de chamado passa a ter Departamento. Suíte pytest **47 testes** verde. Advisors: só INFO de `contador_chamados` + os 3 `WARN` pré-existentes de helpers SECURITY DEFINER (agora incl. `auth_departamento_id`, mesmo padrão; backlog: schema privado). |
 | 2026-07-01 | Organização de branches / 3.9 / 1.4 / Estado | **Organização de branches:** trabalho consolidado passa a viver em **`claude/develop`** (branch principal de desenvolvimento, criada a partir de `ticket-rating-implementation`); **`claude/Md`** mantida como **fonte única do MD** (somente o documento, sempre sincronizada byte-a-byte com o MD de `develop`); mantida `portal-screen-prototypes` como referência; removidas as branches redundantes (`antigravity-protocol`, `project-implementation-continue`, `supabase-table-setup` [já mesclada], `ticket-rating-implementation` [contida em `develop`]). **Fase 3 — Storage de anexos (Seção 3.9):** migration `0007_storage_anexos` (bucket privado `chamados-anexos` + RLS path-scoped `{empresa_id}/{chamado_id}/{arquivo}`, policies SELECT/INSERT por tenant e DELETE só staff) aplicada no projeto `iurlzlhbnoemkzgexcfk`. Backend: `app/security/uploads.py` (validação server-side — limite 10MB, allow-list `pdf/jpg/png/mp4/docx/xlsx`, **MIME real por magic bytes** via python-magic + sniffer de fallback, sanitização de nome → UUID+ext); `app/storage.py` (acesso **direto à REST do Storage via httpx com o JWT do usuário** — respeita RLS, contorna a superfície async incompleta do supabase-py, Seção 1.4; **signed URLs TTL 1h geradas on-demand a cada render**, C2); rota de resposta agora aceita anexos multipart e o detalhe renderiza links assinados. Suíte pytest **45 testes** verde (30 anteriores + validação de upload + rota de anexos). **Nota de segurança (follow-up):** advisor aponta `WARN` em `auth_role()`/`auth_empresa_id()` (SECURITY DEFINER expostas via RPC ao `authenticated`) — **não** podem ter `EXECUTE` revogado sem quebrar a avaliação das policies; hardening correto = mover para schema privado não exposto ao PostgREST (backlog, não bloqueante — retornam só dados do próprio usuário). |
 
@@ -730,7 +738,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | Auth (login/logout) + cookies de sessão | 🟡 Backend pronto | 2 | Login/logout + cookies httpOnly+Secure+SameSite. **🔁 Signup público removido** — cadastro direto no Supabase (`supabase/registro_usuarios.sql`). Falta validação e2e live/refresh. |
 | Verificação JWT (JWKS/HS256) | ✅ Implementado | 2 | PyJWT, JWKS assimétrico + fallback HS256; testado (HS256). Confirmar modo do projeto live. |
 | RLS + policies por papel | ✅ Implementado | 2–3 | `0004`/`0005` (base) + **🔁 `0008`/`0009` (roteamento por departamento)**. 8 tabelas; helpers `auth_role`/`auth_empresa_id`/`auth_departamento_id`; `anon` sem acesso. |
-| **🔁 Roteamento por departamento (TI/RH/Marketing)** | ✅ Implementado | 3 | `0008`: tabela `departamentos` + `perfis/chamados.departamento_id`. Staff vê só o seu setor; super-admin (ADMIN NULO) vê tudo; autor vê os próprios. Portal com seletor; 47 testes. Validação e2e live pendente. |
+| **🔁 Roteamento por departamento + acesso TI-total** | ✅ Implementado + **validado e2e** | 3 | `0008` + **`0010` (TI = acesso total; RH/Mkt = setor + próprios; funcionário = próprios)**. Validado contra Supabase live (simulação de claims). Portal com seletor; helper `auth_is_ti()`. |
 | **🔁 Cadastro direto no Supabase (sem signup)** | ✅ Preparado | 2–3 | `handle_new_user` vincula à org interna; `supabase/registro_usuarios.sql` promove papel/departamento. `/cadastro` removido. |
 | CSRF + Security headers + CSP estrita | ✅ Implementado | 2 | Double-submit + middleware de headers/CSP. Testado. Alpine/HTMX self-hosted pendente (Fase 3). |
 | Camada de dados asyncpg + `SET LOCAL` (RLS sob pooling) | ✅ Implementado | 2 | `app/db.py`: transaction mode, `statement_cache_size=0`, claims por transação. |
@@ -740,11 +748,11 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | Portal do Cliente — dashboard + abertura + detalhe | 🟡 Em produção | 3 | Rotas `/portal` (FastAPI/Jinja2), `asyncpg`+RLS, tokens da marca. Anexos ✅; abertura com **departamento de destino** ✅; falta: chat Realtime. |
 | **Avaliação do chamado (CSAT 1–5)** | ✅ Implementado | 3 | Migration `0006`; só autor + `RESOLVIDO`; widget de estrelas no detalhe; 30 testes verdes. |
 | Abertura por Categoria + Assunto (sem "Produto") | ✅ Implementado | 3 | Decisão de produto; campo "Produto relacionado" removido (produção + protótipo). |
-| Vendoring HTMX 2.0 + Alpine CSP (self-host) | Planejado | 3 | Rating já funciona sem JS (form PRG) e com HTMX (header `HX-Request`). Faltam os bundles em `/static` com SRI. |
+| Vendoring HTMX 2.0 + Alpine CSP + supabase-js (self-host) | ✅ Implementado | 3 | `app/static/vendor/` com SRI (HTMX 2.0.4, Alpine CSP 3.14.8, supabase-js 2.47.10) via npm; `script-src 'self'`. Carregados no `app_base` do portal. |
 | Storage privado + signed URLs (TTL 1h) | ✅ Implementado | 3 | Migration `0007_storage_anexos` (bucket privado + RLS path-scoped). `app/security/uploads.py` (10MB, allow-list, magic bytes, sanitização) + `app/storage.py` (REST via httpx com JWT do usuário; signed URL TTL 1h on-demand). Upload multipart no detalhe; 45 testes verdes. Validação e2e contra Supabase live pendente. |
 | Workspace Operador (Kanban/Lista + SLA visual) | Planejado | 4 | Sortable.js + HTMX. |
 | Notas internas (`is_interna`) | Planejado | 4 | Invisível ao CLIENTE (RLS + Realtime). |
-| Chat Realtime (supabase-js direto) | Planejado | 3–4 | Fallback polling 5s. |
+| Chat Realtime (supabase-js direto) | ✅ Implementado | 3 | `0011` (publicação Realtime em `mensagens`) + `chat.js` (assina `postgres_changes` por `chamado_id`, JWT do usuário, RLS na entrega) → refresh do fragmento HTMX; **fallback polling 10s**. Validação visual local pendente (requer `.env` + `npm run build:css`). |
 | Painel Admin + KPIs + Export CSV | Planejado | 5 | Chart.js 4. |
 | SLA — validação com gestor | Planejado | pré-4 | C1 / Seção 5.2. |
 | Cache tenant-scoped (categorias/planos) | Planejado | 2–3 | Local por-processo; Redis se >1 réplica. |

@@ -193,6 +193,16 @@ def test_criar_com_departamento_redireciona_e_repassa_destino():
     assert repo.criados[0]["departamento_id"] == "d2"
 
 
+def test_mensagens_fragmento_renderiza_sem_layout():
+    repo = FakeRepo(chamado=_chamado(status="EM_ATENDIMENTO"))
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa/mensagens/fragmento")
+    assert resp.status_code == 200
+    # É só o fragmento da conversa (sem a sidebar do layout completo).
+    assert "Ainda não há mensagens" in resp.text
+    assert "Meus chamados" not in resp.text
+
+
 def test_dashboard_lista_chamados():
     repo = FakeRepo()
     with portal_client(repo) as client:

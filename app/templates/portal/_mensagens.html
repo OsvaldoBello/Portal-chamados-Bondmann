@@ -1,0 +1,40 @@
+{# Fragmento da conversa (Fase 3 — chat). Renderizado inline e recarregado por
+   HTMX (polling 10s + evento `chat-nova` disparado pelo Realtime — chat.js).
+   Respeita RLS: nota interna não chega ao funcionário autor. #}
+<div class="space-y-4">
+  {% for m in mensagens %}
+  <div class="flex gap-3">
+    <div class="w-9 h-9 rounded-full bg-surface2 grid place-items-center text-xs font-semibold text-navy shrink-0">
+      {{ (m.remetente_nome or "?")[:1] | upper }}
+    </div>
+    <div class="min-w-0">
+      <div class="text-xs text-muted">
+        <span class="font-semibold text-navy">{{ m.remetente_nome or "Usuário" }}</span>
+        · {{ fmt_dt(m.created_at) }}
+        {% if m.is_interna %}
+        <span class="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">Nota interna</span>
+        {% endif %}
+      </div>
+      {% if m.conteudo %}
+      <p class="text-sm text-ink whitespace-pre-line mt-0.5">{{ m.conteudo }}</p>
+      {% endif %}
+      {% if m.anexos %}
+      <ul class="mt-2 space-y-1">
+        {% for a in m.anexos %}
+        <li class="text-sm">
+          {% if a.url %}
+          <a href="{{ a.url }}" target="_blank" rel="noopener"
+             class="inline-flex items-center gap-1.5 text-navy hover:underline">📎 {{ a.nome }}</a>
+          {% else %}
+          <span class="inline-flex items-center gap-1.5 text-muted" title="Anexo indisponível">📎 {{ a.nome }} <span class="text-faint">(indisponível)</span></span>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <p class="text-sm text-muted">Ainda não há mensagens neste chamado.</p>
+  {% endfor %}
+</div>

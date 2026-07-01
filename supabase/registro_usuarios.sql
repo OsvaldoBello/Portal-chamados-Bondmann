@@ -10,27 +10,31 @@
 --
 -- Papéis: CLIENTE (funcionário que abre chamado) · OPERADOR/ADMIN (respondem).
 -- Departamentos: TI, RH, Marketing (tabela `departamentos`, gerenciável).
--- Regra: staff com `departamento_id` definido só vê os chamados do seu setor;
---        um ADMIN com `departamento_id` NULO é SUPER-ADMIN (vê todos).
+-- Regra de acesso (migration 0010):
+--   * TI            -> ACESSO TOTAL (vê/atende todos os chamados; gere catálogos).
+--   * RH / Marketing -> veem os chamados do SEU setor + os que ELES abriram;
+--                       podem abrir chamados para QUALQUER departamento.
+--   * Funcionário    -> cria chamados e vê APENAS os que criou (CLIENTE, sem depto).
+-- "Staff" = role OPERADOR/ADMIN + um departamento. Acesso total = staff em 'TI'.
 -- ---------------------------------------------------------------------------
 
--- Tornar um colaborador OPERADOR de um departamento (ex.: RH):
+-- Colaborador que responde chamados de RH (staff do setor de RH):
 UPDATE perfis
    SET role = 'OPERADOR',
        departamento_id = (SELECT id FROM departamentos WHERE nome = 'RH')
- WHERE id = (SELECT id FROM auth.users WHERE email = 'colaborador@bondmann.com.br');
+ WHERE id = (SELECT id FROM auth.users WHERE email = 'colaborador.rh@bondmann.com.br');
 
--- Tornar ADMIN de um departamento (ex.: Marketing) — vê só o Marketing:
+-- Colaborador que responde chamados de Marketing:
 UPDATE perfis
-   SET role = 'ADMIN',
+   SET role = 'OPERADOR',
        departamento_id = (SELECT id FROM departamentos WHERE nome = 'Marketing')
- WHERE id = (SELECT id FROM auth.users WHERE email = 'gestor.mkt@bondmann.com.br');
+ WHERE id = (SELECT id FROM auth.users WHERE email = 'colaborador.mkt@bondmann.com.br');
 
--- Tornar SUPER-ADMIN (vê TODOS os departamentos) — departamento_id NULO:
+-- ACESSO TOTAL ao sistema = colaborador do departamento TI:
 UPDATE perfis
    SET role = 'ADMIN',
-       departamento_id = NULL
- WHERE id = (SELECT id FROM auth.users WHERE email = 'ti.master@bondmann.com.br');
+       departamento_id = (SELECT id FROM departamentos WHERE nome = 'TI')
+ WHERE id = (SELECT id FROM auth.users WHERE email = 'ti@bondmann.com.br');
 
 -- Reverter para funcionário comum (CLIENTE, sem departamento):
 -- UPDATE perfis SET role = 'CLIENTE', departamento_id = NULL WHERE id = '...';
