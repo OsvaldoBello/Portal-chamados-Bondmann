@@ -1,7 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "fastapi",
-  "buildCommand": "npm install --no-audit --no-fund && npm run build:css",
   "functions": {
     "app/main.py": { "memory": 512, "maxDuration": 30 }
   }
