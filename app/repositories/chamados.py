@@ -12,6 +12,7 @@ as rotas possam ser testadas com um fake, sem banco vivo.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.db import rls_connection
@@ -83,7 +84,7 @@ class ChamadosRepo:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
-                SELECT m.id, m.conteudo, m.is_interna, m.created_at,
+                SELECT m.id, m.conteudo, m.is_interna, m.created_at, m.anexos,
                        p.nome AS remetente_nome, p.role AS remetente_role
                   FROM mensagens m
                   LEFT JOIN perfis p ON p.id = m.remetente_id
@@ -92,7 +93,14 @@ class ChamadosRepo:
                 """,
                 chamado_id,
             )
-            return [dict(r) for r in rows]
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                d = dict(r)
+                # asyncpg devolve jsonb como texto; normaliza para lista de anexos.
+                bruto = d.get("anexos")
+                d["anexos"] = json.loads(bruto) if isinstance(bruto, str) else (bruto or [])
+                out.append(d)
+            return out
 
     async def categorias_ativas(self, claims: dict) -> list[dict[str, Any]]:
         async with rls_connection(claims) as conn:
@@ -162,18 +170,30 @@ class ChamadosRepo:
             return dict(row) if row else None
 
     async def adicionar_mensagem(
-        self, claims: dict, chamado_id: str, *, remetente_id: str, conteudo: str
+        self,
+        claims: dict,
+        chamado_id: str,
+        *,
+        remetente_id: str,
+        conteudo: str,
+        anexos: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        """Insere mensagem pública com anexos opcionais.
+
+        ``anexos`` é a lista de metadados ``{path, nome, mime, tamanho}`` (os bytes
+        já foram enviados ao Storage privado). Persiste como ``jsonb``.
+        """
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO mensagens (chamado_id, remetente_id, conteudo, is_interna)
-                VALUES ($1::uuid, $2::uuid, $3, false)
+                INSERT INTO mensagens (chamado_id, remetente_id, conteudo, is_interna, anexos)
+                VALUES ($1::uuid, $2::uuid, $3, false, $4::jsonb)
                 RETURNING id, created_at
                 """,
                 chamado_id,
                 remetente_id,
                 conteudo,
+                json.dumps(anexos or []),
             )
             return dict(row)
 

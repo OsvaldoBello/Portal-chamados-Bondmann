@@ -43,7 +43,23 @@
           <span class="font-semibold text-navy">{{ m.remetente_nome or "Usuário" }}</span>
           · {{ fmt_dt(m.created_at) }}
         </div>
+        {% if m.conteudo %}
         <p class="text-sm text-ink whitespace-pre-line mt-0.5">{{ m.conteudo }}</p>
+        {% endif %}
+        {% if m.anexos %}
+        <ul class="mt-2 space-y-1">
+          {% for a in m.anexos %}
+          <li class="text-sm">
+            {% if a.url %}
+            <a href="{{ a.url }}" target="_blank" rel="noopener"
+               class="inline-flex items-center gap-1.5 text-navy hover:underline">📎 {{ a.nome }}</a>
+            {% else %}
+            <span class="inline-flex items-center gap-1.5 text-muted" title="Anexo indisponível">📎 {{ a.nome }} <span class="text-faint">(indisponível)</span></span>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
       </div>
     </div>
     {% else %}
@@ -52,14 +68,24 @@
   </div>
 
   {% if chamado.status != 'RESOLVIDO' %}
-  <form method="post" action="/portal/chamados/{{ chamado.id }}/mensagens" class="mt-5 flex gap-3">
+  {# multipart: mensagem + anexos (validação server-side — Seção 3.9). #}
+  <form method="post" action="/portal/chamados/{{ chamado.id }}/mensagens"
+        enctype="multipart/form-data" class="mt-5 space-y-3">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="text" name="conteudo" required placeholder="Escreva uma mensagem…"
-           class="flex-1 px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
-    <button type="submit"
-            class="px-5 py-2.5 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
-      Enviar
-    </button>
+    <div class="flex gap-3">
+      <input type="text" name="conteudo" placeholder="Escreva uma mensagem…"
+             class="flex-1 px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+      <button type="submit"
+              class="px-5 py-2.5 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+        Enviar
+      </button>
+    </div>
+    <div class="flex items-center gap-2 text-xs text-muted">
+      <input type="file" name="arquivos" multiple
+             accept=".pdf,.jpg,.jpeg,.png,.mp4,.docx,.xlsx"
+             class="block text-xs text-muted file:mr-3 file:rounded-lg file:border-0 file:bg-surface2 file:px-3 file:py-1.5 file:text-navy file:font-semibold">
+      <span>Até 5 arquivos · máx. 10MB · pdf, jpg, png, mp4, docx, xlsx</span>
+    </div>
   </form>
   {% endif %}
 </div>

@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     db_pool_min_size: int = Field(default=2)
     db_pool_max_size: int = Field(default=10)
 
+    # --- Storage de anexos (Seção 3.9) ---
+    anexos_bucket: str = Field(default="chamados-anexos")
+    # Limite de 10MB por arquivo (rejeição server-side antes de persistir).
+    anexo_max_bytes: int = Field(default=10 * 1024 * 1024)
+    # TTL da signed URL: 1 hora (C2). Regenerada a cada renderização; nunca cacheada.
+    signed_url_ttl: int = Field(default=3600)
+
     # --- Segredos de aplicação ---
     session_secret: str = Field(default="dev-insecure-session-secret-change-me")
     csrf_secret: str = Field(default="dev-insecure-csrf-secret-change-me")

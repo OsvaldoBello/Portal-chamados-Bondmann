@@ -26,6 +26,7 @@ from app.observability import RequestContextMiddleware, configure_logging
 from app.routes.health import router as health_router
 from app.routes.portal import register_portal_routes
 from app.security.csrf import init_csrf
+from app.storage import close_storage, init_storage
 from app.security.headers import SecurityHeadersMiddleware
 from app.security.jwt import init_verifier
 
@@ -60,13 +61,15 @@ async def lifespan(app: FastAPI):
 
     if settings.supabase_url and settings.supabase_anon_key:
         await init_supabase(settings)
+        await init_storage(settings)
     else:
-        log.warning("Supabase não configurado: rotas de auth indisponíveis.")
+        log.warning("Supabase não configurado: rotas de auth/anexos indisponíveis.")
 
     try:
         yield
     finally:
         await close_pool()
+        await close_storage()
 
 
 def create_app() -> FastAPI:
