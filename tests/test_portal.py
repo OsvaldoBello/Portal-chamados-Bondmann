@@ -34,10 +34,16 @@ def _cliente() -> CurrentUser:
 class FakeRepo:
     """Implementa a superfície usada pelas rotas do portal."""
 
-    def __init__(self, *, chamado=None, categorias=None):
+    def __init__(self, *, chamado=None, categorias=None, departamentos=None):
         self._chamado = chamado
         self._categorias = categorias or [{"id": "c1", "nome": "Logística / Entrega"}]
+        self._departamentos = departamentos or [
+            {"id": "d1", "nome": "TI"},
+            {"id": "d2", "nome": "RH"},
+            {"id": "d3", "nome": "Marketing"},
+        ]
         self.avaliacoes: list[dict] = []
+        self.criados: list[dict] = []
 
     async def perfil(self, claims):
         return {"id": UID, "nome": "Cliente Teste", "role": "CLIENTE", "empresa_id": EMPRESA}
@@ -64,7 +70,11 @@ class FakeRepo:
     async def categorias_ativas(self, claims):
         return self._categorias
 
+    async def departamentos_ativos(self, claims):
+        return self._departamentos
+
     async def criar(self, claims, **kwargs):
+        self.criados.append(kwargs)
         return {"id": "novo-id", "codigo": "BOND-2026-00002"}
 
     async def avaliar(self, claims, chamado_id, *, nota, comentario):
@@ -126,12 +136,16 @@ def test_validar_nota_invalida(ruim):
 # --------------------------------------------------------------------------
 # Abertura: Categoria + Assunto, SEM "Produto"
 # --------------------------------------------------------------------------
-def test_form_novo_chamado_tem_categoria_assunto_sem_produto():
+def test_form_novo_chamado_tem_departamento_categoria_assunto_sem_produto():
     repo = FakeRepo()
     with portal_client(repo) as client:
         resp = client.get("/portal/chamados/novo")
     assert resp.status_code == 200
     html = resp.text
+    # Sistema interno: roteamento por departamento (TI/RH/Marketing).
+    assert "Departamento" in html
+    assert 'name="departamento_id"' in html
+    assert "TI" in html and "RH" in html and "Marketing" in html
     assert "Categoria" in html
     assert "Assunto" in html
     # A dimensão "produto" foi removida da abertura (decisão de produto).
@@ -139,6 +153,44 @@ def test_form_novo_chamado_tem_categoria_assunto_sem_produto():
     assert "BD CLEAN" not in html
     assert 'name="categoria_id"' in html
     assert 'name="titulo"' in html
+
+
+def _csrf_token(client):
+    client.get("/portal/chamados/novo")
+    return client.cookies.get("csrf_token")
+
+
+def test_criar_sem_departamento_retorna_400():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data={"titulo": "Impressora quebrada", "descricao": "Não liga", "departamento_id": ""},
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "departamento" in resp.text.lower()
+    assert repo.criados == []  # nada criado sem destino
+
+
+def test_criar_com_departamento_redireciona_e_repassa_destino():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data={
+                "titulo": "Acesso ao sistema de RH",
+                "descricao": "Preciso de acesso",
+                "departamento_id": "d2",
+            },
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert len(repo.criados) == 1
+    assert repo.criados[0]["departamento_id"] == "d2"
 
 
 def test_dashboard_lista_chamados():

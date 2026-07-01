@@ -229,44 +229,63 @@ A **`service_role` key bypassa o RLS** por design. Usá-la sem cuidado anula tod
 
 Enum de papéis (coerente com a spec): **`ADMIN`**, **`OPERADOR`**, **`CLIENTE`**.
 
-Matriz consolidada (das Seções 4.3 e 5 da spec):
+> ### 🔁 `[DECISÃO DE PRODUTO 2026-07-01]` Sistema INTERNO com roteamento por DEPARTAMENTO
+>
+> O portal é de **uso interno** da Bondmann Química (ninguém compra/contrata; não há
+> multi-tenant de clientes externos). A dimensão de isolamento deixa de ser a
+> **empresa** e passa a ser o **departamento** que atende o chamado:
+>
+> - **Departamentos** (`TI`, `RH`, `Marketing`) são uma **tabela gerenciável** (`departamentos`),
+>   igual a categorias. Um funcionário abre chamado escolhendo o **departamento de destino**.
+> - **Staff** (OPERADOR/ADMIN) tem um `departamento_id`; **só vê/atende os chamados do seu setor**.
+> - **Super-admin** = **ADMIN com `departamento_id` NULO** → enxerga **todos** os departamentos.
+> - **Autor** (funcionário, CLIENTE) vê **os próprios chamados**, para qualquer departamento.
+> - **`empresas`/`planos_sla`** permanecem **apenas como configuração interna de SLA** (org única
+>   = Bondmann); sem telas de venda/gestão de empresa nem de planos. `empresa_id` vira plumbing
+>   interno (uma org), mantido para o path do Storage e o motor de SLA.
+> - **Cadastro é direto no Supabase** (Authentication > Users) — **sem signup público**. O trigger
+>   `handle_new_user` cria o perfil CLIENTE vinculado à org interna; a promoção de papel/departamento
+>   é feita por SQL (`supabase/registro_usuarios.sql`). Ver Seção 3.4.
+>
+> Materializado na migration `0008_departamentos_roteamento` (+ `0009` de hardening). As linhas
+> abaixo marcadas com 🔁 refletem o novo modelo.
 
-| Recurso / Ação | CLIENTE | OPERADOR | ADMIN |
+Matriz consolidada (das Seções 4.3 e 5 da spec, ajustada ao modelo interno):
+
+| Recurso / Ação | CLIENTE (funcionário) | OPERADOR (staff do setor) | ADMIN |
 |---|---|---|---|
-| Ver chamados | Só da **própria empresa** | **Todos** | Todos |
-| Criar chamado | Sim, com `cliente_id = auth.uid()` e `empresa_id` = sua | Sim | Sim |
-| Atualizar `status` / `prioridade` / `operador_id` | **Não** | **Sim** | Sim |
+| 🔁 Ver chamados | Só os **que abriu** | Só os do **seu departamento** | Do seu departamento; **NULO = todos** (super-admin) |
+| 🔁 Criar chamado | Sim, escolhendo o **departamento de destino** (`cliente_id = auth.uid()`) | Sim | Sim |
+| 🔁 Atualizar `status` / `prioridade` / `operador_id` | **Não** | **Sim**, no seu departamento | Sim (super-admin: qualquer) |
 | Ver mensagens `is_interna = true` | **Não** | Sim | Sim |
 | Criar mensagem pública | Sim (nos seus chamados) | Sim | Sim |
 | Criar nota interna (`is_interna = true`) | **Não** | Sim | Sim |
 | **Avaliar chamado (1–5 ★, CSAT)** | **Só o autor**, e só quando `RESOLVIDO` | Não | Não |
-| Ver histórico/auditoria do chamado | Da própria empresa | Todos | Todos |
-| Gerir Planos de SLA | Não | Não | **Sim** |
-| Gerir Empresas | Não | Não | **Sim** |
+| 🔁 Ver histórico/auditoria do chamado | Dos próprios chamados | Do seu departamento | Do seu departamento; NULO = todos |
+| 🔁 Gerir Departamentos | Não | Não | **Sim (super-admin)** |
 | Gerir Categorias | Não | Não | **Sim** |
-| Convidar/gerir usuários (Operador/Admin) | Não | Não | **Sim** |
-| Relatórios/KPIs e Export CSV | Não | `⚠️ A VALIDAR` (spec dá `/admin` a ADMIN; workspace a OPERADOR+ADMIN) | **Sim** |
-| Acesso a Storage de anexos | Só do próprio tenant (path-scoped) | Todos | Todos |
-
-> `⚠️ SUPOSIÇÃO A VALIDAR:` se OPERADOR pode acessar relatórios. A spec coloca `/admin` (relatórios) sob perfil ADMIN e `/workspace` sob OPERADOR+ADMIN — adotado assim acima. Confirmar com o gestor.
+| 🔁 Gerir Planos de SLA (config interna) | Não | Não | **Sim** |
+| 🔁 Cadastrar usuários | — (feito direto no Supabase) | — | via banco/painel Supabase |
+| Relatórios/KPIs e Export CSV | Não | `⚠️ A VALIDAR` | **Sim** |
+| 🔁 Acesso a Storage de anexos | Anexos dos próprios chamados (path-scoped) | Do seu departamento | Todos |
 
 ### 3.3 Políticas RLS por papel (a implementar como SQL nas migrations)
 
-RLS **habilitado nas 7 tabelas**. Princípio do menor privilégio. Resumo das políticas (DDL completo nas migrations da Fase 2):
+RLS **habilitado nas 8 tabelas** (as 7 canônicas + `departamentos`). Princípio do menor privilégio. **🔁 A partir de `0008`, o isolamento de chamados é por DEPARTAMENTO/AUTOR (não mais por empresa):**
 
-- **CLIENTE**
-  - `SELECT chamados`: `empresa_id = (perfil do auth.uid()).empresa_id`.
-  - `INSERT chamados`: `cliente_id = auth.uid()` **e** `empresa_id` = empresa do perfil.
-  - `SELECT mensagens`: do chamado da sua empresa **e** `is_interna = false`.
+- **CLIENTE (funcionário)**
+  - `SELECT chamados`: **`cliente_id = auth.uid()`** (só os que abriu).
+  - `INSERT chamados`: `cliente_id = auth.uid()` **e** `departamento_id IS NOT NULL` (escolhe o destino).
+  - `SELECT mensagens`: do próprio chamado **e** `is_interna = false`.
   - **Sem** `UPDATE` de status/prioridade/operador.
-  - **`UPDATE chamados` (avaliação)**: permitido **apenas** no chamado próprio (`cliente_id = auth.uid()`) e **só quando `status = 'RESOLVIDO'`** (policy `chamados_update_cliente_avaliacao`). Como RLS não restringe colunas, o trigger `enforce_cliente_so_avaliacao` (Seção 5.3) garante que o CLIENTE só altere `avaliacao_nota`/`avaliacao_comentario`/`avaliacao_em` — qualquer mudança em status/prioridade/título/etc. é rejeitada. Defesa em profundidade: a rota também checa autor + `RESOLVIDO` antes de gravar.
-- **OPERADOR**
-  - `SELECT/UPDATE chamados`: todos. `UPDATE` permitido em `status`, `prioridade`, `operador_id`.
-  - `SELECT/INSERT mensagens`: todas, incluindo `is_interna`.
-- **ADMIN**
-  - Acesso irrestrito a todas as tabelas (incl. `planos_sla`, `empresas`, `categorias`, gestão de `perfis`).
+  - **`UPDATE chamados` (avaliação)**: apenas no chamado próprio e só com `status = 'RESOLVIDO'` (policy `chamados_update_cliente_avaliacao`). O trigger `enforce_cliente_so_avaliacao` (Seção 5.3) trava as colunas — incluindo `departamento_id` (o autor não pode redirecionar o chamado).
+- **OPERADOR / ADMIN departamental (staff com `departamento_id` = X)**
+  - `SELECT/UPDATE chamados`: **apenas onde `departamento_id = auth_departamento_id()`**. `UPDATE` em `status`, `prioridade`, `operador_id`.
+  - `SELECT/INSERT mensagens` (incl. `is_interna`) e `historico`: restritos ao mesmo escopo de departamento.
+- **SUPER-ADMIN (ADMIN com `departamento_id` NULO)**
+  - Acesso a **todos** os departamentos (chamados/mensagens/historico) e gestão de `departamentos`/`categorias`/`planos_sla`/`perfis`.
 
-Helper recomendado: função `auth_empresa_id()` (lê o `empresa_id` do `perfil` do `auth.uid()`) e `auth_role()` para uso nas policies, evitando subqueries repetidas.
+Helpers para as policies (SECURITY DEFINER, evitam recursão de RLS ao ler `perfis`): `auth_role()`, `auth_empresa_id()` e **🔁 `auth_departamento_id()`** (lê o `departamento_id` do perfil do `auth.uid()`).
 
 ### 3.4 Sessão e Auth (server-rendered) — `[LACUNA]`, a spec não define
 
@@ -276,6 +295,7 @@ Helper recomendado: função `auth_empresa_id()` (lê o `empresa_id` do `perfil`
 - **Refresh:** middleware verifica expiração do access token; se expirado e refresh válido, renova via `supabase-py` (`auth.refresh_session`) e re-seta cookies. Falha → redireciona a `/login`.
 - **Logout:** invalida sessão no Supabase (`auth.sign_out`) e **limpa os cookies** (expira no passado). 
 - **Expiração:** access token conforme config do Supabase (ex.: 1h); sessão de aplicação expira com o refresh token. Inatividade prolongada → re-login.
+- **🔁 Cadastro (sistema interno):** **não há signup público**. Colaboradores são criados **direto no Supabase** (Authentication > Users); `handle_new_user` gera o perfil `CLIENTE` vinculado à org interna; a promoção a `OPERADOR`/`ADMIN` e a atribuição de **departamento** são feitas por SQL (`supabase/registro_usuarios.sql`). Não existe rota `/cadastro`.
 
 ### 3.5 CSRF (ausente na spec — **obrigatório**)
 
@@ -521,6 +541,30 @@ CREATE INDEX idx_historico_chamado ON historico_chamados(chamado_id, created_at)
 
 > Imutabilidade: sem `UPDATE`/`DELETE` em política normal (apenas `INSERT`/`SELECT`); reforçar via RLS e, opcionalmente, revogar `UPDATE/DELETE` no nível de grants.
 
+#### 🔁 8. `departamentos` + colunas de roteamento (migration `0008`)
+
+Adendo ao schema canônico para o modelo interno (Seção 3.2). **8ª tabela** e duas colunas:
+
+```sql
+CREATE TABLE departamentos (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome       text NOT NULL UNIQUE,          -- seed: TI, RH, Marketing (gerenciável)
+  ativo      boolean NOT NULL DEFAULT true,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Setor do STAFF (OPERADOR/ADMIN). NULL = super-admin (ADMIN) ou funcionário (CLIENTE).
+ALTER TABLE perfis   ADD COLUMN departamento_id uuid REFERENCES departamentos(id) ON DELETE SET NULL;
+-- Setor de DESTINO do chamado (obrigatório na abertura, via RLS/rota).
+ALTER TABLE chamados ADD COLUMN departamento_id uuid REFERENCES departamentos(id) ON DELETE RESTRICT;
+CREATE INDEX idx_chamados_departamento ON chamados(departamento_id);
+CREATE INDEX idx_chamados_depto_status ON chamados(departamento_id, status);
+```
+
+> **`empresas`/`planos_sla`**: mantidas apenas como **config interna de SLA** (org única
+> `Bondmann Química` semeada em `0008`); `empresa_id` continua no schema (path do Storage +
+> motor de SLA), mas **não** é mais o eixo de isolamento. Sem venda/gestão self-service.
+
 ### 5.2 SLA — regras
 
 - **URGENTE = 50% do tempo de ALTA** (resposta e resolução), conforme spec.
@@ -539,7 +583,8 @@ CREATE INDEX idx_historico_chamado ON historico_chamados(chamado_id, created_at)
 1. **`trigger_set_timestamp`** — `BEFORE UPDATE` em `planos_sla`, `empresas`, `perfis`, `chamados`: seta `updated_at = now()`. (`planos_sla` incluída na implementação por também possuir `updated_at`; estende a lista da spec.)
 2. **`gerar_codigo_chamado`** — `BEFORE INSERT` em `chamados`: gera `codigo` no formato **`BOND-YYYY-NNNNN`** via **sequence dedicada** (sem `SELECT MAX()+1` — seria *racy*).
 3. **`calcular_sla_chamado`** — `BEFORE INSERT` (e em mudança de prioridade) em `chamados`: calcula `limite_resposta`/`limite_resolucao` conforme 5.2 + escada C1.
-4. **`handle_new_user`** — `AFTER INSERT` em `auth.users`: cria `perfis` com `role = 'CLIENTE'`.
+4. **`handle_new_user`** — `AFTER INSERT` em `auth.users`: cria `perfis` com `role = 'CLIENTE'`. **🔁 `0008`:** vincula o novo usuário à **org interna única** (`empresa_id` = primeira `empresas`), pois o cadastro passa a ser **direto no Supabase** (sem signup público); a promoção de papel/departamento é feita por SQL (`supabase/registro_usuarios.sql`).
+5. **🔁 `enforce_cliente_so_avaliacao`** — atualizada em `0008` para incluir `departamento_id` no conjunto imutável (o autor não redireciona o chamado).
 5. **`enforce_cliente_so_avaliacao`** *(adicionado na Fase 3, migration 0006)* — `BEFORE UPDATE` em `chamados`: quando `auth_role() = 'CLIENTE'`, rejeita qualquer `UPDATE` que altere colunas que não sejam de avaliação (`avaliacao_nota`/`avaliacao_comentario`/`avaliacao_em`). Complementa a policy `chamados_update_cliente_avaliacao` (RLS não restringe colunas). `REVOKE EXECUTE` aplicado (não é RPC), como nas demais functions de trigger (Seção 0005).
 
 #### `gerar_codigo_chamado` — concorrência, escopo, reset, overflow `[LACUNA]`
@@ -669,6 +714,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | 2026-06-26 | 0.2 / 1 / 2 / 3 / 6 / Estado | Fundação do backend (Fase 1 + Fase 2 backend). Scaffolding FastAPI (`app/`), `requirements.txt` com versões fixadas, Dockerfile multi-stage (Tailwind CLI + Python 3.12 slim + libmagic, porta 8080), Pydantic Settings, **camada de dados `asyncpg` com `SET LOCAL ROLE authenticated` + claims por transação** (Seção 3.1), cliente Supabase async só para Auth, **verificação local de JWT** (PyJWT, JWKS+HS256), **CSRF double-submit**, **security headers + CSP estrita**, cookies de sessão, rate limiting (slowapi em /login e /cadastro), logging JSON com request-id, `/health` + `/health/ready`, rotas `/login` `/logout` `/cadastro` e templates base. Suíte pytest (9 testes: health, CSP, CSRF, JWT) verde; build do Tailwind validado. Adicionado PyJWT à Seção 0.2. |
 | 2026-06-26 | 3.3 / 5.3 / 5.4 / Estado | Fase 2 (banco). Aplicadas `0003_triggers` (`trigger_set_timestamp`, `gerar_codigo_chamado` com contador anual atômico, `calcular_sla_chamado` com escada C1, `handle_new_user`), `0004_rls_policies` (helpers `auth_role`/`auth_empresa_id` SECURITY DEFINER, **RLS habilitado nas 7 tabelas + `contador_chamados`**, policies por papel da Seção 3.3, grants com `anon` sem acesso e imutabilidade de `mensagens`/`historico`) e `0005_harden_functions` (search_path fixo + REVOKE de EXECUTE nas functions de trigger). Smoke test em transação revertida confirmou código `BOND-YYYY-00001`, SLA URGENTE = 50% de ALTA e perfil CLIENTE automático. Advisor de segurança: 0 erros (resta apenas INFO de `contador_chamados` deny-all, intencional). |
 | 2026-06-30 | Consolidação de branches / 3.2 / 3.3 / 5.1 / 5.3 / 6 / Estado | **Consolidação:** backend (branch `supabase-table-setup`) + protótipos (branch `portal-screen-prototypes`) reunidos na branch de trabalho, com **um único MD autoritativo** para todo o projeto (as outras branches tinham cópias desatualizadas — esta passa a ser a fonte de verdade). **Avaliação (CSAT 1–5):** migration `0006_avaliacao_chamado` (colunas `avaliacao_*` em `chamados` + CHECK 1–5, policy `chamados_update_cliente_avaliacao` restrita a autor + `RESOLVIDO`, trigger `enforce_cliente_so_avaliacao` travando colunas, índice CSAT) aplicada no projeto `iurlzlhbnoemkzgexcfk`; advisors sem novos erros. **Decisão de produto:** abertura de chamado é por **Categoria + Assunto** — campo "Produto relacionado" removido do protótipo (`build.py` + `cliente-novo-chamado.html`). **Fase 3 (início):** Portal do Cliente em produção — rotas `/portal` (dashboard, novo chamado, detalhe, mensagens, avaliação), repositório `asyncpg`+RLS, templates Jinja com tokens da marca e widget de estrelas; CSAT deixa de depender de e-mail (Fase 5). Suíte pytest 30 testes verde (9 anteriores + 21 do portal/avaliação). |
+| 2026-07-01 | 3.2 / 3.3 / 5.1 / 5.3 / 3.4 / Prototipos / Estado | **Pivô para SISTEMA INTERNO + roteamento por DEPARTAMENTO.** Migrations `0008_departamentos_roteamento` e `0009_harden_auth_departamento` aplicadas no projeto `iurlzlhbnoemkzgexcfk`. Nova tabela `departamentos` (seed TI/RH/Marketing, gerenciável); `perfis.departamento_id` (setor do staff; NULO = super-admin/funcionário) e `chamados.departamento_id` (destino). **RLS repontada de empresa→departamento/autor:** funcionário vê os próprios chamados; staff vê só o seu departamento; **super-admin** (ADMIN, `departamento_id` NULO) vê tudo; mensagens/histórico seguem o mesmo escopo; helper `auth_departamento_id()`. `empresas`/`planos_sla` viram **config interna de SLA** (org única `Bondmann Química` semeada); `handle_new_user` vincula o novo usuário a ela. **Sem signup público** — cadastro direto no Supabase + `supabase/registro_usuarios.sql` (promoção de papel/departamento). Backend: `chamados.criar` exige `departamento_id`; `departamentos_ativos`; portal com seletor de departamento; detalhe exibe o setor; rotas `/cadastro` removidas. **Protótipos** (`build.py`): removidas telas de Empresas, Planos de SLA e Cadastro; abertura de chamado passa a ter Departamento. Suíte pytest **47 testes** verde. Advisors: só INFO de `contador_chamados` + os 3 `WARN` pré-existentes de helpers SECURITY DEFINER (agora incl. `auth_departamento_id`, mesmo padrão; backlog: schema privado). |
 | 2026-07-01 | Organização de branches / 3.9 / 1.4 / Estado | **Organização de branches:** trabalho consolidado passa a viver em **`claude/develop`** (branch principal de desenvolvimento, criada a partir de `ticket-rating-implementation`); **`claude/Md`** mantida como **fonte única do MD** (somente o documento, sempre sincronizada byte-a-byte com o MD de `develop`); mantida `portal-screen-prototypes` como referência; removidas as branches redundantes (`antigravity-protocol`, `project-implementation-continue`, `supabase-table-setup` [já mesclada], `ticket-rating-implementation` [contida em `develop`]). **Fase 3 — Storage de anexos (Seção 3.9):** migration `0007_storage_anexos` (bucket privado `chamados-anexos` + RLS path-scoped `{empresa_id}/{chamado_id}/{arquivo}`, policies SELECT/INSERT por tenant e DELETE só staff) aplicada no projeto `iurlzlhbnoemkzgexcfk`. Backend: `app/security/uploads.py` (validação server-side — limite 10MB, allow-list `pdf/jpg/png/mp4/docx/xlsx`, **MIME real por magic bytes** via python-magic + sniffer de fallback, sanitização de nome → UUID+ext); `app/storage.py` (acesso **direto à REST do Storage via httpx com o JWT do usuário** — respeita RLS, contorna a superfície async incompleta do supabase-py, Seção 1.4; **signed URLs TTL 1h geradas on-demand a cada render**, C2); rota de resposta agora aceita anexos multipart e o detalhe renderiza links assinados. Suíte pytest **45 testes** verde (30 anteriores + validação de upload + rota de anexos). **Nota de segurança (follow-up):** advisor aponta `WARN` em `auth_role()`/`auth_empresa_id()` (SECURITY DEFINER expostas via RPC ao `authenticated`) — **não** podem ter `EXECUTE` revogado sem quebrar a avaliação das policies; hardening correto = mover para schema privado não exposto ao PostgREST (backlog, não bloqueante — retornam só dados do próprio usuário). |
 
 ---
@@ -681,15 +727,17 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | `GET /health` | ✅ Implementado | 1 | `/health` (liveness) + `/health/ready` (pool). Testado. |
 | Migrations base (enums + 7 tabelas + índices) | ✅ Implementado | 1–2 | Schema canônico Seção 5. Migrations `0001_init_enums` + `0002_tables_core` aplicadas no projeto `iurlzlhbnoemkzgexcfk` e versionadas em `supabase/migrations/`. RLS habilitado na Fase 2 (`0004`). |
 | Triggers (`trigger_set_timestamp`, `gerar_codigo_chamado`, `calcular_sla_chamado`, `handle_new_user`) | ✅ Implementado | 2 | Migration `0003_triggers`. Código BOND com contador anual atômico; SLA com escada C1; smoke test verde. |
-| Auth (login/logout/cadastro) + cookies de sessão | 🟡 Backend pronto | 2 | Rotas + cookies httpOnly+Secure+SameSite implementados. Falta validação e2e contra Supabase live e fluxo de refresh. |
+| Auth (login/logout) + cookies de sessão | 🟡 Backend pronto | 2 | Login/logout + cookies httpOnly+Secure+SameSite. **🔁 Signup público removido** — cadastro direto no Supabase (`supabase/registro_usuarios.sql`). Falta validação e2e live/refresh. |
 | Verificação JWT (JWKS/HS256) | ✅ Implementado | 2 | PyJWT, JWKS assimétrico + fallback HS256; testado (HS256). Confirmar modo do projeto live. |
-| RLS nas 7 tabelas + policies por papel | ✅ Implementado | 2 | Migrations `0004_rls_policies` + `0005_harden_functions`. Helpers `auth_role`/`auth_empresa_id`; `anon` sem acesso. Acesso de domínio via asyncpg + `SET LOCAL` (a implementar no backend). |
+| RLS + policies por papel | ✅ Implementado | 2–3 | `0004`/`0005` (base) + **🔁 `0008`/`0009` (roteamento por departamento)**. 8 tabelas; helpers `auth_role`/`auth_empresa_id`/`auth_departamento_id`; `anon` sem acesso. |
+| **🔁 Roteamento por departamento (TI/RH/Marketing)** | ✅ Implementado | 3 | `0008`: tabela `departamentos` + `perfis/chamados.departamento_id`. Staff vê só o seu setor; super-admin (ADMIN NULO) vê tudo; autor vê os próprios. Portal com seletor; 47 testes. Validação e2e live pendente. |
+| **🔁 Cadastro direto no Supabase (sem signup)** | ✅ Preparado | 2–3 | `handle_new_user` vincula à org interna; `supabase/registro_usuarios.sql` promove papel/departamento. `/cadastro` removido. |
 | CSRF + Security headers + CSP estrita | ✅ Implementado | 2 | Double-submit + middleware de headers/CSP. Testado. Alpine/HTMX self-hosted pendente (Fase 3). |
 | Camada de dados asyncpg + `SET LOCAL` (RLS sob pooling) | ✅ Implementado | 2 | `app/db.py`: transaction mode, `statement_cache_size=0`, claims por transação. |
-| Rate limiting (slowapi) — backend | ✅ Implementado | 2 | Aplicado em /login (5/min) e /cadastro (3/min); IP real via X-Forwarded-For. |
+| Rate limiting (slowapi) — backend | ✅ Implementado | 2 | Aplicado em /login (5/min); IP real via X-Forwarded-For. |
 | Observabilidade (logs JSON + request-id) | ✅ Implementado | 1 | Middleware de contexto + formatter JSON. |
 | Teste de isolamento multi-tenant | Planejado | 2 | **Bloqueia** validação final da Fase 3 (RLS real contra Supabase local). |
-| Portal do Cliente — dashboard + abertura + detalhe | 🟡 Em produção | 3 | Rotas `/portal` (FastAPI/Jinja2), repositório `asyncpg`+RLS, templates com tokens da marca. Anexos ✅; falta: chat Realtime. |
+| Portal do Cliente — dashboard + abertura + detalhe | 🟡 Em produção | 3 | Rotas `/portal` (FastAPI/Jinja2), `asyncpg`+RLS, tokens da marca. Anexos ✅; abertura com **departamento de destino** ✅; falta: chat Realtime. |
 | **Avaliação do chamado (CSAT 1–5)** | ✅ Implementado | 3 | Migration `0006`; só autor + `RESOLVIDO`; widget de estrelas no detalhe; 30 testes verdes. |
 | Abertura por Categoria + Assunto (sem "Produto") | ✅ Implementado | 3 | Decisão de produto; campo "Produto relacionado" removido (produção + protótipo). |
 | Vendoring HTMX 2.0 + Alpine CSP (self-host) | Planejado | 3 | Rating já funciona sem JS (form PRG) e com HTMX (header `HX-Request`). Faltam os bundles em `/static` com SRI. |

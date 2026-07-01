@@ -1,8 +1,9 @@
-"""Rotas de autenticação: /login, /cadastro, /logout (Fase 2).
+"""Rotas de autenticação: /login, /logout (Fase 2).
 
 Auth via supabase-py async (GoTrue). Em sucesso, grava os tokens em cookies
-de sessão e redireciona conforme o papel. Rate limiting aplicado em /login e
-/cadastro (Seção 2.4).
+de sessão e redireciona conforme o papel. Rate limiting aplicado em /login
+(Seção 2.4). Não há signup público — o cadastro de colaboradores é feito
+direto no Supabase (ver supabase/registro_usuarios.sql).
 """
 
 from __future__ import annotations
@@ -72,38 +73,10 @@ def register_auth_routes(app, limiter: Limiter) -> None:
         )
         return response
 
-    @router.get("/cadastro")
-    async def cadastro_form(request: Request):
-        return render(request, "cadastro.html")
-
-    @router.post("/cadastro")
-    @limiter.limit("3/minute")
-    async def cadastro_submit(
-        request: Request,
-        nome: str = Form(...),
-        email: str = Form(...),
-        password: str = Form(...),
-        _: None = Depends(_csrf_guard),
-    ):
-        supabase = get_supabase()
-        try:
-            await supabase.auth.sign_up(
-                {
-                    "email": email,
-                    "password": password,
-                    "options": {"data": {"nome": nome}},
-                }
-            )
-        except Exception:
-            return render(
-                request,
-                "cadastro.html",
-                {"erro": "Não foi possível concluir o cadastro."},
-                status_code=status.HTTP_400_BAD_REQUEST,
-            )
-        # handle_new_user cria o perfil CLIENTE. Confirmação de e-mail conforme
-        # config do projeto; orientamos o usuário a confirmar e fazer login.
-        return render(request, "login.html", {"info": "Cadastro realizado. Faça login."})
+    # Sem signup público: o cadastro de colaboradores é feito DIRETO no Supabase
+    # (Authentication > Users) e a promoção de papel/departamento via SQL — ver
+    # supabase/registro_usuarios.sql. O trigger handle_new_user cria o perfil
+    # CLIENTE vinculado à org interna. Não há rota /cadastro.
 
     @router.post("/logout")
     async def logout(request: Request, _: None = Depends(_csrf_guard)):

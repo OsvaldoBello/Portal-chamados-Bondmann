@@ -16,13 +16,26 @@
     <div>
       <h3 class="font-display font-bold text-lg text-navy">Dados do chamado</h3>
       <p class="text-xs text-muted mt-1">
-        Os chamados são classificados por <strong>categoria</strong> e <strong>assunto</strong>.
+        Escolha o <strong>departamento</strong> responsável (TI, RH ou Marketing) e descreva o <strong>assunto</strong>.
       </p>
     </div>
 
-    {# Categoria #}
+    {# Departamento de destino (obrigatório) #}
     <label class="block">
-      <span class="block text-[13px] font-semibold text-navy mb-1.5">Categoria</span>
+      <span class="block text-[13px] font-semibold text-navy mb-1.5">Departamento de destino</span>
+      <select name="departamento_id" required
+              class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+        <option value="">Selecione o departamento…</option>
+        {% for dep in departamentos %}
+        <option value="{{ dep.id }}">{{ dep.nome }}</option>
+        {% endfor %}
+      </select>
+      <span class="block text-xs text-muted mt-1">Só a equipe desse setor verá e atenderá o chamado.</span>
+    </label>
+
+    {# Categoria (opcional) #}
+    <label class="block">
+      <span class="block text-[13px] font-semibold text-navy mb-1.5">Categoria <span class="text-faint font-normal">(opcional)</span></span>
       <select name="categoria_id"
               class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
         <option value="">Selecione a categoria…</option>

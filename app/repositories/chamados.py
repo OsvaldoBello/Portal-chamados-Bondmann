@@ -38,9 +38,10 @@ class ChamadosRepo:
                 """
                 SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade,
                        c.created_at, c.limite_resolucao, c.avaliacao_nota,
-                       cat.nome AS categoria
+                       cat.nome AS categoria, dep.nome AS departamento
                   FROM chamados c
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
+                  LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                  ORDER BY c.created_at DESC
                  LIMIT $1
                 """,
@@ -69,10 +70,11 @@ class ChamadosRepo:
                 SELECT c.id, c.codigo, c.titulo, c.descricao, c.status, c.prioridade,
                        c.cliente_id, c.created_at, c.limite_resposta, c.limite_resolucao,
                        c.resolvido_em, c.avaliacao_nota, c.avaliacao_comentario,
-                       c.avaliacao_em, cat.nome AS categoria,
+                       c.avaliacao_em, cat.nome AS categoria, dep.nome AS departamento,
                        autor.nome AS cliente_nome
                   FROM chamados c
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
+                  LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                  WHERE c.id = $1::uuid
                 """,
@@ -109,6 +111,14 @@ class ChamadosRepo:
             )
             return [dict(r) for r in rows]
 
+    async def departamentos_ativos(self, claims: dict) -> list[dict[str, Any]]:
+        """Departamentos de destino disponíveis para abertura (TI/RH/Marketing)."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                "SELECT id, nome FROM departamentos WHERE ativo = true ORDER BY nome"
+            )
+            return [dict(r) for r in rows]
+
     async def criar(
         self,
         claims: dict,
@@ -116,22 +126,25 @@ class ChamadosRepo:
         empresa_id: str,
         cliente_id: str,
         categoria_id: str | None,
+        departamento_id: str,
         titulo: str,
         descricao: str,
         prioridade: str,
     ) -> dict[str, Any]:
-        """Cria um chamado (Categoria + Assunto). Código/SLA via triggers."""
+        """Cria um chamado endereçado a um departamento. Código/SLA via triggers."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO chamados
-                    (empresa_id, cliente_id, categoria_id, titulo, descricao, prioridade)
-                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::prioridade_chamado)
+                    (empresa_id, cliente_id, categoria_id, departamento_id,
+                     titulo, descricao, prioridade)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7::prioridade_chamado)
                 RETURNING id, codigo
                 """,
                 empresa_id,
                 cliente_id,
                 categoria_id,
+                departamento_id,
                 titulo,
                 descricao,
                 prioridade,

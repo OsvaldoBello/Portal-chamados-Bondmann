@@ -160,10 +160,16 @@ async def novo_chamado_form(
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
     categorias = await repo.categorias_ativas(ctx.user.claims)
+    departamentos = await repo.departamentos_ativos(ctx.user.claims)
     return render(
         request,
         "portal/novo_chamado.html",
-        {"perfil": ctx.perfil, "categorias": categorias, "prioridades": PRIORIDADES},
+        {
+            "perfil": ctx.perfil,
+            "categorias": categorias,
+            "departamentos": departamentos,
+            "prioridades": PRIORIDADES,
+        },
     )
 
 
@@ -172,6 +178,7 @@ async def criar_chamado(
     request: Request,
     titulo: str = Form(...),           # "Assunto"
     descricao: str = Form(...),
+    departamento_id: str = Form(""),   # destino: TI / RH / Marketing
     categoria_id: str = Form(""),
     prioridade: str = Form("MEDIA"),
     ctx: PortalCtx = Depends(portal_context),
@@ -180,20 +187,29 @@ async def criar_chamado(
 ):
     titulo = titulo.strip()
     descricao = descricao.strip()
+    departamento_id = departamento_id.strip()
     prioridade = prioridade.upper()
     if prioridade not in PRIORIDADES:
         prioridade = "MEDIA"
 
-    if not titulo or not descricao:
+    erro = None
+    if not departamento_id:
+        erro = "Selecione o departamento de destino do chamado."
+    elif not titulo or not descricao:
+        erro = "Informe o assunto e a descrição do chamado."
+
+    if erro:
         categorias = await repo.categorias_ativas(ctx.user.claims)
+        departamentos = await repo.departamentos_ativos(ctx.user.claims)
         return render(
             request,
             "portal/novo_chamado.html",
             {
                 "perfil": ctx.perfil,
                 "categorias": categorias,
+                "departamentos": departamentos,
                 "prioridades": PRIORIDADES,
-                "erro": "Informe o assunto e a descrição do chamado.",
+                "erro": erro,
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -203,6 +219,7 @@ async def criar_chamado(
         empresa_id=str(ctx.perfil["empresa_id"]),
         cliente_id=ctx.user.id,
         categoria_id=categoria_id or None,
+        departamento_id=departamento_id,
         titulo=titulo,
         descricao=descricao,
         prioridade=prioridade,

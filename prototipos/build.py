@@ -142,8 +142,6 @@ NAV = {
  "admin": [
    ("admin-dashboard.html","dashboard","Dashboard"),
    ("operador-fila-lista.html","ticket","Chamados"),
-   ("admin-empresas.html","building","Empresas"),
-   ("admin-planos-sla.html","clock","Planos de SLA"),
    ("admin-categorias.html","tag","Categorias"),
    ("admin-usuarios.html","users","Usuários"),
    ("admin-relatorios.html","chart","Relatórios"),
@@ -375,9 +373,7 @@ PAGES["login.html"] = auth_page("Entrar", f'''
     </div>
     {btn("Entrar no portal","primary","logout","w-full")}
   </form>
-  <div class="my-7 flex items-center gap-3 text-xs text-faint"><div class="flex-1 h-px bg-line"></div>OU<div class="flex-1 h-px bg-line"></div></div>
-  <p class="text-center text-sm text-muted">Ainda não tem acesso?
-    <a href="cadastro.html" class="font-semibold text-navy hover:underline">Solicitar cadastro</a></p>
+  <p class="mt-7 text-center text-xs text-muted">Sistema interno da Bondmann Química. O acesso é provisionado pela administração.</p>
 ''')
 
 # 2. CADASTRO
@@ -489,7 +485,8 @@ novo_content = f'''
   <div class="grid lg:grid-cols-3 gap-6">
     <div class="lg:col-span-2 space-y-6">
       {card(f'<div class="p-6 space-y-5"><h3 class="font-display font-bold text-lg text-navy">Dados do chamado</h3>'
-        + field("Categoria", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Selecione a categoria…</option><option>Suporte técnico de produto</option><option>Solicitação de documento (FISPQ/Laudo)</option><option>Logística / Entrega</option><option>Comercial / Plano</option></select>',"A categoria pode exibir campos adicionais (HTMX).")
+        + field("Departamento de destino", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Selecione o departamento…</option><option>TI</option><option>RH</option><option>Marketing</option></select>',"Só a equipe desse setor verá e atenderá o chamado.")
+        + field("Categoria — opcional", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Selecione a categoria…</option><option>Suporte técnico</option><option>Solicitação de acesso</option><option>Dúvida</option><option>Outros</option></select>')
         + field("Assunto", input_ctl("Resuma o problema em uma frase"))
         + field("Prioridade", '<select class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm"><option>Baixa</option><option selected>Média</option><option>Alta</option><option>Urgente</option></select>')
         + field("Descrição detalhada", '<textarea rows="5" placeholder="Descreva o que aconteceu, lote, linha de produção, etc." class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint resize-none"></textarea>')
@@ -500,7 +497,7 @@ novo_content = f'''
       {card(f'''<div class="p-6">
         <h3 class="font-display font-bold text-lg text-navy mb-4">SLA previsto</h3>
         <div class="space-y-3">
-          <div class="flex items-center justify-between p-3 rounded-lg bg-surface"><span class="text-sm text-muted">Plano da empresa</span><span class="text-sm font-semibold text-navy">Ouro</span></div>
+          <div class="flex items-center justify-between p-3 rounded-lg bg-surface"><span class="text-sm text-muted">Departamento</span><span class="text-sm font-semibold text-navy">TI</span></div>
           <div class="flex items-center justify-between p-3 rounded-lg bg-surface"><span class="text-sm text-muted">1ª resposta em</span><span class="text-sm font-bold text-brandgreen-700">4 horas</span></div>
           <div class="flex items-center justify-between p-3 rounded-lg bg-surface"><span class="text-sm text-muted">Resolução em</span><span class="text-sm font-bold text-brandgreen-700">24 horas</span></div>
         </div>
@@ -1031,10 +1028,10 @@ PAGES["design-system.html"] = head("Design System") + ds_body + FOOT
 # ============================================================================
 GROUPS = [
   ("Fundamentos","#2E466F",[("design-system.html","Design System","Cores, tipografia, logo e componentes")]),
-  ("Autenticação","#41B6E6",[("login.html","Login","Acesso ao portal"),("cadastro.html","Cadastro","Solicitação de acesso do cliente"),("recuperar-senha.html","Recuperar senha","Reset por e-mail (link 1h)")]),
+  ("Autenticação","#41B6E6",[("login.html","Login","Acesso ao portal"),("recuperar-senha.html","Recuperar senha","Reset por e-mail (link 1h)")]),
   ("Portal do Cliente","#1FB98C",[("cliente-dashboard.html","Dashboard","Visão geral + meus chamados"),("cliente-novo-chamado.html","Abrir chamado","Formulário + upload + SLA previsto"),("cliente-chamado-detalhe.html","Detalhe + Chat","Conversa e anexos")]),
   ("Workspace do Operador","#5560B0",[("operador-fila-lista.html","Fila — Lista","Filtros, SLA visual, ações em lote"),("operador-fila-kanban.html","Fila — Kanban","Colunas por status (drag & drop)"),("operador-atendimento.html","Atendimento","Chat + nota interna + auditoria")]),
-  ("Painel Admin","#F0934E",[("admin-dashboard.html","Dashboard / KPIs","Gráficos Chart.js"),("admin-empresas.html","Empresas","Gestão de tenants + modal"),("admin-planos-sla.html","Planos de SLA","Tempos por prioridade"),("admin-categorias.html","Categorias","Catálogo global"),("admin-usuarios.html","Usuários","Papéis + modal de convite"),("admin-relatorios.html","Relatórios","Filtros + export CSV")]),
+  ("Painel Admin","#F0934E",[("admin-dashboard.html","Dashboard / KPIs","Gráficos Chart.js"),("admin-categorias.html","Categorias","Catálogo global"),("admin-usuarios.html","Usuários","Papéis + departamento (TI/RH/Marketing)"),("admin-relatorios.html","Relatórios","Filtros + export CSV")]),
   ("Conta & Sistema","#1B8A8F",[("perfil.html","Perfil & Configurações","Dados, segurança e notificações"),("erro-403.html","Acesso negado (403)","Sem permissão / RBAC"),("erro-404.html","Não encontrado (404)","Página inexistente")]),
 ]
 def gallery_card(href, title, desc, color):
@@ -1065,9 +1062,9 @@ index_body = f'''
     <h1 class="font-display font-bold text-white text-4xl mt-8">Portal de Chamados — Protótipo de alta fidelidade</h1>
     <p class="text-white/70 mt-3 max-w-2xl leading-relaxed">{total} telas construídas a partir do Manual de Identidade Visual da Bondmann Química e do Plano Mestre de Desenvolvimento. Stack: Tailwind CSS · HTMX · Alpine.js · Chart.js — a mesma definida na Seção 0.4 do plano.</p>
     <div class="mt-6 flex flex-wrap gap-2.5">
-      <span class="px-3 py-1 rounded-full text-xs font-semibold bg-white/10 text-white">Multi-tenant</span>
+      <span class="px-3 py-1 rounded-full text-xs font-semibold bg-white/10 text-white">Uso interno</span>
+      <span class="px-3 py-1 rounded-full text-xs font-semibold bg-white/10 text-white">Roteamento por departamento (TI · RH · Marketing)</span>
       <span class="px-3 py-1 rounded-full text-xs font-semibold bg-white/10 text-white">SLA visual</span>
-      <span class="px-3 py-1 rounded-full text-xs font-semibold bg-white/10 text-white">RBAC: Admin · Operador · Cliente</span>
       <span class="px-3 py-1 rounded-full text-xs font-semibold bg-brandgreen/20 text-brandgreen">Identidade Bondmann</span>
     </div>
   </div>
@@ -1081,6 +1078,13 @@ PAGES["index.html"] = head("Telas do Portal") + index_body + FOOT
 # ============================================================================
 #  ESCRITA DOS ARQUIVOS
 # ============================================================================
+# Sistema interno: sem venda de planos, sem cadastro de empresas nem signup público.
+for _obsoleta in ("cadastro.html", "admin-empresas.html", "admin-planos-sla.html"):
+    PAGES.pop(_obsoleta, None)
+    _p = os.path.join(OUT, _obsoleta)
+    if os.path.exists(_p):
+        os.remove(_p)
+
 written = []
 for fname, html in PAGES.items():
     with open(os.path.join(OUT, fname), "w", encoding="utf-8") as f:
