@@ -25,7 +25,7 @@ from app.repositories.chamados import (
 )
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido, validar_anexo
-from app.storage import AnexosStorage, StorageError, get_storage
+from app.storage import AnexosStorage, StorageError, ensure_storage
 from app.templating import render
 
 log = logging.getLogger("app.portal")
@@ -79,21 +79,13 @@ def _access_token(request: Request) -> str | None:
     return request.cookies.get(ACCESS_COOKIE)
 
 
-def _storage_opcional() -> AnexosStorage | None:
-    """Retorna o Storage se configurado; ``None`` quando ausente (degrada sem erro)."""
-    try:
-        return get_storage()
-    except RuntimeError:
-        return None
-
-
 async def _assinar_anexos(request: Request, mensagens: list[dict]) -> None:
     """Gera signed URLs (TTL 1h) *on-demand* para cada anexo (C2 — nunca cacheado).
 
     Muta as mensagens in-place adicionando ``url`` a cada anexo. Falha graciosa:
     sem Storage/token, ``url`` fica ``None`` e o template mostra 'indisponível'.
     """
-    storage = _storage_opcional()
+    storage = await ensure_storage()
     token = _access_token(request)
     for m in mensagens:
         for anexo in m.get("anexos") or []:
@@ -119,7 +111,7 @@ async def _processar_uploads(
     if len(reais) > MAX_ANEXOS:
         raise UploadInvalido(f"Máximo de {MAX_ANEXOS} anexos por mensagem.")
 
-    storage = _storage_opcional()
+    storage = await ensure_storage()
     token = _access_token(request)
     if storage is None or token is None:
         raise UploadInvalido("Envio de anexos indisponível no momento.")

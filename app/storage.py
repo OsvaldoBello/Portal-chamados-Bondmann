@@ -104,3 +104,15 @@ def get_storage() -> AnexosStorage:
     if _storage is None:
         raise RuntimeError("Storage não inicializado (Supabase configurado?).")
     return _storage
+
+
+async def ensure_storage() -> "AnexosStorage | None":
+    """Garante o storage mesmo sem lifespan (serverless). Retorna None se o
+    Supabase não estiver configurado (uploads/anexos degradam graciosamente)."""
+    if _storage is None:
+        from app.config import get_settings
+
+        settings = get_settings()
+        if settings.supabase_url:
+            await init_storage(settings)
+    return _storage

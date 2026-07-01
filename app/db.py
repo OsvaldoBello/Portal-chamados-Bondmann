@@ -59,6 +59,22 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+async def _ensure_pool() -> asyncpg.Pool:
+    """Garante o pool mesmo sem lifespan (ex.: serverless/Vercel cold start).
+
+    Idempotente e barato quando já inicializado. Levanta erro claro se não há
+    ``DATABASE_URL`` configurada."""
+    global _pool
+    if _pool is None:
+        from app.config import get_settings
+
+        settings = get_settings()
+        if not settings.database_url:
+            raise RuntimeError("DATABASE_URL ausente — configure o banco (Supavisor 6543).")
+        await init_pool(settings)
+    return _pool  # type: ignore[return-value]
+
+
 @asynccontextmanager
 async def rls_connection(claims: dict[str, Any]) -> AsyncIterator[asyncpg.Connection]:
     """Conexão transacional com claims do usuário aplicados para RLS.
@@ -66,7 +82,7 @@ async def rls_connection(claims: dict[str, Any]) -> AsyncIterator[asyncpg.Connec
     Use para TODA leitura/escrita de domínio em nome de um usuário autenticado.
     ``claims`` deve conter ao menos ``sub`` (lido por ``auth.uid()``) e ``role``.
     """
-    pool = get_pool()
+    pool = await _ensure_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             # Papel de banco do PostgREST/Supabase para usuários autenticados.
@@ -86,7 +102,7 @@ async def admin_connection() -> AsyncIterator[asyncpg.Connection]:
     NÃO usar em rota acessível por request de usuário. Não faz downgrade de
     role; herda o papel da DSN. Uso restrito e auditado (Seção 3.1).
     """
-    pool = get_pool()
+    pool = await _ensure_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             yield conn

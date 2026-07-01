@@ -1,0 +1,83 @@
+{% extends "admin/admin_base.html" %}
+{% set active = "gestao" %}
+{% block title %}Gestão de catálogos — Admin{% endblock %}
+{% block heading %}Gestão de catálogos{% endblock %}
+{% block content %}
+
+{% macro toggle_btn(acao, ativo) %}
+<form method="post" action="{{ acao }}" class="inline">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button class="text-xs font-semibold px-2 py-1 rounded {{ 'bg-sla-danger/10 text-sla-danger' if ativo else 'bg-sla-ok/10 text-sla-ok' }}">
+    {{ "Desativar" if ativo else "Ativar" }}
+  </button>
+</form>
+{% endmacro %}
+
+<div class="grid lg:grid-cols-2 gap-6">
+  {# Departamentos #}
+  <section class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h3 class="font-display font-bold text-navy mb-3">Departamentos</h3>
+    <form method="post" action="/admin/departamentos" class="flex gap-2 mb-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input name="nome" required placeholder="Novo departamento (ex.: Financeiro)"
+             class="flex-1 px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
+      <button class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold">Adicionar</button>
+    </form>
+    <ul class="divide-y divide-line">
+      {% for d in departamentos %}
+      <li class="flex items-center justify-between py-2">
+        <span class="text-sm {{ 'text-navy' if d.ativo else 'text-faint line-through' }}">{{ d.nome }}</span>
+        {{ toggle_btn("/admin/departamentos/" ~ d.id ~ "/toggle", d.ativo) }}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  {# Categorias #}
+  <section class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h3 class="font-display font-bold text-navy mb-3">Categorias</h3>
+    <form method="post" action="/admin/categorias" class="space-y-2 mb-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input name="nome" required placeholder="Nova categoria"
+             class="w-full px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
+      <div class="flex gap-2">
+        <input name="descricao" placeholder="Descrição (opcional)"
+               class="flex-1 px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
+        <button class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold">Adicionar</button>
+      </div>
+    </form>
+    <ul class="divide-y divide-line">
+      {% for c in categorias %}
+      <li class="flex items-center justify-between py-2">
+        <span class="text-sm {{ 'text-navy' if c.ativo else 'text-faint line-through' }}">{{ c.nome }}</span>
+        {{ toggle_btn("/admin/categorias/" ~ c.id ~ "/toggle", c.ativo) }}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+
+{# Planos de SLA (config interna — leitura) #}
+<section class="bg-white rounded-xl shadow-card border border-line/60 p-5 mt-6">
+  <h3 class="font-display font-bold text-navy mb-3">Planos de SLA <span class="text-xs font-normal text-muted">(config interna)</span></h3>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="text-left text-[11px] font-bold uppercase tracking-wider text-muted">
+        <tr><th class="py-2 pr-4">Plano</th><th class="py-2 pr-4">Resposta ALTA</th><th class="py-2 pr-4">Resolução ALTA</th><th class="py-2 pr-4">Default resp.</th><th class="py-2 pr-4">Default resol.</th><th class="py-2">Ativo</th></tr>
+      </thead>
+      <tbody>
+        {% for p in planos %}
+        <tr class="border-t border-line">
+          <td class="py-2 pr-4 font-medium text-navy">{{ p.nome }}</td>
+          <td class="py-2 pr-4">{{ p.resposta_alta_min }} min</td>
+          <td class="py-2 pr-4">{{ p.resolucao_alta_min }} min</td>
+          <td class="py-2 pr-4">{{ p.resposta_default_min }} min</td>
+          <td class="py-2 pr-4">{{ p.resolucao_default_min }} min</td>
+          <td class="py-2">{{ "Sim" if p.ativo else "Não" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

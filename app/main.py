@@ -24,6 +24,7 @@ from app.config import get_settings
 from app.db import close_pool, init_pool
 from app.observability import RequestContextMiddleware, configure_logging
 from app.routes.health import router as health_router
+from app.routes.admin import register_admin_routes
 from app.routes.portal import register_portal_routes
 from app.routes.workspace import register_workspace_routes
 from app.security.csrf import init_csrf
@@ -75,6 +76,12 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
+
+    # Init idempotente e barato aqui (não só no lifespan): garante CSRF/JWT prontos
+    # mesmo em runtimes que não executam o lifespan (ex.: serverless/Vercel).
+    init_csrf(settings)
+    init_verifier(settings)
+
     app = FastAPI(
         title="Portal de Chamados Bondmann",
         docs_url="/docs" if not settings.is_production else None,
@@ -99,6 +106,7 @@ def create_app() -> FastAPI:
     register_auth_routes(app, limiter)
     register_portal_routes(app)
     register_workspace_routes(app)
+    register_admin_routes(app)
 
     # Tratamento de erro centralizado (Seção 6.3): sem vazar stack/segredos.
     app.add_exception_handler(HTTPException, _http_exception_handler)

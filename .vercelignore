@@ -1,0 +1,14 @@
+# Não enviar ao build da Vercel
+.venv
+venv
+node_modules
+tests
+prototipos
+supabase/.branches
+supabase/.temp
+.pytest_cache
+__pycache__
+*.pyc
+.env
+.env.*
+!.env.example

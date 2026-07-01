@@ -14,7 +14,7 @@ from slowapi import Limiter
 
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.auth.session import REFRESH_COOKIE, SessionTokens, clear_session, set_session
-from app.auth.supabase_client import get_supabase
+from app.auth.supabase_client import ensure_supabase
 from app.security.csrf import get_csrf
 from app.templating import render
 
@@ -44,7 +44,7 @@ def register_auth_routes(app, limiter: Limiter) -> None:
         password: str = Form(...),
         _: None = Depends(_csrf_guard),
     ):
-        supabase = get_supabase()
+        supabase = await ensure_supabase()
         try:
             result = await supabase.auth.sign_in_with_password(
                 {"email": email, "password": password}
@@ -84,7 +84,7 @@ def register_auth_routes(app, limiter: Limiter) -> None:
         refresh = request.cookies.get(REFRESH_COOKIE)
         if refresh:
             try:
-                await get_supabase().auth.sign_out()
+                await (await ensure_supabase()).auth.sign_out()
             except Exception:
                 pass
         response = RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)

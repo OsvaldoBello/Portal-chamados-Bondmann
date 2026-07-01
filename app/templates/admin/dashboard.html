@@ -1,0 +1,56 @@
+{% extends "admin/admin_base.html" %}
+{% set active = "kpis" %}
+{% block title %}Indicadores — Admin{% endblock %}
+{% block heading %}Indicadores{% endblock %}
+{% block content %}
+
+{# KPIs #}
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  {% macro kpi(rot, val, sub="") %}
+  <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <div class="text-3xl font-display font-bold text-navy">{{ val }}</div>
+    <div class="text-xs text-muted mt-1">{{ rot }}</div>
+    {% if sub %}<div class="text-[11px] text-faint mt-0.5">{{ sub }}</div>{% endif %}
+  </div>
+  {% endmacro %}
+  {{ kpi("Chamados no total", kpis.total) }}
+  {{ kpi("Abertos", kpis.abertos) }}
+  {{ kpi("Conformidade de SLA", (kpis.conformidade_sla ~ "%") if kpis.conformidade_sla is not none else "—",
+         "resolvidos dentro do prazo") }}
+  {{ kpi("CSAT médio", kpis.csat_media if kpis.csat_media is not none else "—",
+         (kpis.csat_respostas ~ " avaliações") if kpis.csat_respostas else "sem avaliações") }}
+</div>
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  {{ kpi("TMA (resolução)", (kpis.tma_horas ~ "h") if kpis.tma_horas is not none else "—", "tempo médio") }}
+  {{ kpi("Resolvidos", kpis.resolvidos) }}
+</div>
+
+{# Gráficos #}
+<div class="grid lg:grid-cols-2 gap-5">
+  <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h3 class="font-display font-bold text-navy mb-3">Chamados por status</h3>
+    <canvas id="chart-status" height="180"></canvas>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h3 class="font-display font-bold text-navy mb-3">Distribuição do CSAT (1–5)</h3>
+    <canvas id="chart-csat" height="180"></canvas>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h3 class="font-display font-bold text-navy mb-3">Chamados por departamento</h3>
+    <canvas id="chart-departamento" height="180"></canvas>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h3 class="font-display font-bold text-navy mb-3">Produtividade por operador (resolvidos)</h3>
+    <canvas id="chart-produtividade" height="180"></canvas>
+  </div>
+</div>
+
+{# Dados inertes (não é script executável) lidos pelo admin.js — CSP-safe. #}
+<script type="application/json" id="chart-data">{{ graficos | tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/chart.umd.js"
+        integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG"></script>
+<script src="/static/js/admin.js"></script>
+{% endblock %}

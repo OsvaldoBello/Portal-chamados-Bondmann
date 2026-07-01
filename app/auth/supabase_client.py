@@ -24,3 +24,15 @@ def get_supabase() -> AsyncClient:
     if _client is None:
         raise RuntimeError("Cliente Supabase não inicializado.")
     return _client
+
+
+async def ensure_supabase() -> AsyncClient:
+    """Garante o cliente mesmo sem lifespan (serverless). Idempotente."""
+    if _client is None:
+        from app.config import get_settings
+
+        settings = get_settings()
+        if not (settings.supabase_url and settings.supabase_anon_key):
+            raise RuntimeError("Supabase não configurado (SUPABASE_URL/ANON_KEY).")
+        await init_supabase(settings)
+    return get_supabase()
