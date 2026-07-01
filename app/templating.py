@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
+from app.domain.sla_visual import estado_sla
 from app.security.csrf import CSRF_HEADER, get_csrf
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -43,6 +44,7 @@ templates.env.globals.update(
     STATUS_META=STATUS_META,
     PRIORIDADE_META=PRIORIDADE_META,
     fmt_dt=fmt_dt,
+    estado_sla=estado_sla,   # indicador visual de SLA (Fase 4)
 )
 
 

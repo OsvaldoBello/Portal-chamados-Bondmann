@@ -20,8 +20,9 @@ from app.templating import render
 
 router = APIRouter(tags=["auth"])
 
-# Destino pós-login por papel (dashboards das Fases 3–5).
-_HOME_BY_ROLE = {"ADMIN": "/admin", "OPERADOR": "/workspace", "CLIENTE": "/portal"}
+# Destino pós-login por papel. ADMIN/OPERADOR (staff) vão ao Workspace (Fase 4);
+# o painel /admin (Fase 5) ainda não existe. CLIENTE (funcionário) vai ao Portal.
+_HOME_BY_ROLE = {"ADMIN": "/workspace", "OPERADOR": "/workspace", "CLIENTE": "/portal"}
 
 
 def home_for(role: str) -> str:

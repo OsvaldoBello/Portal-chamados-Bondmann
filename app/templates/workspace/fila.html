@@ -1,0 +1,45 @@
+{% extends "workspace/workspace_base.html" %}
+{% set active = "fila" %}
+{% block title %}Fila de chamados — Workspace{% endblock %}
+{% block heading %}Fila de chamados{% endblock %}
+{% block content %}
+
+{# Contadores por status #}
+<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
+  {% for chave, rot in [("", "Total"), ("NOVO","Novos"), ("EM_ATENDIMENTO","Em atendimento"), ("AGUARDANDO","Aguardando"), ("RESOLVIDO","Resolvidos")] %}
+  <a href="/workspace{% if chave %}?status={{ chave }}{% endif %}"
+     class="rounded-xl border p-4 bg-white shadow-card {% if filtro == (chave or None) %}border-navy-500 ring-1 ring-navy-500{% else %}border-line/60{% endif %}">
+    <div class="text-2xl font-display font-bold text-navy">
+      {{ stats.total if chave == "" else stats[chave] }}
+    </div>
+    <div class="text-xs text-muted mt-0.5">{{ rot }}</div>
+  </a>
+  {% endfor %}
+</div>
+
+<div class="flex items-center justify-between mb-3">
+  <p class="text-sm text-muted">
+    {% if filtro %}Filtrando por <strong>{{ STATUS_META[filtro].label }}</strong> · <a href="/workspace" class="text-navy hover:underline">limpar</a>{% else %}Todos os chamados do seu escopo{% endif %}
+  </p>
+  <a href="/workspace/kanban" class="text-sm font-semibold text-navy hover:underline">Ver como Kanban →</a>
+</div>
+
+{# Tabela (recarrega a cada 15s para atualizar as cores de SLA) #}
+<div class="bg-white rounded-xl shadow-card border border-line/60 overflow-hidden">
+  <table class="w-full">
+    <thead class="bg-surface/70 text-left text-[11px] font-bold uppercase tracking-wider text-muted">
+      <tr>
+        <th class="px-4 py-3">Código</th><th class="px-4 py-3">Assunto</th>
+        <th class="px-4 py-3">Departamento</th><th class="px-4 py-3">Status</th>
+        <th class="px-4 py-3">Prioridade</th><th class="px-4 py-3">SLA</th>
+        <th class="px-4 py-3">Operador</th>
+      </tr>
+    </thead>
+    <tbody id="fila-corpo"
+           hx-get="/workspace/fila/fragmento{% if filtro %}?status={{ filtro }}{% endif %}"
+           hx-trigger="every 15s" hx-swap="innerHTML">
+      {% include "workspace/_fila_linhas.html" %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

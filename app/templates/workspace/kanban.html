@@ -1,0 +1,45 @@
+{% extends "workspace/workspace_base.html" %}
+{% from "portal/_macros.html" import prioridade_badge %}
+{% from "workspace/_macros.html" import sla_chip %}
+{% set active = "kanban" %}
+{% block title %}Kanban — Workspace{% endblock %}
+{% block heading %}Kanban{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-3">
+  <p class="text-sm text-muted">Arraste um cartão entre colunas para mudar o status (ou use a tela de atendimento).</p>
+  <a href="/workspace" class="text-sm font-semibold text-navy hover:underline">Ver como Lista →</a>
+</div>
+
+<div id="kanban" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+  {% for s in status_validos %}
+  <section class="bg-surface2/60 rounded-xl border border-line/60 flex flex-col">
+    <header class="px-3 py-2.5 flex items-center justify-between">
+      <span class="text-xs font-bold uppercase tracking-wide text-muted">{{ STATUS_META[s].label }}</span>
+      <span class="text-xs font-semibold text-navy bg-white rounded-full px-2 py-0.5">{{ colunas[s]|length }}</span>
+    </header>
+    <div class="kanban-col flex-1 p-2 space-y-2 min-h-[80px]" data-status="{{ s }}">
+      {% for c in colunas[s] %}
+      <article class="kanban-card bg-white rounded-lg border border-line/60 p-3 shadow-soft cursor-grab" data-id="{{ c.id }}">
+        <a href="/workspace/chamados/{{ c.id }}" class="block">
+          <div class="font-mono text-[11px] text-brandgreen-700">{{ c.codigo }}</div>
+          <div class="text-sm font-medium text-navy leading-snug mt-0.5">{{ c.titulo }}</div>
+          <div class="flex items-center justify-between mt-2">
+            {{ prioridade_badge(c.prioridade) }}
+            {{ sla_chip(c) }}
+          </div>
+          <div class="text-[11px] text-muted mt-1">{{ c.departamento or "—" }} · {{ c.operador_nome or "sem operador" }}</div>
+        </a>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/sortable.min.js"
+        integrity="sha384-HZZ/fukV+9G8gwTNjN7zQDG0Sp7MsZy5DDN6VfY3Be7V9dvQpEpR2jF2HlyFUUjU"></script>
+<script src="/static/js/workspace.js"></script>
+{% endblock %}

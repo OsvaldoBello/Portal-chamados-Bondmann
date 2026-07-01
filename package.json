@@ -24,6 +24,7 @@
     "@supabase/supabase-js": "2.47.10",
     "alpinejs": "^3.14.1",
     "chart.js": "4.4.1",
-    "htmx.org": "2.0.4"
+    "htmx.org": "2.0.4",
+    "sortablejs": "1.15.6"
   }
 }

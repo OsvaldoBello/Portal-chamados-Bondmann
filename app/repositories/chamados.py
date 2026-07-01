@@ -76,14 +76,17 @@ class ChamadosRepo:
             row = await conn.fetchrow(
                 """
                 SELECT c.id, c.codigo, c.titulo, c.descricao, c.status, c.prioridade,
-                       c.cliente_id, c.created_at, c.limite_resposta, c.limite_resolucao,
-                       c.resolvido_em, c.avaliacao_nota, c.avaliacao_comentario,
-                       c.avaliacao_em, cat.nome AS categoria, dep.nome AS departamento,
-                       autor.nome AS cliente_nome
+                       c.cliente_id, c.operador_id, c.departamento_id,
+                       c.created_at, c.limite_resposta, c.limite_resolucao,
+                       c.respondido_em, c.resolvido_em,
+                       c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
+                       cat.nome AS categoria, dep.nome AS departamento,
+                       autor.nome AS cliente_nome, op.nome AS operador_nome
                   FROM chamados c
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                  LEFT JOIN perfis op ON op.id = c.operador_id
                  WHERE c.id = $1::uuid
                 """,
                 chamado_id,
@@ -217,6 +220,179 @@ class ChamadosRepo:
                 json.dumps(anexos or []),
             )
             return dict(row)
+
+    # ---------------------------------------------------------------------
+    # Workspace do operador (Fase 4) — escopo por departamento via RLS.
+    # ---------------------------------------------------------------------
+    async def fila(
+        self, claims: dict, *, status: str | None = None, limite: int = 200
+    ) -> list[dict[str, Any]]:
+        """Fila de atendimento no escopo do staff (RLS: TI = tudo; RH/Mkt = seu setor).
+
+        Ordena por prioridade (URGENTE→BAIXA) e prazo de resolução mais próximo.
+        """
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade,
+                       c.created_at, c.limite_resolucao, c.respondido_em, c.resolvido_em,
+                       cat.nome AS categoria, dep.nome AS departamento,
+                       autor.nome AS cliente_nome, op.nome AS operador_nome
+                  FROM chamados c
+                  LEFT JOIN categorias cat ON cat.id = c.categoria_id
+                  LEFT JOIN departamentos dep ON dep.id = c.departamento_id
+                  LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                  LEFT JOIN perfis op ON op.id = c.operador_id
+                 WHERE ($1::status_chamado IS NULL OR c.status = $1::status_chamado)
+                 ORDER BY
+                   CASE c.prioridade WHEN 'URGENTE' THEN 0 WHEN 'ALTA' THEN 1
+                                     WHEN 'MEDIA' THEN 2 ELSE 3 END,
+                   c.limite_resolucao ASC NULLS LAST
+                 LIMIT $2
+                """,
+                status,
+                limite,
+            )
+            return [dict(r) for r in rows]
+
+    async def fila_stats(self, claims: dict) -> dict[str, int]:
+        """Contagem por status no escopo do staff (para os cabeçalhos do Kanban)."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch("SELECT status, count(*) AS n FROM chamados GROUP BY status")
+        por = {r["status"]: r["n"] for r in rows}
+        return {
+            "total": sum(por.values()),
+            "NOVO": por.get("NOVO", 0),
+            "EM_ATENDIMENTO": por.get("EM_ATENDIMENTO", 0),
+            "AGUARDANDO": por.get("AGUARDANDO", 0),
+            "RESOLVIDO": por.get("RESOLVIDO", 0),
+        }
+
+    async def operadores(self, claims: dict) -> list[dict[str, Any]]:
+        """Staff disponível para atribuição (role OPERADOR/ADMIN)."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT p.id, p.nome, d.nome AS departamento
+                  FROM perfis p LEFT JOIN departamentos d ON d.id = p.departamento_id
+                 WHERE p.role IN ('OPERADOR','ADMIN') AND p.ativo
+                 ORDER BY p.nome
+                """
+            )
+            return [dict(r) for r in rows]
+
+    async def _registrar(
+        self, conn, chamado_id: str, ator_id: str, acao: str, detalhes: dict
+    ) -> None:
+        await conn.execute(
+            """
+            INSERT INTO historico_chamados (chamado_id, ator_id, acao, detalhes)
+            VALUES ($1::uuid, $2::uuid, $3, $4::jsonb)
+            """,
+            chamado_id,
+            ator_id,
+            acao,
+            json.dumps(detalhes),
+        )
+
+    async def alterar_status(
+        self, claims: dict, chamado_id: str, novo_status: str
+    ) -> dict[str, Any] | None:
+        """Altera o status (staff no escopo). Marca `resolvido_em` ao resolver e
+        registra no histórico. Retorna o chamado atualizado ou None (fora do escopo)."""
+        async with rls_connection(claims) as conn:
+            atual = await conn.fetchval("SELECT status FROM chamados WHERE id = $1::uuid", chamado_id)
+            if atual is None or atual == novo_status:
+                return None
+            row = await conn.fetchrow(
+                """
+                UPDATE chamados
+                   SET status = $2::status_chamado,
+                       resolvido_em = CASE WHEN $2 = 'RESOLVIDO' THEN now()
+                                           WHEN $2 <> 'RESOLVIDO' THEN NULL
+                                           ELSE resolvido_em END
+                 WHERE id = $1::uuid
+             RETURNING id, status
+                """,
+                chamado_id,
+                novo_status,
+            )
+            if row is None:
+                return None
+            await self._registrar(
+                conn, chamado_id, claims["sub"], "STATUS_ALTERADO",
+                {"de": atual, "para": novo_status},
+            )
+            return dict(row)
+
+    async def alterar_prioridade(
+        self, claims: dict, chamado_id: str, nova_prioridade: str
+    ) -> dict[str, Any] | None:
+        """Altera a prioridade (o trigger recalcula os prazos de SLA) + histórico."""
+        async with rls_connection(claims) as conn:
+            atual = await conn.fetchval("SELECT prioridade FROM chamados WHERE id = $1::uuid", chamado_id)
+            if atual is None or atual == nova_prioridade:
+                return None
+            row = await conn.fetchrow(
+                """
+                UPDATE chamados SET prioridade = $2::prioridade_chamado
+                 WHERE id = $1::uuid RETURNING id, prioridade
+                """,
+                chamado_id,
+                nova_prioridade,
+            )
+            if row is None:
+                return None
+            await self._registrar(
+                conn, chamado_id, claims["sub"], "PRIORIDADE_ALTERADA",
+                {"de": atual, "para": nova_prioridade},
+            )
+            return dict(row)
+
+    async def atribuir(
+        self, claims: dict, chamado_id: str, operador_id: str | None
+    ) -> dict[str, Any] | None:
+        """Atribui (ou remove) o operador responsável + histórico."""
+        async with rls_connection(claims) as conn:
+            existe = await conn.fetchval("SELECT 1 FROM chamados WHERE id = $1::uuid", chamado_id)
+            if existe is None:
+                return None
+            row = await conn.fetchrow(
+                "UPDATE chamados SET operador_id = $2::uuid WHERE id = $1::uuid RETURNING id, operador_id",
+                chamado_id,
+                operador_id,
+            )
+            if row is None:
+                return None
+            await self._registrar(
+                conn, chamado_id, claims["sub"], "ATRIBUIDO",
+                {"operador_id": operador_id},
+            )
+            return dict(row)
+
+    async def responder_staff(
+        self, claims: dict, chamado_id: str, *, conteudo: str, is_interna: bool
+    ) -> dict[str, Any] | None:
+        """Mensagem do staff (pública ou nota interna). Na 1ª resposta pública,
+        marca `respondido_em` (conformidade do SLA de resposta)."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO mensagens (chamado_id, remetente_id, conteudo, is_interna)
+                VALUES ($1::uuid, $2::uuid, $3, $4)
+                RETURNING id, created_at
+                """,
+                chamado_id,
+                claims["sub"],
+                conteudo,
+                is_interna,
+            )
+            if not is_interna:
+                await conn.execute(
+                    "UPDATE chamados SET respondido_em = now() WHERE id = $1::uuid AND respondido_em IS NULL",
+                    chamado_id,
+                )
+            return dict(row) if row else None
 
 
 _repo = ChamadosRepo()

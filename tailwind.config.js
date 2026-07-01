@@ -3,7 +3,9 @@
 // templates Jinja. Sem CSS customizado à mão — apenas utilitários.
 // Tokens da marca portados do protótipo aprovado (Manual de Identidade Visual).
 module.exports = {
-  content: ["./app/templates/**/*.html"],
+  // Inclui os .js de /static: classes aplicadas via JS (ex.: toggle "nota interna",
+  // ghost do Sortable) precisam ser vistas pelo purge.
+  content: ["./app/templates/**/*.html", "./app/static/js/**/*.js"],
   theme: {
     extend: {
       colors: {
