@@ -4,6 +4,7 @@
 {% block heading %}Contas de usuário{% endblock %}
 {% block subheading %}Criar colaboradores e definir setor/papel{% endblock %}
 {% block content %}
+{% set PAPEL_LABEL = {"CLIENTE": "Funcionário", "OPERADOR": "Operador", "ADMIN": "Admin de setor"} %}
 
 {% if ok %}<div class="mb-4 rounded-lg bg-sla-ok/10 border border-sla-ok/30 px-4 py-2.5 text-sm text-sla-ok">{{ ok }}</div>{% endif %}
 {% if erro %}<div class="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">{{ erro }}</div>{% endif %}
@@ -76,44 +77,49 @@
             <td class="py-2.5 pr-4 font-medium text-navy">{{ u.nome or "—" }}</td>
             <td class="py-2.5 pr-4 text-muted">{{ u.email or "—" }}</td>
             <td class="py-2.5 pr-4">
-              <span class="inline-flex rounded-full bg-navy-100 px-2 py-0.5 text-xs font-semibold text-navy">{{ u.role }}</span>
+              <span class="inline-flex rounded-full bg-navy-100 px-2 py-0.5 text-xs font-semibold text-navy">{{ PAPEL_LABEL.get(u.role, u.role) }}</span>
               {% if u.departamento %}<span class="text-xs text-muted">· {{ u.departamento }}</span>{% endif %}
             </td>
             <td class="py-2.5">
-              <form method="post" action="/admin/usuarios/{{ u.id }}/papel" class="flex flex-wrap items-center gap-2">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <select name="papel" class="px-2 py-1 rounded-lg ring-1 ring-line bg-white text-xs outline-none cursor-pointer">
-                  <option value="CLIENTE" {% if u.role == 'CLIENTE' %}selected{% endif %}>Funcionário</option>
-                  <option value="OPERADOR" {% if u.role == 'OPERADOR' %}selected{% endif %}>Operador</option>
-                  <option value="ADMIN" {% if u.role == 'ADMIN' %}selected{% endif %}>Admin</option>
-                </select>
-                <select name="departamento_id" class="px-2 py-1 rounded-lg ring-1 ring-line bg-white text-xs outline-none cursor-pointer">
-                  <option value="">— setor —</option>
-                  {% for d in departamentos %}
-                  <option value="{{ d.id }}" {% if u.departamento_id|string == d.id|string %}selected{% endif %}>{{ d.nome }}</option>
-                  {% endfor %}
-                </select>
-                <button class="px-2.5 py-1 rounded-lg bg-navy-900 text-white text-xs font-semibold hover:bg-navy-800">OK</button>
-              </form>
-              {% if perfil is defined and u.id|string != perfil.id|string %}
-              {% if confirmar == u.id|string %}
-              {# Etapa 2 — confirmação explícita antes de excluir de fato. #}
-              <div class="mt-2 rounded-lg bg-sla-danger/5 border border-sla-danger/30 p-2 max-w-xs">
-                <p class="text-[11px] text-sla-danger font-semibold mb-1.5">Excluir <span class="break-all">{{ u.email or u.nome or "este usuário" }}</span>? Esta ação é permanente.</p>
-                <div class="flex items-center gap-2">
-                  <form method="post" action="/admin/usuarios/{{ u.id }}/excluir">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button class="text-xs font-semibold px-2.5 py-1 rounded bg-sla-danger text-white hover:brightness-95">Confirmar exclusão</button>
-                  </form>
-                  <a href="/admin/usuarios" class="text-xs font-semibold px-2.5 py-1 rounded bg-surface2 text-navy hover:bg-line">Cancelar</a>
+              <div class="flex flex-col items-start gap-2">
+                <form method="post" action="/admin/usuarios/{{ u.id }}/papel" class="flex flex-wrap items-center gap-2">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <select name="papel" class="px-2 py-1 rounded-lg ring-1 ring-line bg-white text-xs outline-none cursor-pointer">
+                    <option value="CLIENTE" {% if u.role == 'CLIENTE' %}selected{% endif %}>Funcionário</option>
+                    <option value="OPERADOR" {% if u.role == 'OPERADOR' %}selected{% endif %}>Operador</option>
+                    <option value="ADMIN" {% if u.role == 'ADMIN' %}selected{% endif %}>Admin</option>
+                  </select>
+                  <select name="departamento_id" class="px-2 py-1 rounded-lg ring-1 ring-line bg-white text-xs outline-none cursor-pointer">
+                    <option value="">— setor —</option>
+                    {% for d in departamentos %}
+                    <option value="{{ d.id }}" {% if u.departamento_id|string == d.id|string %}selected{% endif %}>{{ d.nome }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="px-2.5 py-1 rounded-lg bg-navy-900 text-white text-xs font-semibold hover:bg-navy-800">OK</button>
+                </form>
+                {% if perfil is defined and u.id|string != perfil.id|string %}
+                {% if confirmar == u.id|string %}
+                {# Etapa 2 — confirmação explícita antes de excluir de fato. #}
+                <div class="w-full max-w-xs rounded-lg bg-sla-danger/5 border border-sla-danger/30 p-2.5">
+                  <p class="text-[11px] text-sla-danger font-semibold mb-2">Excluir <span class="break-all">{{ u.email or u.nome or "este usuário" }}</span>? Esta ação é permanente.</p>
+                  <div class="flex items-center gap-2">
+                    <form method="post" action="/admin/usuarios/{{ u.id }}/excluir">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <button class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-sla-danger text-white hover:brightness-95">Confirmar exclusão</button>
+                    </form>
+                    <a href="/admin/usuarios" class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-surface2 text-navy hover:bg-line">Cancelar</a>
+                  </div>
                 </div>
+                {% else %}
+                {# Etapa 1 — pede confirmação (GET, não exclui nada ainda). #}
+                <a href="/admin/usuarios?confirmar={{ u.id }}"
+                   class="inline-flex items-center gap-1 text-xs font-semibold text-sla-danger hover:underline">
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 7h12M9 7V5.5A1.5 1.5 0 0110.5 4h3A1.5 1.5 0 0115 5.5V7m-6 4v6m4-6v6M5 7l1 12a2 2 0 002 2h8a2 2 0 002-2l1-12"/></svg>
+                  Excluir conta
+                </a>
+                {% endif %}
+                {% endif %}
               </div>
-              {% else %}
-              {# Etapa 1 — pede confirmação (GET, não exclui nada ainda). #}
-              <a href="/admin/usuarios?confirmar={{ u.id }}"
-                 class="inline-block mt-2 text-xs font-semibold px-2.5 py-1 rounded bg-sla-danger/10 text-sla-danger hover:bg-sla-danger/20">Excluir</a>
-              {% endif %}
-              {% endif %}
             </td>
           </tr>
           {% else %}
