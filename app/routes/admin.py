@@ -349,6 +349,7 @@ async def usuarios(
     request: Request,
     ok: str = "",
     erro: str = "",
+    confirmar: str = "",
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
 ):
@@ -369,6 +370,8 @@ async def usuarios(
             "admin_disponivel": (await ensure_admin_client()) is not None,
             "ok": ok,
             "erro": erro,
+            # Exclusão em 2 etapas: ``confirmar`` = id do usuário aguardando confirmação.
+            "confirmar": confirmar.strip(),
         },
     )
 

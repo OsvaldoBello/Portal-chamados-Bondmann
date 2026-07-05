@@ -337,6 +337,18 @@ def test_excluir_usuario_restrito_ao_ti():
         assert c.post("/admin/usuarios/u1/excluir", headers={"X-CSRF-Token": t}).status_code == 403
 
 
+def test_excluir_usuario_exige_confirmacao_em_duas_etapas():
+    with admin_client(FakeAdmin()) as c:
+        # Etapa 1: a lista mostra só o link de pedir confirmação, sem POST direto.
+        r1 = c.get("/admin/usuarios")
+        assert "/admin/usuarios?confirmar=u1" in r1.text
+        assert 'action="/admin/usuarios/u1/excluir"' not in r1.text
+        # Etapa 2: com ?confirmar=u1, aparece o botão de confirmar + o form de POST.
+        r2 = c.get("/admin/usuarios?confirmar=u1")
+        assert "Confirmar exclusão" in r2.text
+        assert 'action="/admin/usuarios/u1/excluir"' in r2.text
+
+
 class _FakeAdminAPI:
     def __init__(self):
         self.calls = []
