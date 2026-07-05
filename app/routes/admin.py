@@ -32,6 +32,7 @@ from app.repositories.admin import AdminRepo, get_admin_repo
 from app.repositories.chamados import (
     CACHE_CATEGORIAS,
     CACHE_DEPARTAMENTOS,
+    CACHE_SUBCATEGORIAS,
     ChamadosRepo,
     get_chamados_repo,
 )
@@ -152,13 +153,16 @@ async def gestao(
     repo: AdminRepo = Depends(get_admin_repo),
 ):
     _require_ti(ctx)
+    categorias = await repo.categorias(ctx.user.claims)
     return render(
         request,
         "admin/gestao.html",
         {
             **_base_ctx(ctx),
             "departamentos": await repo.departamentos(ctx.user.claims),
-            "categorias": await repo.categorias(ctx.user.claims),
+            "categorias": categorias,
+            "categorias_ativas": [c for c in categorias if c.get("ativo")],
+            "subcategorias": await repo.subcategorias(ctx.user.claims),
             "planos": await repo.planos(ctx.user.claims),
         },
     )
@@ -225,6 +229,49 @@ async def toggle_categoria(
     return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
 
 
+def _invalidar_subcategorias(categoria_id: str | None) -> None:
+    """Expurga o cache de subcategorias da categoria afetada (chave por-categoria)."""
+    if categoria_id:
+        cache.invalidate(f"{CACHE_SUBCATEGORIAS}:{categoria_id}")
+
+
+@router.post("/subcategorias")
+async def criar_subcategoria(
+    request: Request,
+    nome: str = Form(...),
+    categoria_id: str = Form(""),
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+    _: None = Depends(_csrf_guard),
+):
+    _require_ti(ctx)
+    nome = nome.strip()
+    categoria_id = categoria_id.strip()
+    # A categoria-mãe precisa existir/estar ativa (defesa em profundidade).
+    valida = categoria_id and any(
+        str(c["id"]) == categoria_id and c.get("ativo")
+        for c in await repo.categorias(ctx.user.claims)
+    )
+    if nome and valida:
+        await repo.criar_subcategoria(ctx.user.claims, categoria_id, nome)
+        _invalidar_subcategorias(categoria_id)
+    return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/subcategorias/{sub_id}/toggle")
+async def toggle_subcategoria(
+    request: Request,
+    sub_id: str,
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+    _: None = Depends(_csrf_guard),
+):
+    _require_ti(ctx)
+    categoria_id = await repo.toggle_subcategoria(ctx.user.claims, sub_id)
+    _invalidar_subcategorias(categoria_id)
+    return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
+
+
 _PLANO_CAMPOS = (
     "resposta_baixa_min", "resposta_media_min", "resposta_alta_min",
     "resolucao_baixa_min", "resolucao_media_min", "resolucao_alta_min",
@@ -264,6 +311,8 @@ async def editar_plano(
 # Gestão de contas (criar/promover usuários) — exclusivo do TI.
 # --------------------------------------------------------------------------
 _PAPEIS = {"CLIENTE", "OPERADOR", "ADMIN"}
+# Rótulos amigáveis (o papel interno CLIENTE aparece como "Funcionário" na UI).
+_PAPEL_LABEL = {"CLIENTE": "Funcionário", "OPERADOR": "Operador", "ADMIN": "Admin de setor"}
 _SENHA_MIN = 8
 
 
@@ -385,7 +434,7 @@ async def criar_usuario(
     if papel != "CLIENTE" or dep_id is not None:
         await repo.atualizar_papel(ctx.user.claims, str(novo.id), role=papel, departamento_id=dep_id)
 
-    return _volta(ok=f"Conta {email} criada como {papel}.")
+    return _volta(ok=f"Conta {email} criada como {_PAPEL_LABEL[papel]}.")
 
 
 @router.post("/usuarios/{user_id}/papel")
@@ -428,6 +477,43 @@ async def mudar_papel(
         except Exception:  # noqa: BLE001 — perfis já atualizado; JWT sincroniza no próximo login
             return _volta(ok="Papel atualizado no banco. Peça re-login (JWT sincroniza depois).")
     return _volta(ok="Papel atualizado. A mudança vale no próximo login do usuário.")
+
+
+@router.post("/usuarios/{user_id}/excluir")
+async def excluir_usuario(
+    request: Request,
+    user_id: str,
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Exclui a conta (GoTrue Admin API). A remoção de ``auth.users`` cascateia
+    para ``perfis``; se o usuário tiver chamados/mensagens (FK RESTRICT), a
+    exclusão falha e sugerimos desativar em vez de excluir. Só TI."""
+    _require_ti(ctx)
+    from app.auth.supabase_client import ensure_admin_client
+
+    def _volta(*, ok: str = "", erro: str = ""):
+        from urllib.parse import urlencode
+
+        qs = urlencode({k: v for k, v in {"ok": ok, "erro": erro}.items() if v})
+        return RedirectResponse(f"/admin/usuarios?{qs}", status_code=status.HTTP_303_SEE_OTHER)
+
+    if str(user_id) == str(ctx.user.id):
+        return _volta(erro="Você não pode excluir a própria conta.")
+
+    client = await ensure_admin_client()
+    if client is None:
+        return _volta(erro="Exclusão indisponível: service_role não configurada no servidor.")
+
+    try:
+        await client.auth.admin.delete_user(user_id)
+    except Exception:  # noqa: BLE001 — FK RESTRICT (tem chamados/mensagens) ou erro do GoTrue
+        return _volta(
+            erro="Não foi possível excluir: o usuário tem chamados ou mensagens no "
+                 "histórico. Reatribua/encerre esses itens ou apenas não use a conta."
+        )
+    return _volta(ok="Usuário excluído.")
 
 
 _CSV_COLS = [

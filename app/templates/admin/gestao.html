@@ -57,6 +57,47 @@
   </section>
 </div>
 
+{# Subcategorias — pertencem a uma categoria (cascade da abertura de chamado). #}
+<section class="bg-white rounded-xl shadow-card border border-line/60 p-5 mt-6">
+  <h3 class="font-display font-bold text-navy mb-1">Subcategorias</h3>
+  <p class="text-xs text-muted mb-4">Cada subcategoria pertence a uma categoria. Elas aparecem em cascata na abertura do chamado.</p>
+
+  <form method="post" action="/admin/subcategorias" class="flex flex-wrap gap-2 mb-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <select name="categoria_id" required
+            class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+      <option value="">Categoria…</option>
+      {% for c in categorias_ativas %}
+      <option value="{{ c.id }}">{{ c.nome }}</option>
+      {% endfor %}
+    </select>
+    <input name="nome" required placeholder="Nova subcategoria"
+           class="flex-1 min-w-[180px] px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
+    <button class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold">Adicionar</button>
+  </form>
+
+  {% if subcategorias %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="text-left text-[11px] font-bold uppercase tracking-wider text-muted">
+        <tr><th class="py-2 pr-4">Categoria</th><th class="py-2 pr-4">Subcategoria</th><th class="py-2">Ação</th></tr>
+      </thead>
+      <tbody>
+        {% for s in subcategorias %}
+        <tr class="border-t border-line">
+          <td class="py-2 pr-4 text-muted">{{ s.categoria }}</td>
+          <td class="py-2 pr-4 {{ 'text-navy' if s.ativo else 'text-faint line-through' }}">{{ s.nome }}</td>
+          <td class="py-2">{{ toggle_btn("/admin/subcategorias/" ~ s.id ~ "/toggle", s.ativo) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-muted">Nenhuma subcategoria cadastrada.</p>
+  {% endif %}
+</section>
+
 {# Planos de SLA (config interna — editável pelo TI). URGENTE é derivado
    (50% de ALTA) e não tem campo. Mudanças valem para chamados novos. #}
 <section class="bg-white rounded-xl shadow-card border border-line/60 p-5 mt-6">

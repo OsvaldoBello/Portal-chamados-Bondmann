@@ -161,6 +161,35 @@ class AdminRepo:
                 "UPDATE categorias SET ativo = NOT ativo WHERE id = $1::uuid", cat_id
             )
 
+    async def subcategorias(self, claims: dict) -> list[dict[str, Any]]:
+        """Subcategorias com o nome da categoria-mãe (gestão do TI)."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """SELECT s.id, s.nome, s.ativo, s.categoria_id, c.nome AS categoria
+                     FROM subcategorias s
+                     JOIN categorias c ON c.id = s.categoria_id
+                    ORDER BY c.nome, s.nome"""
+            )
+            return [dict(r) for r in rows]
+
+    async def criar_subcategoria(self, claims: dict, categoria_id: str, nome: str) -> None:
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                "INSERT INTO subcategorias (categoria_id, nome) VALUES ($1::uuid, $2)",
+                categoria_id,
+                nome,
+            )
+
+    async def toggle_subcategoria(self, claims: dict, sub_id: str) -> str | None:
+        """Ativa/desativa uma subcategoria; devolve o ``categoria_id`` (para o
+        chamador invalidar o cache por-categoria)."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                "UPDATE subcategorias SET ativo = NOT ativo WHERE id = $1::uuid RETURNING categoria_id",
+                sub_id,
+            )
+            return str(row["categoria_id"]) if row else None
+
     async def planos(self, claims: dict) -> list[dict[str, Any]]:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(

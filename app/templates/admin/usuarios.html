@@ -95,6 +95,12 @@
                 </select>
                 <button class="px-2.5 py-1 rounded-lg bg-navy-900 text-white text-xs font-semibold hover:bg-navy-800">OK</button>
               </form>
+              {% if perfil is defined and u.id|string != perfil.id|string %}
+              <form method="post" action="/admin/usuarios/{{ u.id }}/excluir" class="mt-2">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="text-xs font-semibold px-2.5 py-1 rounded bg-sla-danger/10 text-sla-danger hover:bg-sla-danger/20">Excluir</button>
+              </form>
+              {% endif %}
             </td>
           </tr>
           {% else %}

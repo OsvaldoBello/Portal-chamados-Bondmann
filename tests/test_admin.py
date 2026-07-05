@@ -86,6 +86,16 @@ class FakeAdmin:
     async def atualizar_papel(self, claims, user_id, *, role, departamento_id):
         self.acoes.append(("papel", user_id, role, departamento_id))
 
+    async def subcategorias(self, claims):
+        return [{"id": "s1", "nome": "Acesso VPN", "ativo": True,
+                 "categoria_id": "c1", "categoria": "Suporte"}]
+
+    async def criar_subcategoria(self, claims, categoria_id, nome):
+        self.acoes.append(("sub", categoria_id, nome))
+
+    async def toggle_subcategoria(self, claims, sub_id):
+        self.acoes.append(("sub_toggle", sub_id)); return "c1"
+
     async def criar_departamento(self, claims, nome):
         self.acoes.append(("dep", nome))
 
@@ -264,6 +274,125 @@ def test_criar_usuario_sem_service_role_avisa():
     assert r.status_code == 303
     assert "/admin/usuarios" in r.headers["location"]
     assert not any(a[0] == "papel" for a in repo.acoes)   # não promoveu (conta não criada)
+
+
+def test_gestao_mostra_subcategorias():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin/gestao")
+    assert r.status_code == 200
+    assert "Subcategorias" in r.text
+    assert 'action="/admin/subcategorias"' in r.text
+    assert "Acesso VPN" in r.text
+
+
+def test_criar_subcategoria():
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/subcategorias", data={"nome": "Reset de senha", "categoria_id": "c1"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ("sub", "c1", "Reset de senha") in repo.acoes
+
+
+def test_criar_subcategoria_categoria_invalida_ignora():
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        c.post("/admin/subcategorias", data={"nome": "X", "categoria_id": "inexistente"},
+               headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert not any(a[0] == "sub" for a in repo.acoes)
+
+
+def test_toggle_subcategoria():
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        c.post("/admin/subcategorias/s1/toggle", headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert ("sub_toggle", "s1") in repo.acoes
+
+
+def test_subcategorias_restrito_ao_ti():
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        t = _csrf(c)
+        assert c.post("/admin/subcategorias", data={"nome": "X", "categoria_id": "c1"},
+                      headers={"X-CSRF-Token": t}).status_code == 403
+
+
+def test_excluir_usuario_barra_autoexclusao():
+    # TI não pode excluir a própria conta (o id do TI é o mesmo do _user()).
+    with admin_client(FakeAdmin()) as c:
+        t = _csrf(c)
+        r = c.post(f"/admin/usuarios/{TI}/excluir", headers={"X-CSRF-Token": t},
+                   follow_redirects=False)
+    assert r.status_code == 303
+    assert "pr%C3%B3pria+conta" in r.headers["location"] or "própria" in r.headers["location"]
+
+
+def test_excluir_usuario_restrito_ao_ti():
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        t = _csrf(c)
+        assert c.post("/admin/usuarios/u1/excluir", headers={"X-CSRF-Token": t}).status_code == 403
+
+
+class _FakeAdminAPI:
+    def __init__(self):
+        self.calls = []
+
+    async def create_user(self, body):
+        self.calls.append(("create", body))
+        return type("R", (), {"user": type("U", (), {"id": "newid-123"})()})()
+
+    async def update_user_by_id(self, uid, body):
+        self.calls.append(("update", uid, body))
+
+    async def delete_user(self, uid):
+        self.calls.append(("delete", uid))
+
+
+class _FakeSupaClient:
+    def __init__(self):
+        self.admin_api = _FakeAdminAPI()
+        self.auth = type("A", (), {"admin": self.admin_api})()
+
+
+def _patch_admin_client(monkeypatch, fake):
+    import app.auth.supabase_client as sc
+
+    async def _ensure():
+        return fake
+
+    monkeypatch.setattr(sc, "ensure_admin_client", _ensure)
+
+
+def test_criar_usuario_funcionario_mostra_rotulo_amigavel(monkeypatch):
+    # Bug reportado: funcionário aparecia como "CLIENTE"; deve dizer "Funcionário".
+    fake = _FakeSupaClient()
+    _patch_admin_client(monkeypatch, fake)
+    with admin_client(FakeAdmin()) as c:
+        t = _csrf(c)
+        r = c.post("/admin/usuarios",
+                   data={"nome": "Gabriel", "email": "gabriel@bondmann.com.br",
+                         "senha": "12345678", "papel": "CLIENTE", "departamento_id": ""},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    from urllib.parse import unquote
+    loc = unquote(r.headers["location"])
+    assert "Funcionário" in loc
+    assert "CLIENTE" not in loc
+
+
+def test_excluir_usuario_sucesso(monkeypatch):
+    fake = _FakeSupaClient()
+    _patch_admin_client(monkeypatch, fake)
+    with admin_client(FakeAdmin()) as c:
+        t = _csrf(c)
+        r = c.post("/admin/usuarios/u1/excluir", headers={"X-CSRF-Token": t},
+                   follow_redirects=False)
+    assert r.status_code == 303
+    assert ("delete", "u1") in fake.admin_api.calls
 
 
 def test_export_csv():
