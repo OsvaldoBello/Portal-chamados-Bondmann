@@ -1,0 +1,6 @@
+# Assets vendorizados: os hashes SRI dependem dos bytes EXATOS servidos.
+# Força LF em qualquer plataforma (evita CRLF do Windows quebrar o SRI —
+# foi o que deixou os gráficos do Chart.js em branco no deploy).
+app/static/vendor/** text eol=lf
+app/static/js/**     text eol=lf
+app/static/css/**    text eol=lf
