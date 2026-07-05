@@ -5,42 +5,120 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Workspace — Bondmann{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/anim.css">
   <script defer src="/static/vendor/htmx.min.js"
           integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"></script>
   <script defer src="/static/vendor/alpine-csp.min.js"
-          integrity="sha384-ToFwPnlRgZIoDDSatKvWLkecUR4Py5dma633TT4TVBQfs4nHKXXexI3v72xi5LnC"></script>
+          integrity="sha384-J70PGYyWS4k8wbUvBf2CtRDembXvRWYIyhqDb0S+lFb42e8/6Rd3MpF8bQ+gYNO8"></script>
+  <script defer src="/static/js/shell.js"></script>
   {% block head_scripts %}{% endblock %}
 </head>
-<body class="min-h-screen bg-surface text-ink font-sans"
+<body class="min-h-screen bg-surface text-ink font-sans antialiased"
       hx-headers='{"{{ csrf_header }}": "{{ csrf_token }}"}'>
+  {% set nome_usuario = (perfil.nome if perfil is defined and perfil else "") or "Operador" %}
   <div class="min-h-screen flex">
-    <aside class="hidden md:flex w-60 shrink-0 flex-col bg-navy-900 text-white">
-      <div class="px-5 py-5 border-b border-white/10">
-        <div class="font-display font-black tracking-tight text-lg">BONDMANN</div>
-        <div class="text-[9px] font-medium tracking-[0.42em] text-brandgreen mt-0.5">WORKSPACE</div>
+    <div id="sidebar-overlay" class="hidden fixed inset-0 bg-navy-900/50 z-30 md:hidden"></div>
+
+    <aside id="sidebar"
+           class="fixed md:static inset-y-0 left-0 z-40 w-64 md:w-60 shrink-0 flex flex-col bg-navy-900 text-white
+                  -translate-x-full md:translate-x-0 transition-transform duration-200 ease-out">
+      <div class="px-5 h-16 flex items-center justify-between border-b border-white/10">
+        <div class="flex items-center gap-2.5 select-none">
+          {% include "_logo.html" %}
+          <div class="leading-none">
+            <div class="font-display font-black tracking-tight text-[19px] text-white">BONDMANN</div>
+            <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5 text-brandgreen">WORKSPACE</div>
+          </div>
+        </div>
+        <button data-sidebar-close class="md:hidden text-white/60 hover:text-white" aria-label="Fechar menu">
+          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
       </div>
-      <nav class="flex-1 px-3 py-4 space-y-1 text-sm">
-        <a href="/workspace" class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/10 {% if active == 'fila' %}bg-white/10 font-semibold{% endif %}">Fila de chamados</a>
-        <a href="/workspace/kanban" class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/10 {% if active == 'kanban' %}bg-white/10 font-semibold{% endif %}">Kanban</a>
-        <a href="/admin" class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/10 text-white/70">Admin (TI)</a>
-        <a href="/portal" class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-white/10 text-white/70">Abrir um chamado</a>
+      <nav class="flex-1 p-3 space-y-1 text-sm overflow-y-auto">
+        <a href="/workspace"
+           class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg font-medium transition
+                  {% if active == 'fila' %}bg-white/10 text-white{% else %}text-white/70 hover:text-white hover:bg-white/5{% endif %}">
+          {% if active == 'fila' %}<span class="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-brandgreen"></span>{% endif %}
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5"/></svg>
+          <span>Fila de chamados</span>
+        </a>
+        <a href="/workspace/kanban"
+           class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg font-medium transition
+                  {% if active == 'kanban' %}bg-white/10 text-white{% else %}text-white/70 hover:text-white hover:bg-white/5{% endif %}">
+          {% if active == 'kanban' %}<span class="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-brandgreen"></span>{% endif %}
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v12a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18V6zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v6a2.25 2.25 0 01-2.25 2.25h-2.25A2.25 2.25 0 0113.5 12V6z"/></svg>
+          <span>Kanban</span>
+        </a>
+        {# Staff (RH/Marketing/TI) também abre chamados para qualquer departamento
+           (Portal). O link leva ao formulário de abertura no Portal do solicitante. #}
+        <a href="/portal/chamados/novo"
+           class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg font-medium text-white/70 hover:text-white hover:bg-white/5 transition">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span>Abrir chamado</span>
+        </a>
+        {% if perfil is defined and (perfil.is_ti or perfil.role == 'ADMIN') %}
+        <div class="pt-2 mt-2 border-t border-white/10 space-y-1">
+          <a href="/admin"
+             class="flex items-center gap-3 px-3.5 py-2.5 rounded-lg font-medium text-white/60 hover:text-white hover:bg-white/5 transition">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>
+            <span>{% if perfil.is_ti %}Admin (TI){% else %}Relatórios do setor{% endif %}</span>
+          </a>
+        </div>
+        {% endif %}
       </nav>
-      <form method="post" action="/logout" class="px-3 py-4 border-t border-white/10">
+      <form method="post" action="/logout" class="p-3 border-t border-white/10">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="w-full text-left px-3 py-2.5 rounded-lg text-sm text-white/80 hover:bg-white/10">Sair</button>
+        <button type="submit"
+                class="flex w-full items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 transition">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/></svg>
+          <span>Sair</span>
+        </button>
       </form>
     </aside>
 
     <div class="flex-1 flex flex-col min-w-0">
-      <header class="h-14 bg-white border-b border-line flex items-center justify-between px-6">
-        <h1 class="font-display font-bold text-navy">{% block heading %}Workspace{% endblock %}</h1>
-        <div class="text-sm text-muted">{{ perfil.nome or "Operador" }}</div>
+      <header class="h-16 bg-white border-b border-line flex items-center gap-3 px-4 sm:px-7 sticky top-0 z-20">
+        <button data-sidebar-open class="md:hidden -ml-1 w-10 h-10 grid place-items-center rounded-lg text-muted hover:bg-surface hover:text-navy" aria-label="Abrir menu">
+          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5"/></svg>
+        </button>
+        <div class="min-w-0">
+          <h1 class="font-display font-bold text-[17px] text-navy leading-tight truncate">{% block heading %}Workspace{% endblock %}</h1>
+          <p class="text-xs text-muted truncate hidden sm:block">{% block subheading %}Atendimento de chamados{% endblock %}</p>
+        </div>
+        <div class="flex-1"></div>
+        {% include "_sino.html" %}
+        <div class="relative">
+          <button data-menu-toggle="user" class="flex items-center gap-3 rounded-lg pl-3 py-1 border-l border-line hover:bg-surface transition" aria-haspopup="true">
+            <span class="text-right leading-tight hidden sm:block">
+              <span class="block text-sm font-semibold text-navy">{{ nome_usuario }}</span>
+              <span class="block text-[11px] text-muted">Operador</span>
+            </span>
+            <span class="w-9 h-9 rounded-full grid place-items-center text-white text-sm font-bold bg-navy-500">{{ nome_usuario[:1] | upper }}</span>
+          </button>
+          <div data-menu="user" class="hidden absolute right-0 mt-2 w-52 bg-white rounded-xl shadow-card border border-line overflow-hidden z-30 py-1">
+            <div class="px-4 py-2 border-b border-line mb-1">
+              <div class="text-sm font-semibold text-navy truncate">{{ nome_usuario }}</div>
+              <div class="text-[11px] text-muted">Operador</div>
+            </div>
+            <form method="post" action="/logout">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-ink hover:bg-surface">
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/></svg>
+                Sair
+              </button>
+            </form>
+          </div>
+        </div>
       </header>
-      <main class="flex-1 p-6 max-w-6xl w-full mx-auto">
+      <main class="anim-rise flex-1 p-4 sm:p-7 max-w-[1400px] w-full">
         {% block content %}{% endblock %}
       </main>
     </div>
   </div>
+  {# Sino de notificações em tempo real (Fase 4). #}
+  <script src="/static/vendor/supabase.min.js"
+          integrity="sha384-8ljL080xacUYrqBXUJRcP68fd1dVCh9qK/xi9QMzxUgOVNycXp0s6mBZAjBMp9W0"></script>
+  <script src="/static/js/notificacoes.js"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

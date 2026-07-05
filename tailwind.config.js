@@ -5,7 +5,9 @@
 module.exports = {
   // Inclui os .js de /static: classes aplicadas via JS (ex.: toggle "nota interna",
   // ghost do Sortable) precisam ser vistas pelo purge.
-  content: ["./app/templates/**/*.html", "./app/static/js/**/*.js"],
+  // Inclui .py porque metadados de UI (classes de status/prioridade em
+  // app/templating.py) são aplicados dinamicamente e precisam ser vistos pelo purge.
+  content: ["./app/templates/**/*.html", "./app/static/js/**/*.js", "./app/**/*.py"],
   theme: {
     extend: {
       colors: {

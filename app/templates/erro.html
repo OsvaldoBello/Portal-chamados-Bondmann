@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ codigo }} — Portal de Chamados Bondmann</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/anim.css">
+</head>
+<body class="font-sans bg-surface text-ink antialiased">
+  <div class="min-h-screen grid place-items-center p-6">
+    <div class="anim-pop w-full max-w-md text-center bg-white rounded-2xl shadow-card border border-line/60 p-10">
+      <div class="flex items-center justify-center gap-2.5 select-none mb-8">
+        {% include "_logo.html" %}
+        <div class="leading-none text-left">
+          <div class="font-display font-black tracking-tight text-lg text-navy">BONDMANN</div>
+          <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5 text-navy/80">QUÍMICA</div>
+        </div>
+      </div>
+
+      <div class="font-display font-black text-6xl text-navy-900 leading-none">{{ codigo }}</div>
+      <h1 class="font-display font-bold text-xl text-navy mt-4">{{ titulo }}</h1>
+      <p class="text-muted text-sm mt-2 leading-relaxed">{{ mensagem }}</p>
+
+      <div class="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+        <a href="{{ inicio }}"
+           class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-navy-900 text-white hover:bg-navy-700 shadow-soft w-full sm:w-auto">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75"/></svg>
+          Voltar ao início
+        </a>
+        <a href="/login"
+           class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-white text-navy ring-1 ring-line hover:bg-surface w-full sm:w-auto">
+          Ir para o login
+        </a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

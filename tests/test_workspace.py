@@ -40,11 +40,15 @@ def _chamado(**extra):
 
 
 class FakeRepo:
-    def __init__(self):
+    def __init__(self, *, is_ti=True, status="NOVO"):
         self.acoes = []
+        self._is_ti = is_ti
+        self._status = status
+        self.operadores_dep = "__nao_chamado__"  # captura o filtro de departamento
 
     async def perfil(self, claims):
-        return {"id": OP, "nome": "Op TI", "role": "OPERADOR", "empresa_id": "e1", "departamento_id": "d1"}
+        return {"id": OP, "nome": "Op TI", "role": "OPERADOR", "empresa_id": "e1",
+                "departamento_id": "d1", "departamento": "TI", "is_ti": self._is_ti}
 
     async def fila(self, claims, *, status=None, limite=200):
         cs = [_chamado(), _chamado(id="c2", codigo="BOND-2026-00002", status="EM_ATENDIMENTO")]
@@ -54,13 +58,17 @@ class FakeRepo:
         return {"total": 2, "NOVO": 1, "EM_ATENDIMENTO": 1, "AGUARDANDO": 0, "RESOLVIDO": 0}
 
     async def obter(self, claims, cid):
-        return _chamado(id=cid)
+        return _chamado(id=cid, status=self._status)
 
     async def mensagens(self, claims, cid):
         return []
 
-    async def operadores(self, claims):
+    async def operadores(self, claims, *, departamento_id=None):
+        self.operadores_dep = departamento_id
         return [{"id": OP, "nome": "Op TI", "departamento": "TI"}]
+
+    async def departamentos_ativos(self, claims):
+        return [{"id": "d1", "nome": "TI"}, {"id": "d2", "nome": "RH"}, {"id": "d3", "nome": "Marketing"}]
 
     async def alterar_status(self, claims, cid, novo):
         self.acoes.append(("status", cid, novo)); return {"id": cid, "status": novo}
@@ -71,8 +79,16 @@ class FakeRepo:
     async def atribuir(self, claims, cid, operador_id):
         self.acoes.append(("atribuir", cid, operador_id)); return {"id": cid, "operador_id": operador_id}
 
-    async def responder_staff(self, claims, cid, *, conteudo, is_interna):
-        self.acoes.append(("msg", cid, conteudo, is_interna)); return {"id": "m1", "created_at": NOW}
+    async def iniciar_atendimento(self, claims, cid, *, operador_id):
+        self.acoes.append(("iniciar", cid, operador_id))
+        return {"id": cid, "status": "EM_ATENDIMENTO", "operador_id": operador_id}
+
+    async def transferir(self, claims, cid, *, departamento_id):
+        self.acoes.append(("transferir", cid, departamento_id))
+        return {"id": cid, "departamento_id": departamento_id}
+
+    async def responder_staff(self, claims, cid, *, conteudo, is_interna, anexos=None):
+        self.acoes.append(("msg", cid, conteudo, is_interna, anexos)); return {"id": "m1", "created_at": NOW}
 
 
 @contextmanager
@@ -147,8 +163,8 @@ def test_nota_interna_repassa_flag():
         c.post("/workspace/chamados/c1/mensagens",
                data={"conteudo": "olá cliente"},
                headers={"X-CSRF-Token": t}, follow_redirects=False)
-    assert ("msg", "c1", "verificar campo", True) in repo.acoes
-    assert ("msg", "c1", "olá cliente", False) in repo.acoes
+    assert ("msg", "c1", "verificar campo", True, []) in repo.acoes
+    assert ("msg", "c1", "olá cliente", False, []) in repo.acoes
 
 
 def test_atendimento_renderiza_acoes_e_composer():
@@ -161,6 +177,11 @@ def test_atendimento_renderiza_acoes_e_composer():
     assert 'action="/workspace/chamados/c1/atribuir"' in r.text
     assert 'id="is-interna"' in r.text          # toggle de nota interna
     assert 'id="composer"' in r.text
+    # Composer aceita anexos (imagens/documentos) na conversa.
+    assert 'enctype="multipart/form-data"' in r.text
+    assert 'type="file" name="arquivos"' in r.text
+    # Staff também tem acesso a abrir chamado (link no shell do workspace).
+    assert 'href="/portal/chamados/novo"' in r.text
 
 
 def test_atribuir_operador():
@@ -170,3 +191,71 @@ def test_atribuir_operador():
         c.post("/workspace/chamados/c1/atribuir", data={"operador_id": OP},
                headers={"X-CSRF-Token": t}, follow_redirects=False)
     assert ("atribuir", "c1", OP) in repo.acoes
+
+
+# --------------------------------------------------------------------------
+# Fase 3: iniciar atendimento, escopo de operadores, repasse de departamento
+# --------------------------------------------------------------------------
+def test_botao_iniciar_visivel_quando_novo():
+    with ws_client(FakeRepo(status="NOVO")) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert r.status_code == 200
+    assert "Iniciar atendimento" in r.text
+    assert 'action="/workspace/chamados/c1/iniciar"' in r.text
+
+
+def test_botao_iniciar_oculto_quando_em_atendimento():
+    with ws_client(FakeRepo(status="EM_ATENDIMENTO")) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert r.status_code == 200
+    assert "Iniciar atendimento" not in r.text
+
+
+def test_iniciar_atendimento_assume_como_responsavel():
+    repo = FakeRepo(status="NOVO")
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/iniciar", headers={"X-CSRF-Token": t},
+                   follow_redirects=False)
+    assert r.status_code == 303
+    assert ("iniciar", "c1", OP) in repo.acoes
+
+
+def test_operadores_escopados_ao_departamento_do_chamado():
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        c.get("/workspace/chamados/c1")
+    # o chamado é do setor "d1" -> a lista de responsáveis é filtrada por ele
+    assert repo.operadores_dep == "d1"
+
+
+def test_ti_ve_opcao_de_repasse():
+    with ws_client(FakeRepo(is_ti=True)) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert "Repassar para outro departamento" in r.text
+    assert 'action="/workspace/chamados/c1/transferir"' in r.text
+
+
+def test_nao_ti_nao_ve_repasse():
+    with ws_client(FakeRepo(is_ti=False)) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert "Repassar para outro departamento" not in r.text
+
+
+def test_ti_transfere_departamento():
+    repo = FakeRepo(is_ti=True)
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        c.post("/workspace/chamados/c1/transferir", data={"departamento_id": "d2"},
+               headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert ("transferir", "c1", "d2") in repo.acoes
+
+
+def test_nao_ti_nao_transfere_mesmo_via_post():
+    repo = FakeRepo(is_ti=False)
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        c.post("/workspace/chamados/c1/transferir", data={"departamento_id": "d2"},
+               headers={"X-CSRF-Token": t}, follow_redirects=False)
+    # o gate de UI + a checagem na rota impedem; a RLS reforçaria no banco
+    assert not any(a[0] == "transferir" for a in repo.acoes)

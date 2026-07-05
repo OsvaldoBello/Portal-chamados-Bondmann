@@ -19,7 +19,7 @@ class AdminRepo:
             return bool(await conn.fetchval("SELECT auth_is_ti()"))
 
     # ---- KPIs -----------------------------------------------------------
-    async def kpis(self, claims: dict) -> dict[str, Any]:
+    async def kpis(self, claims: dict, *, departamento_id: str | None = None) -> dict[str, Any]:
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
@@ -35,7 +35,9 @@ class AdminRepo:
                   avg(EXTRACT(EPOCH FROM (resolvido_em - created_at)))
                     FILTER (WHERE resolvido_em IS NOT NULL)            AS tma_seg
                 FROM chamados
-                """
+                WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                """,
+                departamento_id,
             )
         d = dict(row)
         resolvidos = d["resolvidos"] or 0
@@ -45,21 +47,30 @@ class AdminRepo:
         d["tma_horas"] = round((d["tma_seg"] or 0) / 3600, 1) if d["tma_seg"] else None
         return d
 
-    async def por_status(self, claims: dict) -> dict[str, int]:
+    async def por_status(self, claims: dict, *, departamento_id: str | None = None) -> dict[str, int]:
         async with rls_connection(claims) as conn:
-            rows = await conn.fetch("SELECT status, count(*) n FROM chamados GROUP BY status")
+            rows = await conn.fetch(
+                """SELECT status, count(*) n FROM chamados
+                    WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                    GROUP BY status""",
+                departamento_id,
+            )
         por = {r["status"]: r["n"] for r in rows}
         return {s: por.get(s, 0) for s in ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")}
 
-    async def csat_distribuicao(self, claims: dict) -> dict[int, int]:
+    async def csat_distribuicao(self, claims: dict, *, departamento_id: str | None = None) -> dict[int, int]:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
-                "SELECT avaliacao_nota n, count(*) c FROM chamados WHERE avaliacao_nota IS NOT NULL GROUP BY 1"
+                """SELECT avaliacao_nota n, count(*) c FROM chamados
+                    WHERE avaliacao_nota IS NOT NULL
+                      AND ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                    GROUP BY 1""",
+                departamento_id,
             )
         por = {int(r["n"]): r["c"] for r in rows}
         return {i: por.get(i, 0) for i in range(1, 6)}
 
-    async def produtividade(self, claims: dict) -> list[dict[str, Any]]:
+    async def produtividade(self, claims: dict, *, departamento_id: str | None = None) -> list[dict[str, Any]]:
         """Chamados resolvidos por operador (produtividade)."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
@@ -68,19 +79,46 @@ class AdminRepo:
                        count(*) FILTER (WHERE c.status = 'RESOLVIDO') AS resolvidos,
                        count(*) AS atribuidos
                   FROM chamados c LEFT JOIN perfis op ON op.id = c.operador_id
+                 WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
                  GROUP BY op.nome ORDER BY resolvidos DESC NULLS LAST LIMIT 15
-                """
+                """,
+                departamento_id,
             )
             return [dict(r) for r in rows]
 
-    async def por_departamento(self, claims: dict) -> list[dict[str, Any]]:
+    async def avaliacoes_recentes(
+        self, claims: dict, *, limite: int = 8, departamento_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Últimas avaliações (CSAT) com comentário do solicitante, para o TI ver
+        o feedback qualitativo — não só a média. Nota sempre; comentário opcional."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT c.codigo, c.titulo, c.avaliacao_nota AS nota,
+                       c.avaliacao_comentario AS comentario, c.avaliacao_em AS em,
+                       autor.nome AS solicitante
+                  FROM chamados c
+                  LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                 WHERE c.avaliacao_nota IS NOT NULL
+                   AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
+                 ORDER BY c.avaliacao_em DESC NULLS LAST
+                 LIMIT $1
+                """,
+                limite,
+                departamento_id,
+            )
+            return [dict(r) for r in rows]
+
+    async def por_departamento(self, claims: dict, *, departamento_id: str | None = None) -> list[dict[str, Any]]:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
                 SELECT COALESCE(d.nome, '—') AS departamento, count(*) AS total
                   FROM chamados c LEFT JOIN departamentos d ON d.id = c.departamento_id
+                 WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
                  GROUP BY d.nome ORDER BY total DESC
-                """
+                """,
+                departamento_id,
             )
             return [dict(r) for r in rows]
 
@@ -127,12 +165,70 @@ class AdminRepo:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
-                SELECT nome, resposta_alta_min, resolucao_alta_min,
+                SELECT id, nome,
+                       resposta_baixa_min, resposta_media_min, resposta_alta_min,
+                       resolucao_baixa_min, resolucao_media_min, resolucao_alta_min,
                        resposta_default_min, resolucao_default_min, ativo
                   FROM planos_sla ORDER BY nome
                 """
             )
             return [dict(r) for r in rows]
+
+    async def atualizar_plano(
+        self, claims: dict, plano_id: str, *, campos: dict[str, int | None]
+    ) -> None:
+        """Atualiza os tempos de SLA (minutos) de um plano. As colunas são de uma
+        allow-list fixa (não vêm do usuário como identificador), então o nome é
+        seguro; os valores são parametrizados. URGENTE não é editável (derivado =
+        50% de ALTA). Vale para os chamados criados **a partir de agora** (trigger)."""
+        cols = [
+            "resposta_baixa_min", "resposta_media_min", "resposta_alta_min",
+            "resolucao_baixa_min", "resolucao_media_min", "resolucao_alta_min",
+            "resposta_default_min", "resolucao_default_min",
+        ]
+        set_sql = ", ".join(f"{c} = ${i + 2}" for i, c in enumerate(cols))
+        valores = [campos.get(c) for c in cols]
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                f"UPDATE planos_sla SET {set_sql}, updated_at = now() WHERE id = $1::uuid",
+                plano_id,
+                *valores,
+            )
+
+    # ---- Usuários (gestão de contas — só TI) ----------------------------
+    async def usuarios(self, claims: dict) -> list[dict[str, Any]]:
+        """Lista os perfis (nome, papel, setor) para a gestão de contas do TI.
+
+        O e-mail vive em ``auth.users`` (fora do alcance do papel ``authenticated``)
+        e é resolvido na rota via Admin API; aqui devolvemos o que a RLS permite."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT p.id, p.nome, p.role, p.ativo,
+                       d.nome AS departamento, p.departamento_id
+                  FROM perfis p
+                  LEFT JOIN departamentos d ON d.id = p.departamento_id
+                 ORDER BY (p.role = 'CLIENTE'), d.nome NULLS LAST, p.nome
+                """
+            )
+            return [dict(r) for r in rows]
+
+    async def atualizar_papel(
+        self, claims: dict, user_id: str, *, role: str, departamento_id: str | None
+    ) -> None:
+        """Grava papel + setor na tabela ``perfis`` (RLS: só o TI pode — policy
+        ``perfis_admin_all``/``auth_is_ti()``). O ``app_metadata.role`` do JWT é
+        atualizado à parte, via Admin API, pela rota (dual-write da Seção 3.2)."""
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                """UPDATE perfis
+                      SET role = $2::papel_usuario,
+                          departamento_id = $3::uuid
+                    WHERE id = $1::uuid""",
+                user_id,
+                role,
+                departamento_id,
+            )
 
     # ---- Export CSV -----------------------------------------------------
     async def exportar(self, claims: dict) -> list[dict[str, Any]]:
@@ -143,7 +239,7 @@ class AdminRepo:
                        dep.nome AS departamento, cat.nome AS categoria,
                        autor.nome AS solicitante, op.nome AS operador,
                        c.created_at, c.limite_resolucao, c.respondido_em, c.resolvido_em,
-                       c.avaliacao_nota
+                       c.avaliacao_nota, c.avaliacao_em, c.avaliacao_comentario
                   FROM chamados c
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id

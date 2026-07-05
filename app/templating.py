@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
-from app.domain.sla_visual import estado_sla
+from app.domain.sla_visual import barra_sla, estado_sla
 from app.security.csrf import CSRF_HEADER, get_csrf
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -17,10 +17,14 @@ _TZ = ZoneInfo("America/Sao_Paulo")  # exibição em horário de Brasília (Seç
 
 # Metadados de UI por status/prioridade (tokens da marca; Seção 5.1).
 STATUS_META = {
-    "NOVO":           {"label": "Novo",            "dot": "bg-st_novo",   "text": "text-st_novo"},
-    "EM_ATENDIMENTO": {"label": "Em atendimento",  "dot": "bg-st_atend",  "text": "text-st_atend"},
-    "AGUARDANDO":     {"label": "Aguardando",      "dot": "bg-st_aguard", "text": "text-st_aguard"},
-    "RESOLVIDO":      {"label": "Resolvido",       "dot": "bg-st_resolv", "text": "text-st_resolv"},
+    "NOVO":           {"label": "Novo",           "dot": "bg-st_novo",   "text": "text-st_novo",
+                       "bg": "bg-st_novo/10",   "icon": "M12 4.5v15m7.5-7.5h-15"},
+    "EM_ATENDIMENTO": {"label": "Em atendimento", "dot": "bg-st_atend",  "text": "text-st_atend",
+                       "bg": "bg-st_atend/10",  "icon": "M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"},
+    "AGUARDANDO":     {"label": "Aguardando",     "dot": "bg-st_aguard", "text": "text-st_aguard",
+                       "bg": "bg-st_aguard/10", "icon": "M15.75 5.25v13.5m-7.5-13.5v13.5"},
+    "RESOLVIDO":      {"label": "Resolvido",      "dot": "bg-st_resolv", "text": "text-st_resolv",
+                       "bg": "bg-st_resolv/10", "icon": "M4.5 12.75l6 6 9-13.5"},
 }
 PRIORIDADE_META = {
     "BAIXA":   {"label": "Baixa",   "text": "text-pr_baixa"},
@@ -45,6 +49,7 @@ templates.env.globals.update(
     PRIORIDADE_META=PRIORIDADE_META,
     fmt_dt=fmt_dt,
     estado_sla=estado_sla,   # indicador visual de SLA (Fase 4)
+    barra_sla=barra_sla,     # barra de progresso de SLA (Fase 3 do usuário)
 )
 
 
@@ -56,7 +61,7 @@ def render(request: Request, name: str, context: dict | None = None, status_code
     mantendo o par cookie/header coerente para o double-submit (Seção 3.5).
     """
     csrf = get_csrf()
-    token = csrf.issue()
+    token = csrf.get_or_issue(request)
     ctx = {"csrf_header": CSRF_HEADER, "csrf_token": token}
     if context:
         ctx.update(context)

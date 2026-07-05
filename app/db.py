@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Any, AsyncIterator
 
 import asyncpg
@@ -30,18 +31,96 @@ from app.config import Settings
 
 _pool: asyncpg.Pool | None = None
 
+async def _apply_rls_claims(conn: asyncpg.Connection, claims: dict[str, Any]) -> None:
+    """Injeta papel + claims no escopo da transação (RLS) em **um** round-trip.
+
+    ``SET LOCAL ROLE`` e ``set_config`` vão num único comando (simple query) para
+    cortar uma ida ao banco por request — relevante contra banco remoto. O JSON
+    de claims é embutido como literal com aspas simples duplicadas (à prova de
+    injeção: ``standard_conforming_strings`` on; o único terminador de string é a
+    aspa simples, que escapamos)."""
+    payload = json.dumps(claims).replace("'", "''")
+    await conn.execute(
+        "SET LOCAL ROLE authenticated;"
+        f" SELECT set_config('request.jwt.claims', '{payload}', true);"
+    )
+
+
+class _RLSHolder:
+    """Conexão RLS **por request**, aberta preguiçosamente na 1ª query e reusada.
+
+    ``rls_request_scope`` registra um holder no contextvar sem tocar no banco;
+    só a primeira chamada a ``rls_connection`` abre a conexão/transação e aplica
+    os claims uma única vez. Assim, requests que não acessam o domínio (ou testes
+    com repositórios fake) **nunca** abrem conexão. Corta os round-trips de
+    ``SET LOCAL ROLE`` + ``set_config`` por método (Seção 2.1)."""
+
+    def __init__(self, claims: dict[str, Any]) -> None:
+        self.claims = claims
+        self.conn: asyncpg.Connection | None = None
+        self._acquire_cm: Any = None
+        self._tx: Any = None
+
+    async def get_conn(self) -> asyncpg.Connection:
+        if self.conn is None:
+            pool = await _ensure_pool()
+            self._acquire_cm = pool.acquire()
+            conn = await self._acquire_cm.__aenter__()
+            self._tx = conn.transaction()
+            await self._tx.start()
+            await _apply_rls_claims(conn, self.claims)
+            self.conn = conn
+        return self.conn
+
+    async def close(self, exc: BaseException | None) -> None:
+        if self.conn is None:
+            return
+        try:
+            if exc is None:
+                await self._tx.commit()
+            else:
+                await self._tx.rollback()
+        except Exception:  # noqa: BLE001 — garante liberação mesmo se o commit falhar
+            try:
+                await self._tx.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+        finally:
+            await self._acquire_cm.__aexit__(None, None, None)
+            self.conn = None
+
+
+_request_holder: ContextVar["_RLSHolder | None"] = ContextVar("_request_holder", default=None)
+
 
 async def init_pool(settings: Settings) -> asyncpg.Pool:
-    """Cria o pool global. Chamado no lifespan da app."""
+    """Cria o pool global. Chamado no lifespan da app (ou sob demanda em serverless).
+
+    Em **serverless (Vercel)** as funções são efêmeras: um pool com ``min_size>0``
+    mantém conexões ociosas que vazam e estouram o teto do Supavisor. Nesse modo
+    forçamos ``min_size=0`` (nada persistente), ``max_size`` restrito e reciclagem
+    rápida de conexões ociosas. Fora da Vercel (Railway/Docker/local) usamos os
+    valores configurados. Ver Seção 2.1 do plano mestre.
+    """
     global _pool
     if _pool is None:
+        if settings.is_serverless:
+            min_size = 0
+            max_size = min(settings.db_pool_max_size, 2)
+            max_inactive = 10.0
+        else:
+            min_size = settings.db_pool_min_size
+            max_size = settings.db_pool_max_size
+            max_inactive = 300.0
         _pool = await asyncpg.create_pool(
             dsn=settings.database_url,
-            min_size=settings.db_pool_min_size,
-            max_size=settings.db_pool_max_size,
+            min_size=min_size,
+            max_size=max_size,
             # Obrigatório sob Supavisor transaction mode (Seção 2.1).
             statement_cache_size=0,
             command_timeout=30,
+            # Fecha conexões ociosas rápido em serverless para não segurar o pooler.
+            max_inactive_connection_lifetime=max_inactive,
         )
     return _pool
 
@@ -82,17 +161,39 @@ async def rls_connection(claims: dict[str, Any]) -> AsyncIterator[asyncpg.Connec
     Use para TODA leitura/escrita de domínio em nome de um usuário autenticado.
     ``claims`` deve conter ao menos ``sub`` (lido por ``auth.uid()``) e ``role``.
     """
+    # Dentro de um request-scope: reusa a conexão do holder (abre na 1ª vez).
+    holder = _request_holder.get()
+    if holder is not None:
+        conn = await holder.get_conn()
+        yield conn
+        return
+
+    # Standalone (fora de request-scope, ex.: script/admin): tx própria.
     pool = await _ensure_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Papel de banco do PostgREST/Supabase para usuários autenticados.
-            await conn.execute("SET LOCAL ROLE authenticated")
-            # Claims em escopo LOCAL (transação) — compatível com transaction mode.
-            await conn.execute(
-                "SELECT set_config('request.jwt.claims', $1, true)",
-                json.dumps(claims),
-            )
+            await _apply_rls_claims(conn, claims)
             yield conn
+
+
+@asynccontextmanager
+async def rls_request_scope(claims: dict[str, Any]) -> AsyncIterator[None]:
+    """Registra um :class:`_RLSHolder` no contextvar para todo o request.
+
+    **Não toca no banco** aqui: a conexão é aberta preguiçosamente pela primeira
+    ``rls_connection`` do request e reusada pelas demais (uma só aplicação de
+    claims). Use como dependência ``yield`` do FastAPI nos contextos de rota."""
+    holder = _RLSHolder(claims)
+    token = _request_holder.set(holder)
+    exc: BaseException | None = None
+    try:
+        yield
+    except BaseException as e:  # noqa: BLE001 — propaga após fechar a transação
+        exc = e
+        raise
+    finally:
+        _request_holder.reset(token)
+        await holder.close(exc)
 
 
 @asynccontextmanager

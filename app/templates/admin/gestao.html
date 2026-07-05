@@ -57,27 +57,54 @@
   </section>
 </div>
 
-{# Planos de SLA (config interna — leitura) #}
+{# Planos de SLA (config interna — editável pelo TI). URGENTE é derivado
+   (50% de ALTA) e não tem campo. Mudanças valem para chamados novos. #}
 <section class="bg-white rounded-xl shadow-card border border-line/60 p-5 mt-6">
-  <h3 class="font-display font-bold text-navy mb-3">Planos de SLA <span class="text-xs font-normal text-muted">(config interna)</span></h3>
-  <div class="overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead class="text-left text-[11px] font-bold uppercase tracking-wider text-muted">
-        <tr><th class="py-2 pr-4">Plano</th><th class="py-2 pr-4">Resposta ALTA</th><th class="py-2 pr-4">Resolução ALTA</th><th class="py-2 pr-4">Default resp.</th><th class="py-2 pr-4">Default resol.</th><th class="py-2">Ativo</th></tr>
-      </thead>
-      <tbody>
-        {% for p in planos %}
-        <tr class="border-t border-line">
-          <td class="py-2 pr-4 font-medium text-navy">{{ p.nome }}</td>
-          <td class="py-2 pr-4">{{ p.resposta_alta_min }} min</td>
-          <td class="py-2 pr-4">{{ p.resolucao_alta_min }} min</td>
-          <td class="py-2 pr-4">{{ p.resposta_default_min }} min</td>
-          <td class="py-2 pr-4">{{ p.resolucao_default_min }} min</td>
-          <td class="py-2">{{ "Sim" if p.ativo else "Não" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <h3 class="font-display font-bold text-navy mb-1">Planos de SLA</h3>
+  <p class="text-xs text-muted mb-4">
+    Tempos em <strong>minutos</strong>. <strong>URGENTE</strong> é calculado como 50% do tempo de <strong>ALTA</strong>.
+    <em>Default</em> é o fallback quando a prioridade não tem tempo próprio. As alterações valem para os
+    <strong>chamados criados a partir de agora</strong>.
+  </p>
+  {% macro min_input(nome, val) %}
+  <input type="number" name="{{ nome }}" value="{{ val if val is not none else '' }}" min="0" step="1"
+         class="w-20 px-2 py-1.5 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
+  {% endmacro %}
+  <div class="space-y-6">
+    {% for p in planos %}
+    <form method="post" action="/admin/planos/{{ p.id }}" class="rounded-xl border border-line/70 p-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="flex items-center justify-between mb-3">
+        <div class="font-semibold text-navy">{{ p.nome }} {% if not p.ativo %}<span class="text-xs text-faint">(inativo)</span>{% endif %}</div>
+        <button class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">Salvar</button>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="text-sm">
+          <thead class="text-left text-[11px] font-bold uppercase tracking-wider text-muted">
+            <tr><th class="py-1 pr-4"></th><th class="py-1 pr-4">Baixa</th><th class="py-1 pr-4">Média</th><th class="py-1 pr-4">Alta</th><th class="py-1 pr-4">Default</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="py-1.5 pr-4 font-medium text-navy">Resposta</td>
+              <td class="py-1.5 pr-4">{{ min_input("resposta_baixa_min", p.resposta_baixa_min) }}</td>
+              <td class="py-1.5 pr-4">{{ min_input("resposta_media_min", p.resposta_media_min) }}</td>
+              <td class="py-1.5 pr-4">{{ min_input("resposta_alta_min", p.resposta_alta_min) }}</td>
+              <td class="py-1.5 pr-4">{{ min_input("resposta_default_min", p.resposta_default_min) }}</td>
+            </tr>
+            <tr>
+              <td class="py-1.5 pr-4 font-medium text-navy">Resolução</td>
+              <td class="py-1.5 pr-4">{{ min_input("resolucao_baixa_min", p.resolucao_baixa_min) }}</td>
+              <td class="py-1.5 pr-4">{{ min_input("resolucao_media_min", p.resolucao_media_min) }}</td>
+              <td class="py-1.5 pr-4">{{ min_input("resolucao_alta_min", p.resolucao_alta_min) }}</td>
+              <td class="py-1.5 pr-4">{{ min_input("resolucao_default_min", p.resolucao_default_min) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </form>
+    {% else %}
+    <p class="text-sm text-muted">Nenhum plano de SLA cadastrado.</p>
+    {% endfor %}
   </div>
 </section>
 {% endblock %}

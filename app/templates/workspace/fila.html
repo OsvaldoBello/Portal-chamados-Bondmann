@@ -26,7 +26,8 @@
 
 {# Tabela (recarrega a cada 15s para atualizar as cores de SLA) #}
 <div class="bg-white rounded-xl shadow-card border border-line/60 overflow-hidden">
-  <table class="w-full">
+  <div class="overflow-x-auto">
+  <table class="w-full min-w-[760px]">
     <thead class="bg-surface/70 text-left text-[11px] font-bold uppercase tracking-wider text-muted">
       <tr>
         <th class="px-4 py-3">Código</th><th class="px-4 py-3">Assunto</th>
@@ -41,5 +42,6 @@
       {% include "workspace/_fila_linhas.html" %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endblock %}

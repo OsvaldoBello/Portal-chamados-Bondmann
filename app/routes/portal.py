@@ -15,25 +15,29 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import RedirectResponse
 
 from app.auth.dependencies import CurrentUser, get_current_user
-from app.auth.session import ACCESS_COOKIE
 from app.config import get_settings
+from app.db import rls_request_scope
+from app.ratelimit import limiter
 from app.repositories.chamados import (
     PRIORIDADES,
     ChamadosRepo,
     get_chamados_repo,
     validar_nota,
 )
+from app.anexos import (
+    access_token as _access_token,
+    assinar_anexos as _assinar_anexos,
+    enviar_uploads as _enviar_uploads,
+    processar_uploads as _processar_uploads,
+    validar_uploads as _validar_uploads,
+)
 from app.security.csrf import get_csrf
-from app.security.uploads import UploadInvalido, validar_anexo
-from app.storage import AnexosStorage, StorageError, ensure_storage
+from app.security.uploads import UploadInvalido
 from app.templating import render
 
 log = logging.getLogger("app.portal")
 
 router = APIRouter(prefix="/portal", tags=["portal"])
-
-# Limite de anexos por mensagem (bound de trabalho/carga).
-MAX_ANEXOS = 5
 
 
 @dataclass(frozen=True)
@@ -45,21 +49,25 @@ class PortalCtx:
 async def portal_context(
     user: CurrentUser = Depends(get_current_user),
     repo: ChamadosRepo = Depends(get_chamados_repo),
-) -> PortalCtx:
+):
     """Contexto do portal (abertura + "meus chamados").
 
     Aberto a **qualquer usuário autenticado**: funcionários e também staff
     (RH/Marketing/TI) podem abrir chamados para qualquer departamento. A fila
     de atendimento por departamento é o Workspace do operador (Fase 4).
     Exige perfil com org interna associada (`empresa_id`).
+
+    Dependência ``yield``: abre **uma** conexão RLS por request; todas as queries
+    do request a reusam (performance — Seção 2.1).
     """
-    perfil = await repo.perfil(user.claims)
-    if not perfil or perfil.get("empresa_id") is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Perfil sem organização associada. Contate o administrador.",
-        )
-    return PortalCtx(user=user, perfil=perfil)
+    async with rls_request_scope(user.claims):
+        perfil = await repo.perfil(user.claims)
+        if not perfil or perfil.get("empresa_id") is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Perfil sem organização associada. Contate o administrador.",
+            )
+        yield PortalCtx(user=user, perfil=perfil)
 
 
 async def _csrf_guard(request: Request) -> None:
@@ -74,67 +82,19 @@ def pode_avaliar(chamado: dict, user_id: str) -> bool:
     )
 
 
-def _access_token(request: Request) -> str | None:
-    """JWT do usuário (cookie de sessão) — necessário para o Storage sob RLS."""
-    return request.cookies.get(ACCESS_COOKIE)
-
-
-async def _assinar_anexos(request: Request, mensagens: list[dict]) -> None:
-    """Gera signed URLs (TTL 1h) *on-demand* para cada anexo (C2 — nunca cacheado).
-
-    Muta as mensagens in-place adicionando ``url`` a cada anexo. Falha graciosa:
-    sem Storage/token, ``url`` fica ``None`` e o template mostra 'indisponível'.
-    """
-    storage = await ensure_storage()
-    token = _access_token(request)
-    for m in mensagens:
-        for anexo in m.get("anexos") or []:
-            anexo["url"] = None
-            path = anexo.get("path")
-            if storage and token and path:
-                anexo["url"] = await storage.signed_url(token, path)
-
-
-async def _processar_uploads(
-    request: Request,
-    arquivos: list[UploadFile],
-    *,
-    empresa_id: str,
-    chamado_id: str,
-    max_bytes: int,
-) -> list[dict]:
-    """Valida (tamanho/allow-list/magic bytes), envia ao Storage e devolve os
-    metadados persistíveis. Levanta :class:`UploadInvalido` em qualquer violação."""
-    reais = [a for a in arquivos if a and a.filename]
-    if not reais:
-        return []
-    if len(reais) > MAX_ANEXOS:
-        raise UploadInvalido(f"Máximo de {MAX_ANEXOS} anexos por mensagem.")
-
-    storage = await ensure_storage()
-    token = _access_token(request)
-    if storage is None or token is None:
-        raise UploadInvalido("Envio de anexos indisponível no momento.")
-
-    anexos: list[dict] = []
-    for arquivo in reais:
-        # Leitura limitada a max_bytes+1 para rejeitar excesso sem carregar ilimitado.
-        conteudo = await arquivo.read(max_bytes + 1)
-        validado = validar_anexo(arquivo.filename, conteudo, max_bytes=max_bytes)
-        path = AnexosStorage.path(empresa_id, chamado_id, validado.nome_objeto)
-        try:
-            await storage.upload(token, path, validado.conteudo, validado.mime)
-        except StorageError as exc:
-            raise UploadInvalido("Falha ao enviar o anexo. Tente novamente.") from exc
-        anexos.append(
-            {
-                "path": path,
-                "nome": validado.nome_original,
-                "mime": validado.mime,
-                "tamanho": validado.tamanho,
-            }
-        )
-    return anexos
+def _stats_de(chamados: list[dict]) -> dict[str, int]:
+    """Contagem por status a partir dos chamados já buscados — evita uma query
+    extra no dashboard (o funcionário tem poucos chamados; escopo é o próprio)."""
+    por: dict[str, int] = {}
+    for c in chamados:
+        por[c["status"]] = por.get(c["status"], 0) + 1
+    return {
+        "total": len(chamados),
+        "novo": por.get("NOVO", 0),
+        "em_atendimento": por.get("EM_ATENDIMENTO", 0),
+        "aguardando": por.get("AGUARDANDO", 0),
+        "resolvido": por.get("RESOLVIDO", 0),
+    }
 
 
 @router.get("")
@@ -144,11 +104,45 @@ async def dashboard(
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
     chamados = await repo.listar(ctx.user.claims)
-    stats = await repo.stats(ctx.user.claims)
+    stats = _stats_de(chamados)
     return render(
         request,
         "portal/dashboard.html",
         {"perfil": ctx.perfil, "chamados": chamados, "stats": stats},
+    )
+
+
+async def _render_form(
+    request: Request,
+    ctx: PortalCtx,
+    repo: ChamadosRepo,
+    *,
+    erro: str | None = None,
+    form: dict | None = None,
+    status_code: int = status.HTTP_200_OK,
+):
+    """Renderiza o formulário de abertura (usado no GET e no re-render de erro).
+    Preserva o que o usuário digitou em ``form`` e recarrega as subcategorias da
+    categoria escolhida (para o select vir preenchido no erro)."""
+    form = form or {}
+    categorias = await repo.categorias_ativas(ctx.user.claims)
+    departamentos = await repo.departamentos_ativos(ctx.user.claims)
+    subcategorias: list[dict] = []
+    if form.get("categoria_id"):
+        subcategorias = await repo.subcategorias_ativas(ctx.user.claims, form["categoria_id"])
+    return render(
+        request,
+        "portal/novo_chamado.html",
+        {
+            "perfil": ctx.perfil,
+            "categorias": categorias,
+            "departamentos": departamentos,
+            "subcategorias": subcategorias,
+            "prioridades": PRIORIDADES,
+            "form": form,
+            "erro": erro,
+        },
+        status_code=status_code,
     )
 
 
@@ -158,27 +152,37 @@ async def novo_chamado_form(
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
-    categorias = await repo.categorias_ativas(ctx.user.claims)
-    departamentos = await repo.departamentos_ativos(ctx.user.claims)
-    return render(
-        request,
-        "portal/novo_chamado.html",
-        {
-            "perfil": ctx.perfil,
-            "categorias": categorias,
-            "departamentos": departamentos,
-            "prioridades": PRIORIDADES,
-        },
+    return await _render_form(request, ctx, repo)
+
+
+@router.get("/chamados/subcategorias")
+async def subcategorias_fragmento(
+    request: Request,
+    categoria_id: str = "",
+    ctx: PortalCtx = Depends(portal_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+):
+    """Cascade da abertura: <option>s de subcategoria para a categoria escolhida
+    (carregado via HTMX quando o usuário muda a categoria). Declarado ANTES da
+    rota dinâmica ``/chamados/{chamado_id}``."""
+    categoria_id = categoria_id.strip()
+    subs = (
+        await repo.subcategorias_ativas(ctx.user.claims, categoria_id)
+        if categoria_id
+        else []
     )
+    return render(request, "portal/_subcategorias_options.html", {"subcategorias": subs})
 
 
 @router.post("/chamados")
+@limiter.limit("15/minute")
 async def criar_chamado(
     request: Request,
     titulo: str = Form(...),           # "Assunto"
     descricao: str = Form(...),
     departamento_id: str = Form(""),   # destino: TI / RH / Marketing
     categoria_id: str = Form(""),
+    subcategoria_id: str = Form(""),
     prioridade: str = Form("MEDIA"),
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
@@ -187,42 +191,81 @@ async def criar_chamado(
     titulo = titulo.strip()
     descricao = descricao.strip()
     departamento_id = departamento_id.strip()
+    categoria_id = categoria_id.strip()
+    subcategoria_id = subcategoria_id.strip()
     prioridade = prioridade.upper()
     if prioridade not in PRIORIDADES:
         prioridade = "MEDIA"
 
-    erro = None
-    if not departamento_id:
-        erro = "Selecione o departamento de destino do chamado."
-    elif not titulo or not descricao:
-        erro = "Informe o assunto e a descrição do chamado."
+    form = {
+        "departamento_id": departamento_id,
+        "categoria_id": categoria_id,
+        "subcategoria_id": subcategoria_id,
+        "titulo": titulo,
+        "descricao": descricao,
+        "prioridade": prioridade,
+    }
 
-    if erro:
-        categorias = await repo.categorias_ativas(ctx.user.claims)
-        departamentos = await repo.departamentos_ativos(ctx.user.claims)
-        return render(
-            request,
-            "portal/novo_chamado.html",
-            {
-                "perfil": ctx.perfil,
-                "categorias": categorias,
-                "departamentos": departamentos,
-                "prioridades": PRIORIDADES,
-                "erro": erro,
-            },
-            status_code=status.HTTP_400_BAD_REQUEST,
+    async def _erro(msg: str, code: int = status.HTTP_400_BAD_REQUEST):
+        return await _render_form(request, ctx, repo, erro=msg, form=form, status_code=code)
+
+    # Todos os campos são obrigatórios (decisão de produto, Fase 2).
+    if not departamento_id:
+        return await _erro("Selecione o departamento de destino do chamado.")
+    if not categoria_id:
+        return await _erro("Selecione a categoria do chamado.")
+    if not subcategoria_id:
+        return await _erro("Selecione a subcategoria do chamado.")
+    if not titulo or not descricao:
+        return await _erro("Informe o assunto e a descrição do chamado.")
+    if not await repo.subcategoria_valida(
+        ctx.user.claims, categoria_id=categoria_id, subcategoria_id=subcategoria_id
+    ):
+        return await _erro("A subcategoria não pertence à categoria escolhida.")
+
+    # Anexos lidos direto do multipart. Não declaramos ``UploadFile`` como parâmetro
+    # aqui porque, neste endpoint com ``@limiter.limit`` (slowapi embrulha a função)
+    # + ``from __future__ import annotations``, o FastAPI não resolve ``list[UploadFile]``
+    # e quebra na introspecção. Ler do form evita a annotation problemática.
+    form_data = await request.form()
+    arquivos = [f for f in form_data.getlist("arquivos") if getattr(f, "filename", "")]
+
+    # Valida anexos ANTES de criar (barra tipos/tamanhos inválidos sem efeito colateral).
+    try:
+        validados = await _validar_uploads(
+            arquivos, max_bytes=get_settings().anexo_max_bytes
         )
+    except UploadInvalido as exc:
+        return await _erro(str(exc), status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     novo = await repo.criar(
         ctx.user.claims,
         empresa_id=str(ctx.perfil["empresa_id"]),
         cliente_id=ctx.user.id,
-        categoria_id=categoria_id or None,
+        categoria_id=categoria_id,
+        subcategoria_id=subcategoria_id,
         departamento_id=departamento_id,
         titulo=titulo,
         descricao=descricao,
         prioridade=prioridade,
     )
+
+    # Anexos da abertura viram a primeira mensagem (pública) do autor.
+    if validados:
+        try:
+            anexos = await _enviar_uploads(
+                request, validados, empresa_id=str(ctx.perfil["empresa_id"]),
+                chamado_id=str(novo["id"]),
+            )
+            if anexos:
+                await repo.adicionar_mensagem(
+                    ctx.user.claims, str(novo["id"]),
+                    remetente_id=ctx.user.id, conteudo="", anexos=anexos,
+                )
+        except UploadInvalido as exc:
+            # Chamado já criado; não trava a abertura por falha pontual de Storage.
+            log.warning("Anexo da abertura falhou (chamado %s): %s", novo["id"], exc)
+
     return RedirectResponse(
         f"/portal/chamados/{novo['id']}", status_code=status.HTTP_303_SEE_OTHER
     )

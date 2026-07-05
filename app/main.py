@@ -11,20 +11,23 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request, status
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from app.auth.routes import register_auth_routes
+from app.auth.session import SessionRefreshMiddleware
 from app.auth.supabase_client import init_supabase
 from app.config import get_settings
 from app.db import close_pool, init_pool
 from app.observability import RequestContextMiddleware, configure_logging
+from app.ratelimit import limiter
 from app.routes.health import router as health_router
 from app.routes.admin import register_admin_routes
+from app.routes.common import register_common_routes
 from app.routes.portal import register_portal_routes
 from app.routes.workspace import register_workspace_routes
 from app.security.csrf import init_csrf
@@ -35,17 +38,6 @@ from app.security.jwt import init_verifier
 log = logging.getLogger("app")
 
 _STATIC_DIR = Path(__file__).parent / "static"
-
-
-def _client_ip(request: Request) -> str:
-    """IP real atrás do proxy Railway via X-Forwarded-For (Seção 2.4)."""
-    fwd = request.headers.get("X-Forwarded-For")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return get_remote_address(request)
-
-
-limiter = Limiter(key_func=_client_ip, default_limits=[])
 
 
 @asynccontextmanager
@@ -93,9 +85,13 @@ def create_app() -> FastAPI:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
-    # Middleware (a ordem importa: contexto por fora, headers por dentro)
+    # Middleware (a ordem importa: contexto por fora, headers por dentro).
+    # SessionRefresh grava cookies de sessão renovada por dependency (Seção 3.4).
     app.add_middleware(SecurityHeadersMiddleware, settings=settings)
+    app.add_middleware(SessionRefreshMiddleware)
     app.add_middleware(RequestContextMiddleware)
+    # GZip por fora: comprime HTML/CSS/JS servidos (ganho de latência percebida).
+    app.add_middleware(GZipMiddleware, minimum_size=500)
 
     # Estáticos
     _STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -107,9 +103,12 @@ def create_app() -> FastAPI:
     register_portal_routes(app)
     register_workspace_routes(app)
     register_admin_routes(app)
+    register_common_routes(app)
 
     # Tratamento de erro centralizado (Seção 6.3): sem vazar stack/segredos.
-    app.add_exception_handler(HTTPException, _http_exception_handler)
+    # Registra na base do Starlette para também capturar o 404 de rota inexistente
+    # (o router levanta a HTTPException base, não a subclasse do FastAPI).
+    app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
     return app
@@ -119,7 +118,56 @@ def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONRespons
     return JSONResponse({"detail": "Muitas requisições. Tente novamente em instantes."}, 429)
 
 
-def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+# Textos das páginas de erro amigáveis (Fase 5). Fallback genérico para outros 4xx.
+_ERRO_PAGINAS = {
+    status.HTTP_403_FORBIDDEN: (
+        "403",
+        "Acesso negado",
+        "Você não tem permissão para acessar esta área. Se acredita que isto é um "
+        "engano, fale com a administração (TI).",
+    ),
+    status.HTTP_404_NOT_FOUND: (
+        "404",
+        "Página não encontrada",
+        "O endereço que você tentou abrir não existe ou o chamado pode ter sido "
+        "movido. Verifique o link e tente novamente.",
+    ),
+}
+
+
+def _quer_html(request: Request) -> bool:
+    """Navegação de página (GET que aceita HTML) e não uma chamada HTMX/API."""
+    return (
+        request.method == "GET"
+        and "text/html" in request.headers.get("accept", "")
+        and not request.headers.get("HX-Request")
+    )
+
+
+def _http_exception_handler(request: Request, exc: HTTPException):
+    # 401 numa navegação de página (browser ou HTMX) → manda para /login em vez
+    # de devolver JSON cru (Seção 3.4: "Falha → redireciona a /login").
+    if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+        if request.headers.get("HX-Request"):
+            resp = Response(status_code=204)
+            resp.headers["HX-Redirect"] = "/login"
+            return resp
+        if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+            return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    # 403/404 (e demais 4xx) numa navegação → página de erro estilizada (Fase 5).
+    if _quer_html(request) and 400 <= exc.status_code < 500:
+        from app.templating import render
+
+        codigo, titulo, mensagem = _ERRO_PAGINAS.get(
+            exc.status_code, (str(exc.status_code), "Ops, algo deu errado", exc.detail or "")
+        )
+        return render(
+            request,
+            "erro.html",
+            {"codigo": codigo, "titulo": titulo, "mensagem": mensagem, "inicio": "/"},
+            status_code=exc.status_code,
+        )
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
 

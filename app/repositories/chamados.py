@@ -15,9 +15,17 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app import cache
 from app.db import rls_connection
 
 PRIORIDADES = ("BAIXA", "MEDIA", "ALTA", "URGENTE")
+
+# Chaves e TTL do cache de catálogos globais (Seção 2.3). Invalidados na escrita
+# pelas rotas de admin (ver app/routes/admin.py).
+CACHE_CATEGORIAS = "categorias_ativas"
+CACHE_DEPARTAMENTOS = "departamentos_ativos"
+CACHE_SUBCATEGORIAS = "subcategorias_ativas"  # sufixado por categoria_id
+CATALOGO_TTL = 90.0  # segundos
 NOTA_MIN, NOTA_MAX = 1, 5
 
 
@@ -27,7 +35,12 @@ class ChamadosRepo:
     async def perfil(self, claims: dict) -> dict[str, Any] | None:
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
-                "SELECT id, nome, role, empresa_id FROM perfis WHERE id = $1::uuid",
+                """SELECT p.id, p.nome, p.role, p.empresa_id,
+                          d.nome AS departamento,
+                          COALESCE(d.nome = 'TI', false) AS is_ti
+                     FROM perfis p
+                     LEFT JOIN departamentos d ON d.id = p.departamento_id
+                    WHERE p.id = $1::uuid""",
                 claims["sub"],
             )
             return dict(row) if row else None
@@ -80,10 +93,12 @@ class ChamadosRepo:
                        c.created_at, c.limite_resposta, c.limite_resolucao,
                        c.respondido_em, c.resolvido_em,
                        c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
-                       cat.nome AS categoria, dep.nome AS departamento,
+                       cat.nome AS categoria, sub.nome AS subcategoria,
+                       dep.nome AS departamento,
                        autor.nome AS cliente_nome, op.nome AS operador_nome
                   FROM chamados c
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
+                  LEFT JOIN subcategorias sub ON sub.id = c.subcategoria_id
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                   LEFT JOIN perfis op ON op.id = c.operador_id
@@ -116,19 +131,59 @@ class ChamadosRepo:
             return out
 
     async def categorias_ativas(self, claims: dict) -> list[dict[str, Any]]:
+        cached = cache.get(CACHE_CATEGORIAS)
+        if cached is not None:
+            return cached
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 "SELECT id, nome FROM categorias WHERE ativo = true ORDER BY nome"
             )
-            return [dict(r) for r in rows]
+        resultado = [dict(r) for r in rows]
+        cache.set(CACHE_CATEGORIAS, resultado, CATALOGO_TTL)
+        return resultado
 
     async def departamentos_ativos(self, claims: dict) -> list[dict[str, Any]]:
         """Departamentos de destino disponíveis para abertura (TI/RH/Marketing)."""
+        cached = cache.get(CACHE_DEPARTAMENTOS)
+        if cached is not None:
+            return cached
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 "SELECT id, nome FROM departamentos WHERE ativo = true ORDER BY nome"
             )
-            return [dict(r) for r in rows]
+        resultado = [dict(r) for r in rows]
+        cache.set(CACHE_DEPARTAMENTOS, resultado, CATALOGO_TTL)
+        return resultado
+
+    async def subcategorias_ativas(
+        self, claims: dict, categoria_id: str
+    ) -> list[dict[str, Any]]:
+        """Subcategorias ativas de uma categoria (cascade da abertura de chamado).
+
+        Cacheado por categoria (chave sufixada por ``categoria_id``). Retorna ``[]``
+        para categoria inexistente/sem subcategorias — o form trata o vazio."""
+        chave = f"{CACHE_SUBCATEGORIAS}:{categoria_id}"
+        cached = cache.get(chave)
+        if cached is not None:
+            return cached
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """SELECT id, nome FROM subcategorias
+                    WHERE categoria_id = $1::uuid AND ativo = true
+                    ORDER BY nome""",
+                categoria_id,
+            )
+        resultado = [dict(r) for r in rows]
+        cache.set(chave, resultado, CATALOGO_TTL)
+        return resultado
+
+    async def subcategoria_valida(
+        self, claims: dict, *, categoria_id: str, subcategoria_id: str
+    ) -> bool:
+        """A subcategoria existe, está ativa e pertence à categoria informada?
+        Defesa em profundidade contra POST com par categoria/subcategoria forjado."""
+        subs = await self.subcategorias_ativas(claims, categoria_id)
+        return any(str(s["id"]) == str(subcategoria_id) for s in subs)
 
     async def criar(
         self,
@@ -137,6 +192,7 @@ class ChamadosRepo:
         empresa_id: str,
         cliente_id: str,
         categoria_id: str | None,
+        subcategoria_id: str | None,
         departamento_id: str,
         titulo: str,
         descricao: str,
@@ -147,14 +203,15 @@ class ChamadosRepo:
             row = await conn.fetchrow(
                 """
                 INSERT INTO chamados
-                    (empresa_id, cliente_id, categoria_id, departamento_id,
+                    (empresa_id, cliente_id, categoria_id, subcategoria_id, departamento_id,
                      titulo, descricao, prioridade)
-                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7::prioridade_chamado)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8::prioridade_chamado)
                 RETURNING id, codigo
                 """,
                 empresa_id,
                 cliente_id,
                 categoria_id,
+                subcategoria_id,
                 departamento_id,
                 titulo,
                 descricao,
@@ -255,6 +312,20 @@ class ChamadosRepo:
             )
             return [dict(r) for r in rows]
 
+    async def fila_assinatura(self, claims: dict, *, status: str | None = None):
+        """Assinatura leve da fila (count + max ``updated_at``) no mesmo escopo/filtro.
+
+        Usada para ETag/304 no polling: se nada mudou, evita buscar todas as linhas
+        e re-renderizar o fragmento (Seção 2.2). O escopo vem da RLS."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                """SELECT count(*)::int AS n, max(updated_at) AS mx
+                     FROM chamados c
+                    WHERE ($1::status_chamado IS NULL OR c.status = $1::status_chamado)""",
+                status,
+            )
+            return (row["n"], row["mx"])
+
     async def fila_stats(self, claims: dict) -> dict[str, int]:
         """Contagem por status no escopo do staff (para os cabeçalhos do Kanban)."""
         async with rls_connection(claims) as conn:
@@ -268,18 +339,91 @@ class ChamadosRepo:
             "RESOLVIDO": por.get("RESOLVIDO", 0),
         }
 
-    async def operadores(self, claims: dict) -> list[dict[str, Any]]:
-        """Staff disponível para atribuição (role OPERADOR/ADMIN)."""
+    async def operadores(
+        self, claims: dict, *, departamento_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Staff disponível para atribuição (role OPERADOR/ADMIN).
+
+        Quando ``departamento_id`` é informado, retorna **apenas** o staff daquele
+        setor — a atribuição de responsável é sempre dentro do departamento do
+        chamado (RH atribui RH; TI, ao atender um chamado de RH, atribui RH).
+        A troca de setor é uma ação separada (só TI — ver :meth:`transferir`)."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
                 SELECT p.id, p.nome, d.nome AS departamento
                   FROM perfis p LEFT JOIN departamentos d ON d.id = p.departamento_id
                  WHERE p.role IN ('OPERADOR','ADMIN') AND p.ativo
+                   AND ($1::uuid IS NULL OR p.departamento_id = $1::uuid)
                  ORDER BY p.nome
-                """
+                """,
+                departamento_id,
             )
             return [dict(r) for r in rows]
+
+    async def iniciar_atendimento(
+        self, claims: dict, chamado_id: str, *, operador_id: str
+    ) -> dict[str, Any] | None:
+        """Inicia o atendimento: move NOVO→EM_ATENDIMENTO e assume como responsável.
+
+        Idempotente: só age quando o chamado está em ``NOVO`` (senão devolve None).
+        Registra ``ATENDIMENTO_INICIADO`` no histórico. Escopo por RLS (staff)."""
+        async with rls_connection(claims) as conn:
+            atual = await conn.fetchval(
+                "SELECT status FROM chamados WHERE id = $1::uuid", chamado_id
+            )
+            if atual != "NOVO":
+                return None
+            row = await conn.fetchrow(
+                """
+                UPDATE chamados
+                   SET status = 'EM_ATENDIMENTO'::status_chamado,
+                       operador_id = $2::uuid
+                 WHERE id = $1::uuid AND status = 'NOVO'::status_chamado
+             RETURNING id, status, operador_id
+                """,
+                chamado_id,
+                operador_id,
+            )
+            if row is None:
+                return None
+            await self._registrar(
+                conn, chamado_id, claims["sub"], "ATENDIMENTO_INICIADO",
+                {"operador_id": operador_id},
+            )
+            return dict(row)
+
+    async def transferir(
+        self, claims: dict, chamado_id: str, *, departamento_id: str
+    ) -> dict[str, Any] | None:
+        """Repassa o chamado para outro departamento (só TI — imposto pela RLS
+        `chamados_update_staff`: WITH CHECK exige `auth_is_ti()` para gravar um
+        `departamento_id` fora do setor do usuário). Limpa o operador (era do setor
+        antigo) e registra `DEPARTAMENTO_ALTERADO`. Devolve None se nada mudou/fora
+        do escopo."""
+        async with rls_connection(claims) as conn:
+            atual = await conn.fetchval(
+                "SELECT departamento_id FROM chamados WHERE id = $1::uuid", chamado_id
+            )
+            if atual is None or str(atual) == str(departamento_id):
+                return None
+            row = await conn.fetchrow(
+                """
+                UPDATE chamados
+                   SET departamento_id = $2::uuid, operador_id = NULL
+                 WHERE id = $1::uuid
+             RETURNING id, departamento_id
+                """,
+                chamado_id,
+                departamento_id,
+            )
+            if row is None:
+                return None
+            await self._registrar(
+                conn, chamado_id, claims["sub"], "DEPARTAMENTO_ALTERADO",
+                {"de": str(atual), "para": str(departamento_id)},
+            )
+            return dict(row)
 
     async def _registrar(
         self, conn, chamado_id: str, ator_id: str, acao: str, detalhes: dict
@@ -371,21 +515,31 @@ class ChamadosRepo:
             return dict(row)
 
     async def responder_staff(
-        self, claims: dict, chamado_id: str, *, conteudo: str, is_interna: bool
+        self,
+        claims: dict,
+        chamado_id: str,
+        *,
+        conteudo: str,
+        is_interna: bool,
+        anexos: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
-        """Mensagem do staff (pública ou nota interna). Na 1ª resposta pública,
-        marca `respondido_em` (conformidade do SLA de resposta)."""
+        """Mensagem do staff (pública ou nota interna), com anexos opcionais.
+
+        ``anexos`` são os metadados ``{path, nome, mime, tamanho}`` (bytes já no
+        Storage privado). Na 1ª resposta pública, marca `respondido_em`
+        (conformidade do SLA de resposta)."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO mensagens (chamado_id, remetente_id, conteudo, is_interna)
-                VALUES ($1::uuid, $2::uuid, $3, $4)
+                INSERT INTO mensagens (chamado_id, remetente_id, conteudo, is_interna, anexos)
+                VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb)
                 RETURNING id, created_at
                 """,
                 chamado_id,
                 claims["sub"],
                 conteudo,
                 is_interna,
+                json.dumps(anexos or []),
             )
             if not is_interna:
                 await conn.execute(
@@ -393,6 +547,27 @@ class ChamadosRepo:
                     chamado_id,
                 )
             return dict(row) if row else None
+
+    async def notificacoes(self, claims: dict, *, limite: int = 6) -> list[dict[str, Any]]:
+        """Itens que precisam de atenção no escopo do usuário (o escopo vem da RLS):
+        chamados **não resolvidos** + **resolvidos-não-avaliados** do próprio autor.
+        Serve tanto ao sino do staff (fila do setor) quanto ao do funcionário."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT c.id, c.codigo, c.titulo, c.status,
+                       c.created_at, c.limite_resolucao, c.resolvido_em,
+                       c.avaliacao_nota, (c.cliente_id = auth.uid()) AS meu
+                  FROM chamados c
+                 WHERE c.status <> 'RESOLVIDO'
+                    OR (c.resolvido_em IS NOT NULL AND c.avaliacao_nota IS NULL
+                        AND c.cliente_id = auth.uid())
+                 ORDER BY COALESCE(c.updated_at, c.created_at) DESC
+                 LIMIT $1
+                """,
+                limite,
+            )
+            return [dict(r) for r in rows]
 
 
 _repo = ChamadosRepo()

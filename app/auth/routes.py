@@ -12,11 +12,13 @@ from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import RedirectResponse
 from slowapi import Limiter
 
-from app.auth.dependencies import CurrentUser, get_current_user
+from app.auth.dependencies import CurrentUser, get_optional_user
 from app.auth.session import REFRESH_COOKIE, SessionTokens, clear_session, set_session
-from app.auth.supabase_client import ensure_supabase
+from app.auth.supabase_client import create_isolated_client, ensure_supabase
 from app.security.csrf import get_csrf
 from app.templating import render
+
+SENHA_MIN = 8
 
 router = APIRouter(tags=["auth"])
 
@@ -79,6 +81,111 @@ def register_auth_routes(app, limiter: Limiter) -> None:
     # supabase/registro_usuarios.sql. O trigger handle_new_user cria o perfil
     # CLIENTE vinculado à org interna. Não há rota /cadastro.
 
+    # ------------------------------------------------------------------
+    # Redefinição de senha por CÓDIGO (OTP) enviado ao e-mail (Fase 5).
+    # Fluxo (Supabase Auth): o funcionário clica em "Esqueci a senha", informa
+    # o e-mail (já cadastrado em auth.users) → GoTrue envia um código de 6
+    # dígitos → o funcionário informa o código + a nova senha. Evita consultar
+    # a senha pessoal de cada colaborador.
+    #   POST /esqueci-senha  -> reset_password_for_email (envia o código)
+    #   POST /redefinir-senha -> verify_otp(type=recovery) + update_user(password)
+    # ⚠️ CONFIG NECESSÁRIA no Supabase: o template de e-mail "Reset Password"
+    #    deve conter {{ .Token }} (o código OTP), não só o link de confirmação.
+    # ------------------------------------------------------------------
+    @router.get("/esqueci-senha")
+    async def esqueci_form(request: Request):
+        return render(request, "esqueci_senha.html")
+
+    @router.post("/esqueci-senha")
+    @limiter.limit("5/minute")
+    async def esqueci_submit(
+        request: Request,
+        email: str = Form(...),
+        _: None = Depends(_csrf_guard),
+    ):
+        email = email.strip().lower()
+        # Dispara o envio do código. Nunca revelamos se o e-mail existe (anti-enumeração):
+        # o resultado da UI é sempre o mesmo.
+        try:
+            supabase = await ensure_supabase()
+            # Nome do método varia entre versões do gotrue-py.
+            enviar = getattr(supabase.auth, "reset_password_for_email", None) or getattr(
+                supabase.auth, "reset_password_email", None
+            )
+            if enviar is not None:
+                await enviar(email)
+        except Exception:  # noqa: BLE001 — falha silenciosa por privacidade
+            pass
+        return render(
+            request,
+            "redefinir_senha.html",
+            {
+                "email": email,
+                "info": "Se este e-mail estiver cadastrado, enviamos um código de "
+                        "6 dígitos. Verifique sua caixa de entrada (e o spam).",
+            },
+        )
+
+    @router.get("/redefinir-senha")
+    async def redefinir_form(request: Request, email: str = ""):
+        return render(request, "redefinir_senha.html", {"email": email.strip().lower()})
+
+    @router.post("/redefinir-senha")
+    @limiter.limit("5/minute")
+    async def redefinir_submit(
+        request: Request,
+        email: str = Form(...),
+        codigo: str = Form(...),
+        senha: str = Form(...),
+        senha2: str = Form(...),
+        _: None = Depends(_csrf_guard),
+    ):
+        email = email.strip().lower()
+        codigo = codigo.strip().replace(" ", "")
+
+        def _erro(msg: str):
+            return render(
+                request,
+                "redefinir_senha.html",
+                {"email": email, "erro": msg},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if len(senha) < SENHA_MIN:
+            return _erro(f"A nova senha deve ter ao menos {SENHA_MIN} caracteres.")
+        if senha != senha2:
+            return _erro("As senhas não coincidem.")
+        if not codigo:
+            return _erro("Informe o código recebido por e-mail.")
+
+        # Cliente isolado: verify_otp + update_user mutam a sessão do GoTrue e não
+        # devem competir com o cliente global compartilhado.
+        try:
+            client = await create_isolated_client()
+        except Exception:  # noqa: BLE001
+            return _erro("Serviço de autenticação indisponível. Tente mais tarde.")
+        try:
+            resultado = await client.auth.verify_otp(
+                {"email": email, "token": codigo, "type": "recovery"}
+            )
+        except Exception:  # noqa: BLE001 — código inválido/expirado
+            return _erro("Código inválido ou expirado. Solicite um novo código.")
+
+        if getattr(resultado, "session", None) is None:
+            return _erro("Código inválido ou expirado. Solicite um novo código.")
+
+        try:
+            await client.auth.update_user({"password": senha})
+            await client.auth.sign_out()
+        except Exception:  # noqa: BLE001
+            return _erro("Não foi possível atualizar a senha. Tente novamente.")
+
+        return render(
+            request,
+            "login.html",
+            {"info": "Senha redefinida com sucesso! Faça login com a nova senha."},
+        )
+
     @router.post("/logout")
     async def logout(request: Request, _: None = Depends(_csrf_guard)):
         refresh = request.cookies.get(REFRESH_COOKIE)
@@ -92,8 +199,10 @@ def register_auth_routes(app, limiter: Limiter) -> None:
         return response
 
     @router.get("/")
-    async def index(user: CurrentUser = Depends(get_current_user)):
-        return RedirectResponse(home_for(user.role), status_code=status.HTTP_303_SEE_OTHER)
+    async def index(user: CurrentUser | None = Depends(get_optional_user)):
+        # Sem sessão → login; com sessão → home do papel. Nunca 401 JSON na raiz.
+        destino = home_for(user.role) if user else "/login"
+        return RedirectResponse(destino, status_code=status.HTTP_303_SEE_OTHER)
 
     app.include_router(router)
 

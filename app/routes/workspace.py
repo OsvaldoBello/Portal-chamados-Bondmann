@@ -10,14 +10,18 @@ reutiliza o mesmo fragmento/Realtime do portal (Seção 6.1).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import RedirectResponse, Response
 
+from app.anexos import assinar_anexos, processar_uploads
 from app.auth.dependencies import CurrentUser, require_role
 from app.config import get_settings
+from app.db import rls_request_scope
 from app.repositories.chamados import PRIORIDADES, ChamadosRepo, get_chamados_repo
 from app.security.csrf import get_csrf
+from app.security.uploads import UploadInvalido
 from app.templating import render
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -34,11 +38,15 @@ class StaffCtx:
 async def staff_context(
     user: CurrentUser = Depends(require_role("OPERADOR", "ADMIN")),
     repo: ChamadosRepo = Depends(get_chamados_repo),
-) -> StaffCtx:
-    perfil = await repo.perfil(user.claims)
-    if not perfil:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Perfil não encontrado.")
-    return StaffCtx(user=user, perfil=perfil)
+):
+    # Dependência yield: uma conexão RLS por request, reusada por todas as queries.
+    async with rls_request_scope(user.claims):
+        perfil = await repo.perfil(user.claims)
+        if not perfil:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Perfil não encontrado."
+            )
+        yield StaffCtx(user=user, perfil=perfil)
 
 
 async def _csrf_guard(request: Request) -> None:
@@ -79,8 +87,17 @@ async def fila_fragmento(
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
     filtro = status if status in STATUS_VALIDOS else None
+    # ETag/304 (Seção 2.2): consulta leve de assinatura; se nada mudou desde o
+    # último poll, responde 304 sem buscar todas as linhas nem re-renderizar.
+    n, mx = await repo.fila_assinatura(ctx.user.claims, status=filtro)
+    etag = 'W/"%s"' % sha256(f"{filtro}:{n}:{mx}".encode()).hexdigest()[:16]
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)  # 304 Not Modified
     chamados = await repo.fila(ctx.user.claims, status=filtro)
-    return render(request, "workspace/_fila_linhas.html", {"chamados": chamados})
+    resp = render(request, "workspace/_fila_linhas.html", {"chamados": chamados})
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 @router.get("/kanban")
@@ -107,13 +124,22 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, **extra):
     if chamado is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
     mensagens = await repo.mensagens(ctx.user.claims, chamado_id)
-    operadores = await repo.operadores(ctx.user.claims)
+    await assinar_anexos(request, mensagens)
+    # Responsáveis atribuíveis = staff do departamento do chamado (mesmo setor).
+    operadores = await repo.operadores(
+        ctx.user.claims, departamento_id=str(chamado.get("departamento_id") or "") or None
+    )
+    # Repasse de departamento é exclusivo do TI (RLS reforça); só então buscamos a lista.
+    departamentos = (
+        await repo.departamentos_ativos(ctx.user.claims) if ctx.perfil.get("is_ti") else []
+    )
     settings = get_settings()
     ctx_render = {
         "perfil": ctx.perfil,
         "chamado": chamado,
         "mensagens": mensagens,
         "operadores": operadores,
+        "departamentos": departamentos,
         "prioridades": PRIORIDADES,
         "status_validos": STATUS_VALIDOS,
         "supabase_url": settings.supabase_url or None,
@@ -145,6 +171,7 @@ async def mensagens_fragmento(
     if chamado is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
     mensagens = await repo.mensagens(ctx.user.claims, chamado_id)
+    await assinar_anexos(request, mensagens)
     return render(request, "portal/_mensagens.html", {"chamado": chamado, "mensagens": mensagens})
 
 
@@ -198,22 +225,90 @@ async def atribuir(
     return _voltar(chamado_id)
 
 
+@router.post("/chamados/{chamado_id}/iniciar")
+async def iniciar_atendimento(
+    request: Request,
+    chamado_id: str,
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Botão "Iniciar atendimento": NOVO→EM_ATENDIMENTO e assume o chamado."""
+    await repo.iniciar_atendimento(ctx.user.claims, chamado_id, operador_id=ctx.user.id)
+    return _voltar(chamado_id)
+
+
+@router.post("/chamados/{chamado_id}/transferir")
+async def transferir(
+    request: Request,
+    chamado_id: str,
+    departamento_id: str = Form(""),
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Repassa o chamado para outro departamento. Só o TI consegue (a RLS bloqueia
+    os demais); o gate de UI evita mostrar a opção para quem não é TI."""
+    departamento_id = departamento_id.strip()
+    if departamento_id and ctx.perfil.get("is_ti"):
+        await repo.transferir(ctx.user.claims, chamado_id, departamento_id=departamento_id)
+    return _voltar(chamado_id)
+
+
 @router.post("/chamados/{chamado_id}/mensagens")
 async def responder(
     request: Request,
     chamado_id: str,
     conteudo: str = Form(""),
     is_interna: str = Form(""),
+    arquivos: list[UploadFile] = File(default=[]),
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
 ):
     conteudo = conteudo.strip()
     interna = is_interna in ("1", "true", "on", "True")
-    if conteudo:
-        await repo.responder_staff(
-            ctx.user.claims, chamado_id, conteudo=conteudo, is_interna=interna
+
+    # Anexos validados server-side (10MB, allow-list, magic bytes) e enviados ao
+    # Storage privado antes de gravar a mensagem (Seção 3.9). Falha → re-render.
+    try:
+        anexos = await processar_uploads(
+            request,
+            arquivos,
+            empresa_id=str(ctx.perfil["empresa_id"]),
+            chamado_id=chamado_id,
+            max_bytes=get_settings().anexo_max_bytes,
         )
+    except UploadInvalido as exc:
+        return await _carregar_atendimento(
+            request, chamado_id, ctx, repo, erro_composer=str(exc)
+        )
+
+    if conteudo or anexos:
+        await repo.responder_staff(
+            ctx.user.claims, chamado_id, conteudo=conteudo, is_interna=interna, anexos=anexos
+        )
+    return _voltar(chamado_id)
+
+
+@router.post("/chamados/{chamado_id}/encerrar")
+async def encerrar(
+    request: Request,
+    chamado_id: str,
+    resolucao: str = Form(""),
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Encerra o chamado (→ RESOLVIDO). A **nota de solução** (opcional) vira uma
+    mensagem **pública** — visível ao solicitante, que então pode avaliar. Ação
+    de staff no escopo (RLS); as duas escritas rodam na mesma transação do request."""
+    resolucao = resolucao.strip()
+    if resolucao:
+        await repo.responder_staff(
+            ctx.user.claims, chamado_id, conteudo=resolucao, is_interna=False
+        )
+    await repo.alterar_status(ctx.user.claims, chamado_id, "RESOLVIDO")
     return _voltar(chamado_id)
 
 

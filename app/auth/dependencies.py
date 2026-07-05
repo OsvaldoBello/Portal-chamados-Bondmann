@@ -9,11 +9,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import logging
+
 from fastapi import Depends, HTTPException, Request, status
 
-from app.auth.session import ACCESS_COOKIE
+from app.auth.session import ACCESS_COOKIE, REFRESH_COOKIE, SessionTokens, set_session
 from app.db import rls_connection
 from app.security.jwt import TokenInvalido, get_verifier
+
+log = logging.getLogger("app.auth")
 
 ROLES = {"ADMIN", "OPERADOR", "CLIENTE"}
 
@@ -31,16 +35,27 @@ def _extract_token(request: Request) -> str | None:
 
 
 async def get_current_user(request: Request) -> CurrentUser:
-    """Exige usuário autenticado; 401 se ausente/expirado/inválido."""
+    """Exige usuário autenticado; 401 se ausente/expirado/inválido.
+
+    Se o access token estiver expirado/inválido mas houver refresh token válido,
+    **renova a sessão** via GoTrue (Seção 3.4), evitando forçar re-login a cada
+    expiração do access token (1h). Os novos tokens são guardados em
+    ``request.state.refreshed_session`` e gravados como cookies pelo
+    ``SessionRefreshMiddleware`` na resposta que sai.
+    """
     token = _extract_token(request)
-    if not token:
+    claims: dict | None = None
+    if token:
+        try:
+            claims = get_verifier().verify(token)
+        except TokenInvalido:
+            claims = None
+
+    if claims is None:
+        claims = await _try_refresh(request)
+
+    if claims is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Não autenticado.")
-    try:
-        claims = get_verifier().verify(token)
-    except TokenInvalido as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Sessão inválida."
-        ) from exc
 
     role = _resolve_role(claims)
     return CurrentUser(
@@ -49,6 +64,35 @@ async def get_current_user(request: Request) -> CurrentUser:
         role=role,
         claims=claims,
     )
+
+
+async def _try_refresh(request: Request) -> dict | None:
+    """Tenta renovar a sessão pelo refresh token.
+
+    Retorna os claims do novo access token, ou ``None`` se não houver refresh
+    token ou a renovação falhar. Guarda os novos tokens em
+    ``request.state.refreshed_session`` para o middleware persistir nos cookies.
+    Import tardio de ``ensure_supabase`` para não acoplar à init do cliente.
+    """
+    refresh = request.cookies.get(REFRESH_COOKIE)
+    if not refresh:
+        return None
+    try:
+        from app.auth.supabase_client import ensure_supabase
+
+        supabase = await ensure_supabase()
+        result = await supabase.auth.refresh_session(refresh)
+        session = getattr(result, "session", None)
+        if session is None:
+            return None
+        claims = get_verifier().verify(session.access_token)
+        request.state.refreshed_session = SessionTokens(
+            session.access_token, session.refresh_token
+        )
+        return claims
+    except Exception as exc:  # noqa: BLE001 — refresh falhou → tratado como não autenticado
+        log.info("refresh_session falhou: %s", type(exc).__name__)
+        return None
 
 
 async def get_optional_user(request: Request) -> CurrentUser | None:

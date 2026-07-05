@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Redefinir senha — Portal de Chamados Bondmann</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/anim.css">
+</head>
+<body class="font-sans bg-surface text-ink antialiased">
+  <div class="min-h-screen grid place-items-center p-6">
+    <div class="anim-pop w-full max-w-[420px] bg-white rounded-2xl shadow-card border border-line/60 p-8 sm:p-10">
+      <div class="flex items-center gap-2.5 select-none mb-8">
+        {% include "_logo.html" %}
+        <div class="leading-none">
+          <div class="font-display font-black tracking-tight text-lg text-navy">BONDMANN</div>
+          <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5 text-navy/80">QUÍMICA</div>
+        </div>
+      </div>
+
+      <h1 class="font-display font-bold text-2xl text-navy">Criar nova senha</h1>
+      <p class="text-muted text-sm mt-1.5 leading-relaxed">
+        Informe o código de 6 dígitos que enviamos por e-mail e escolha uma nova senha.
+      </p>
+
+      {% if info %}<p class="mt-6 rounded-lg bg-brandgreen/10 px-3.5 py-2.5 text-sm text-brandgreen-700">{{ info }}</p>{% endif %}
+      {% if erro %}<p class="mt-6 rounded-lg bg-pr_urgente/10 px-3.5 py-2.5 text-sm text-pr_urgente">{{ erro }}</p>{% endif %}
+
+      <form method="post" action="/redefinir-senha" class="mt-7 space-y-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label class="block">
+          <span class="block text-[13px] font-semibold text-navy mb-1.5">E-mail</span>
+          <input name="email" type="email" required autocomplete="email" value="{{ email or '' }}" placeholder="voce@bondmann.com.br"
+                 class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+        </label>
+        <label class="block">
+          <span class="block text-[13px] font-semibold text-navy mb-1.5">Código de verificação</span>
+          <input name="codigo" type="text" inputmode="numeric" autocomplete="one-time-code" required maxlength="10" placeholder="000000"
+                 class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-lg tracking-[0.4em] font-mono text-center placeholder:text-faint">
+        </label>
+        <label class="block">
+          <span class="block text-[13px] font-semibold text-navy mb-1.5">Nova senha</span>
+          <input name="senha" type="password" required autocomplete="new-password" minlength="8" placeholder="mínimo 8 caracteres"
+                 class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+        </label>
+        <label class="block">
+          <span class="block text-[13px] font-semibold text-navy mb-1.5">Confirmar nova senha</span>
+          <input name="senha2" type="password" required autocomplete="new-password" minlength="8" placeholder="repita a senha"
+                 class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+        </label>
+        <button type="submit"
+                class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-navy-900 text-white hover:bg-navy-700 shadow-soft w-full">
+          Redefinir senha
+        </button>
+      </form>
+
+      <p class="mt-6 text-center text-sm">
+        <a href="/esqueci-senha" class="text-navy-700 hover:text-navy font-medium">Reenviar código</a>
+        <span class="text-faint mx-2">·</span>
+        <a href="/login" class="text-navy-700 hover:text-navy font-medium">Voltar ao login</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>

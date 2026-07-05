@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from app.domain.sla_visual import estado_sla, humanizar_delta
+from app.domain.sla_visual import barra_sla, estado_sla, humanizar_delta
 
 BASE = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -57,3 +57,46 @@ def test_vencido_e_danger_pulsante():
 def test_sem_prazo_indefinido():
     s = estado_sla(BASE, None, agora=BASE)
     assert s.estado == "indefinido"
+
+
+# --------------------------------------------------------------------------
+# Barra de progresso (Fase 3): enche com o tempo; verde→amarelo(metade)→vermelho
+# --------------------------------------------------------------------------
+def test_barra_inicio_verde_e_quase_vazia():
+    created, limite = _janela(1, 23)  # 1h de 24h decorrida -> ~4% cheia, muito tempo
+    b = barra_sla(created, limite, agora=BASE)
+    assert b.estado == "ok"
+    assert b.pct <= 10 and b.pct >= 0
+    assert not b.pulsar
+
+
+def test_barra_amarela_a_partir_da_metade():
+    created, limite = _janela(12, 12)  # 12h de 24h -> 50% cheia, 50% restante
+    b = barra_sla(created, limite, agora=BASE)
+    # com <50% restante entra em warn (amarelo); ~50% cheia
+    assert b.estado == "warn"
+    assert 45 <= b.pct <= 55
+
+
+def test_barra_vermelha_perto_de_estourar():
+    created, limite = _janela(19, 1)  # janela 20h, resta 1h = 5% -> danger
+    b = barra_sla(created, limite, agora=BASE)
+    assert b.estado == "danger" and b.pulsar
+    assert b.pct >= 90
+
+
+def test_barra_vencida_cheia_e_pulsante():
+    b = barra_sla(BASE - timedelta(hours=10), BASE - timedelta(hours=1), agora=BASE)
+    assert b.estado == "danger" and b.pulsar
+    assert b.pct == 100
+    assert "Vencido" in b.texto
+
+
+def test_barra_resolvido_e_cheia_neutra():
+    b = barra_sla(BASE, BASE + timedelta(hours=1), resolvido_em=BASE, agora=BASE)
+    assert b.estado == "resolvido" and b.pct == 100
+
+
+def test_barra_sem_prazo_indefinida_vazia():
+    b = barra_sla(BASE, None, agora=BASE)
+    assert b.estado == "indefinido" and b.pct == 0

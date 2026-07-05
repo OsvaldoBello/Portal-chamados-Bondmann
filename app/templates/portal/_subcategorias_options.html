@@ -1,0 +1,5 @@
+{# Options do select de subcategoria — recarregado via HTMX ao trocar a categoria. #}
+<option value="">{% if subcategorias %}Selecione a subcategoria…{% else %}Escolha a categoria primeiro{% endif %}</option>
+{% for s in subcategorias %}
+<option value="{{ s.id }}" {% if form and s.id|string == form.get('subcategoria_id') %}selected{% endif %}>{{ s.nome }}</option>
+{% endfor %}

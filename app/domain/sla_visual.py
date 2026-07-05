@@ -24,6 +24,21 @@ class EstadoSLA:
     pulsar: bool   # vermelho piscante quando crítico/vencido
 
 
+@dataclass(frozen=True)
+class BarraSLA:
+    """Barra de progresso do prazo: enche conforme o tempo passa.
+
+    - ``pct``: quanto da janela já foi consumida (0–100) — o "quanto cheia".
+    - ``estado``: cor da barra (verde no início; **amarela a partir da metade**
+      do prazo; **vermelha** perto de estourar/estourada). Segue a descrição do
+      produto (verde → amarelo na metade → vermelho no fim).
+    """
+    estado: str   # 'ok' | 'warn' | 'danger' | 'resolvido' | 'indefinido'
+    pct: int      # 0..100 (fração já decorrida da janela)
+    texto: str
+    pulsar: bool
+
+
 def humanizar_delta(segundos: int) -> str:
     """Formata uma duração (segundos, sempre >= 0) como '1d 4h', '2h 10m', '35m'."""
     segundos = max(0, int(segundos))
@@ -62,3 +77,37 @@ def estado_sla(
     if frac < 0.25:
         return EstadoSLA("warn", texto, False)
     return EstadoSLA("ok", texto, False)
+
+
+def barra_sla(
+    created_at: Optional[datetime],
+    limite_resolucao: Optional[datetime],
+    resolvido_em: Optional[datetime] = None,
+    agora: Optional[datetime] = None,
+) -> BarraSLA:
+    """Barra de progresso do prazo de resolução (verde→amarelo na metade→vermelho).
+
+    ``pct`` é a fração já decorrida (0–100); a cor vem da fração **restante**:
+    verde enquanto sobra > 50%, amarelo entre 10% e 50%, vermelho abaixo de 10%
+    ou vencido (piscando)."""
+    agora = agora or datetime.now(timezone.utc)
+
+    if resolvido_em is not None:
+        return BarraSLA("resolvido", 100, "Resolvido", False)
+    if limite_resolucao is None or created_at is None:
+        return BarraSLA("indefinido", 0, "Sem prazo", False)
+
+    total = (limite_resolucao - created_at).total_seconds()
+    restante = (limite_resolucao - agora).total_seconds()
+    if restante <= 0:
+        return BarraSLA("danger", 100, f"Vencido há {humanizar_delta(-restante)}", True)
+
+    frac_rem = restante / total if total > 0 else 0.0
+    pct = int(round((1.0 - frac_rem) * 100))
+    pct = max(0, min(100, pct))
+    texto = f"{humanizar_delta(restante)} restantes"
+    if frac_rem < 0.10:
+        return BarraSLA("danger", pct, texto, True)
+    if frac_rem <= 0.50:  # "amarela a partir da metade" do prazo
+        return BarraSLA("warn", pct, texto, False)
+    return BarraSLA("ok", pct, texto, False)

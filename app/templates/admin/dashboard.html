@@ -1,11 +1,41 @@
 {% extends "admin/admin_base.html" %}
+{% from "portal/_macros.html" import estrelas %}
 {% set active = "kpis" %}
 {% block title %}Indicadores — Admin{% endblock %}
 {% block heading %}Indicadores{% endblock %}
 {% block content %}
 
+{# Escopo dos indicadores: TI escolhe o setor (ou todos) no dropdown; Admin de
+   setor é sempre escopado pela RLS ao seu departamento (chip estático). #}
+<div class="anim-fade mb-5 flex flex-wrap items-center gap-2.5 text-sm">
+  {% if is_ti is defined and is_ti and departamentos %}
+  {# O próprio "Indicadores de:" vira um seletor de setor. Auto-submete ao mudar. #}
+  <form method="get" action="/admin"
+        class="inline-flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-full bg-surface border border-line">
+    <svg class="w-4 h-4 text-brandgreen-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21"/></svg>
+    <label for="filtro-departamento" class="text-brandgreen-700 font-medium">Indicadores de:</label>
+    <select id="filtro-departamento" name="departamento" data-autosubmit
+            class="bg-transparent font-bold text-navy outline-none cursor-pointer pr-1">
+      <option value="" {% if not departamento_sel %}selected{% endif %}>Todos os setores</option>
+      {% for d in departamentos %}
+      <option value="{{ d.id }}" {% if departamento_sel == d.id|string %}selected{% endif %}>{{ d.nome }}</option>
+      {% endfor %}
+    </select>
+    <svg class="w-4 h-4 text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    <noscript><button type="submit" class="ml-1 text-xs underline">ver</button></noscript>
+  </form>
+  <span class="text-xs text-muted hidden sm:inline">Escolha um setor ou veja todos consolidados.</span>
+  {% else %}
+  <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface text-brandgreen-700 font-medium border border-line">
+    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21"/></svg>
+    Indicadores de: <strong>{{ escopo }}</strong>
+  </span>
+  <span class="text-xs text-muted hidden sm:inline">Você vê os resultados do seu setor (CSAT, SLA, rapidez e avaliações).</span>
+  {% endif %}
+</div>
+
 {# KPIs #}
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+<div class="anim-stagger grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
   {% macro kpi(rot, val, sub="") %}
   <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
     <div class="text-3xl font-display font-bold text-navy">{{ val }}</div>
@@ -45,12 +75,40 @@
   </div>
 </div>
 
+{# Últimas avaliações — feedback qualitativo do solicitante (CSAT + comentário) #}
+<div class="bg-white rounded-xl shadow-card border border-line/60 p-5 mt-5">
+  <h3 class="font-display font-bold text-navy mb-3">Últimas avaliações</h3>
+  {% if avaliacoes %}
+  <ul class="divide-y divide-line">
+    {% for a in avaliacoes %}
+    <li class="py-3 flex items-start gap-3">
+      <div class="shrink-0 pt-0.5">{{ estrelas(a.nota) }}</div>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm">
+          <a href="#" class="font-mono text-[12px] font-semibold text-brandgreen-700">{{ a.codigo }}</a>
+          <span class="text-muted">· {{ a.titulo }}</span>
+        </div>
+        {% if a.comentario %}
+        <p class="text-sm text-ink mt-0.5">“{{ a.comentario }}”</p>
+        {% else %}
+        <p class="text-xs text-faint mt-0.5">Sem comentário</p>
+        {% endif %}
+        <div class="text-[11px] text-muted mt-0.5">{{ a.solicitante or "—" }} · {{ fmt_dt(a.em) }}</div>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-sm text-muted">Ainda não há avaliações.</p>
+  {% endif %}
+</div>
+
 {# Dados inertes (não é script executável) lidos pelo admin.js — CSP-safe. #}
 <script type="application/json" id="chart-data">{{ graficos | tojson }}</script>
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/vendor/chart.umd.js"
-        integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG"></script>
+        integrity="sha384-lTmcC9q1sYPpJcGoGeaJxe41EOrXaOsDCTUo7qik8IC8mvK6XaBqRA19MqmAGprK"></script>
 <script src="/static/js/admin.js"></script>
 {% endblock %}

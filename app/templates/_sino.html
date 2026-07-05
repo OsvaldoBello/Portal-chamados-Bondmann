@@ -1,0 +1,20 @@
+{# Sino de notificações da topbar (compartilhado). Abre um dropdown que carrega
+   a lista por HTMX na 1ª abertura; toggle/fechar por shell.js (vanilla, CSP-safe). #}
+<div class="relative">
+  <button data-menu-toggle="notif"
+          hx-get="/notificacoes" hx-target="#notif-list" hx-trigger="click once" hx-swap="innerHTML"
+          class="relative w-10 h-10 grid place-items-center rounded-lg text-muted hover:bg-surface hover:text-navy transition"
+          aria-label="Notificações" aria-haspopup="true">
+    <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.857 17.082a23.85 23.85 0 005.454-1.31A8.97 8.97 0 0118 9.75V9A6 6 0 006 9v.75a8.97 8.97 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.26 24.26 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/></svg>
+    {# O ponto acende/pulsa via notificacoes.js quando chega um evento Realtime. #}
+    <span data-notif-dot class="absolute top-2 right-2 w-2 h-2 rounded-full bg-sla-danger ring-2 ring-white"></span>
+  </button>
+  <div data-menu="notif" class="hidden absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-card border border-line overflow-hidden z-30">
+    <div class="px-4 py-3 border-b border-line">
+      <span class="font-display font-bold text-sm text-navy">Notificações</span>
+    </div>
+    <div id="notif-list" class="max-h-96 overflow-y-auto">
+      <p class="px-4 py-6 text-center text-sm text-muted">Carregando…</p>
+    </div>
+  </div>
+</div>

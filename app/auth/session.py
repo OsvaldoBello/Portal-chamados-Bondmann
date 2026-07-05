@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from starlette.responses import Response
 
 from app.config import get_settings
@@ -52,3 +54,20 @@ def set_session(response: Response, tokens: SessionTokens) -> None:
 def clear_session(response: Response) -> None:
     response.delete_cookie(ACCESS_COOKIE, path="/")
     response.delete_cookie(REFRESH_COOKIE, path="/")
+
+
+class SessionRefreshMiddleware(BaseHTTPMiddleware):
+    """Persiste nos cookies uma sessão renovada por dependency (Seção 3.4).
+
+    Quando ``get_current_user`` renova o access token via refresh, guarda os
+    novos tokens em ``request.state.refreshed_session``. Como as rotas retornam
+    suas próprias ``Response`` (ex.: ``TemplateResponse``), os cookies precisam
+    ser gravados aqui, na resposta que efetivamente sai.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        tokens = getattr(request.state, "refreshed_session", None)
+        if tokens is not None:
+            set_session(response, tokens)
+        return response

@@ -12,3 +12,35 @@
     ⏱ {{ s.texto }}
   </span>
 {% endmacro %}
+
+{# Barra de progresso do prazo de resolução (Fase 3): enche com o tempo;
+   verde no início → amarela na metade → vermelha perto de estourar/estourada.
+   A largura é aplicada por JS (shell.js lê data-sla-pct) — CSP não permite
+   style="" inline. #}
+{% macro sla_barra(chamado) %}
+  {% set b = barra_sla(chamado.created_at, chamado.limite_resolucao, chamado.resolvido_em) %}
+  {% set fill = {
+      'ok': 'bg-sla-ok',
+      'warn': 'bg-sla-warn',
+      'danger': 'bg-sla-danger',
+      'resolvido': 'bg-st_resolv',
+      'indefinido': 'bg-slate-300',
+  } %}
+  {% set txt = {
+      'ok': 'text-sla-ok',
+      'warn': 'text-sla-warn',
+      'danger': 'text-sla-danger',
+      'resolvido': 'text-slate-500',
+      'indefinido': 'text-slate-400',
+  } %}
+  <div>
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-[11px] font-semibold text-muted uppercase tracking-wide">Prazo de resolução</span>
+      <span class="text-[11px] font-semibold {{ txt[b.estado] }}">⏱ {{ b.texto }}</span>
+    </div>
+    <div class="relative h-2 rounded-full bg-slate-100 overflow-hidden">
+      <div class="absolute inset-y-0 left-0 rounded-full {{ fill[b.estado] }}{% if b.pulsar %} animate-pulse{% endif %}"
+           data-sla-pct="{{ b.pct }}"></div>
+    </div>
+  </div>
+{% endmacro %}

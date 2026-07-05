@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.main import app
 from app.repositories.admin import get_admin_repo
+from app.repositories.chamados import get_chamados_repo
 
 TI = "77777777-7777-7777-7777-777777777777"
 
@@ -17,6 +18,20 @@ TI = "77777777-7777-7777-7777-777777777777"
 def _user(uid=TI, role="ADMIN"):
     return lambda: CurrentUser(id=uid, email="ti@bond.com", role=role,
                                claims={"sub": uid, "app_metadata": {"role": role}})
+
+
+class FakePerfilRepo:
+    """Fake de ChamadosRepo só com ``perfil`` — usado pelo admin_context para
+    resolver acesso/escopo (TI vs Admin de setor vs operador)."""
+
+    def __init__(self, *, is_ti=True, role="ADMIN", departamento="TI"):
+        self._perfil = {
+            "id": TI, "nome": "Fulano", "role": role,
+            "departamento": departamento, "is_ti": is_ti, "empresa_id": "e1",
+        }
+
+    async def perfil(self, claims):
+        return self._perfil
 
 
 class FakeAdmin:
@@ -27,22 +42,27 @@ class FakeAdmin:
     async def is_ti(self, claims):
         return self._ti
 
-    async def kpis(self, claims):
+    async def kpis(self, claims, *, departamento_id=None):
         return {"total": 10, "abertos": 4, "resolvidos": 6, "resolvidos_no_prazo": 5,
                 "conformidade_sla": 83.3, "csat_media": 4.5, "csat_respostas": 4,
                 "tma_horas": 12.0, "tma_seg": 43200}
 
-    async def por_status(self, claims):
+    async def por_status(self, claims, *, departamento_id=None):
         return {"NOVO": 2, "EM_ATENDIMENTO": 2, "AGUARDANDO": 0, "RESOLVIDO": 6}
 
-    async def csat_distribuicao(self, claims):
+    async def csat_distribuicao(self, claims, *, departamento_id=None):
         return {1: 0, 2: 0, 3: 1, 4: 1, 5: 2}
 
-    async def por_departamento(self, claims):
+    async def por_departamento(self, claims, *, departamento_id=None):
         return [{"departamento": "TI", "total": 7}, {"departamento": "RH", "total": 3}]
 
-    async def produtividade(self, claims):
+    async def produtividade(self, claims, *, departamento_id=None):
         return [{"operador": "Op TI", "resolvidos": 6, "atribuidos": 8}]
+
+    async def avaliacoes_recentes(self, claims, *, limite=8, departamento_id=None):
+        return [{"codigo": "BOND-2026-00001", "titulo": "Impressora", "nota": 5,
+                 "comentario": "Ótimo atendimento", "solicitante": "Ana",
+                 "em": datetime(2026, 7, 1, tzinfo=timezone.utc)}]
 
     async def departamentos(self, claims):
         return [{"id": "d1", "nome": "TI", "ativo": True}]
@@ -51,8 +71,20 @@ class FakeAdmin:
         return [{"id": "c1", "nome": "Suporte", "descricao": None, "ativo": True}]
 
     async def planos(self, claims):
-        return [{"nome": "Padrão Interno", "resposta_alta_min": 120, "resolucao_alta_min": 1440,
+        return [{"id": "p1", "nome": "Padrão Interno",
+                 "resposta_baixa_min": 480, "resposta_media_min": 240, "resposta_alta_min": 120,
+                 "resolucao_baixa_min": 2880, "resolucao_media_min": 1440, "resolucao_alta_min": 1440,
                  "resposta_default_min": 720, "resolucao_default_min": 1440, "ativo": True}]
+
+    async def atualizar_plano(self, claims, plano_id, *, campos):
+        self.acoes.append(("plano", plano_id, campos))
+
+    async def usuarios(self, claims):
+        return [{"id": "u1", "nome": "Rita Nunes", "role": "OPERADOR", "ativo": True,
+                 "departamento": "RH", "departamento_id": "d1"}]
+
+    async def atualizar_papel(self, claims, user_id, *, role, departamento_id):
+        self.acoes.append(("papel", user_id, role, departamento_id))
 
     async def criar_departamento(self, claims, nome):
         self.acoes.append(("dep", nome))
@@ -72,19 +104,22 @@ class FakeAdmin:
                  "solicitante": "Ana", "operador": "Op TI",
                  "created_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
                  "limite_resolucao": None, "respondido_em": None, "resolvido_em": None,
-                 "avaliacao_nota": 5}]
+                 "avaliacao_nota": 5, "avaliacao_em": datetime(2026, 7, 2, tzinfo=timezone.utc),
+                 "avaliacao_comentario": "Resolveu rápido, obrigado"}]
 
 
 @contextmanager
-def admin_client(repo, user=None):
+def admin_client(repo, user=None, perfil=None):
     app.dependency_overrides[get_current_user] = user or _user()
     app.dependency_overrides[get_admin_repo] = lambda: repo
+    app.dependency_overrides[get_chamados_repo] = lambda: perfil or FakePerfilRepo()
     try:
         with TestClient(app, base_url="https://testserver") as c:
             yield c
     finally:
         app.dependency_overrides.pop(get_current_user, None)
         app.dependency_overrides.pop(get_admin_repo, None)
+        app.dependency_overrides.pop(get_chamados_repo, None)
 
 
 def _csrf(c):
@@ -92,11 +127,28 @@ def _csrf(c):
     return c.cookies.get("csrf_token")
 
 
-def test_nao_ti_recebe_403():
-    with admin_client(FakeAdmin(is_ti=False)) as c:
+def test_operador_recebe_403():
+    # Operador (sem ADMIN) não acessa o painel de relatórios.
+    perfil = FakePerfilRepo(is_ti=False, role="OPERADOR", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="OPERADOR"), perfil=perfil) as c:
         assert c.get("/admin").status_code == 403
         assert c.get("/admin/gestao").status_code == 403
         assert c.get("/admin/export/csv").status_code == 403
+
+
+def test_admin_de_setor_ve_dashboard_mas_nao_gere_catalogos():
+    # ADMIN do RH (não-TI): vê os indicadores do seu setor, mas gestão é só do TI.
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin")
+        assert r.status_code == 200
+        assert "RH" in r.text                       # escopo do setor no painel
+        assert c.get("/admin/export/csv").status_code == 200  # export escopado por RLS
+        assert c.get("/admin/gestao").status_code == 403      # gestão de catálogos = TI
+        t = _csrf(c)
+        # POST de gestão também barra o admin de setor.
+        assert c.post("/admin/departamentos", data={"nome": "X"},
+                      headers={"X-CSRF-Token": t}, follow_redirects=False).status_code == 403
 
 
 def test_dashboard_mostra_kpis_e_dados_grafico():
@@ -107,6 +159,33 @@ def test_dashboard_mostra_kpis_e_dados_grafico():
     assert "4.5" in r.text                    # CSAT médio
     assert 'id="chart-data"' in r.text        # JSON inerte p/ Chart.js
     assert "/static/vendor/chart.umd.js" in r.text
+
+
+def test_ti_dashboard_tem_seletor_de_departamento():
+    # TI pode alternar o setor exibido (ou ver "Todos os setores" consolidado).
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert 'name="departamento"' in r.text
+    assert "Todos os setores" in r.text
+    assert 'value="d1"' in r.text
+
+
+def test_ti_dashboard_filtra_por_departamento():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin?departamento=d1")
+    assert r.status_code == 200
+    # O setor escolhido fica selecionado no dropdown do topo.
+    assert 'value="d1" selected' in r.text
+
+
+def test_admin_de_setor_nao_tem_seletor():
+    # Admin de setor é sempre escopado pela RLS ao seu departamento — sem seletor.
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert 'name="departamento"' not in r.text
 
 
 def test_gestao_lista_catalogos():
@@ -127,6 +206,66 @@ def test_criar_departamento():
     assert ("dep", "Financeiro") in repo.acoes
 
 
+def test_gestao_edita_plano_sla():
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        r = c.get("/admin/gestao")
+        assert 'action="/admin/planos/p1"' in r.text   # form editável do plano
+        assert 'name="resposta_alta_min"' in r.text
+        t = _csrf(c)
+        resp = c.post("/admin/planos/p1",
+                      data={"resposta_alta_min": "90", "resolucao_alta_min": "600",
+                            "resposta_media_min": "", "resposta_baixa_min": "480",
+                            "resolucao_media_min": "1440", "resolucao_baixa_min": "2880",
+                            "resposta_default_min": "720", "resolucao_default_min": "1440"},
+                      headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert resp.status_code == 303
+    plano = next(a for a in repo.acoes if a[0] == "plano")
+    assert plano[1] == "p1"
+    assert plano[2]["resposta_alta_min"] == 90        # int parseado
+    assert plano[2]["resposta_media_min"] is None     # vazio → None (usa default)
+
+
+def test_usuarios_lista_e_form_de_criar():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin/usuarios")
+    assert r.status_code == 200
+    assert "Nova conta" in r.text
+    assert "Rita Nunes" in r.text
+    assert 'action="/admin/usuarios"' in r.text
+
+
+def test_usuarios_restrito_ao_ti():
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        assert c.get("/admin/usuarios").status_code == 403
+
+
+def test_mudar_papel_grava_no_perfil():
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/usuarios/u1/papel",
+                   data={"papel": "ADMIN", "departamento_id": "d1"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ("papel", "u1", "ADMIN", "d1") in repo.acoes
+
+
+def test_criar_usuario_sem_service_role_avisa():
+    # Sem service_role configurada, a criação degrada com mensagem (não quebra).
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/usuarios",
+                   data={"nome": "Novo", "email": "novo@bondmann.com.br",
+                         "senha": "12345678", "papel": "ADMIN", "departamento_id": "d1"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert "/admin/usuarios" in r.headers["location"]
+    assert not any(a[0] == "papel" for a in repo.acoes)   # não promoveu (conta não criada)
+
+
 def test_export_csv():
     with admin_client(FakeAdmin()) as c:
         r = c.get("/admin/export/csv")
@@ -134,4 +273,6 @@ def test_export_csv():
     assert r.headers["content-type"].startswith("text/csv")
     assert "attachment" in r.headers["content-disposition"]
     assert "codigo,titulo,status" in r.text
+    assert "avaliacao_comentario" in r.text          # feedback no relatório do TI
+    assert "Resolveu rápido, obrigado" in r.text
     assert "BOND-2026-00001" in r.text

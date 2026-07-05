@@ -7,6 +7,7 @@ hard-coded — ver REGRA DURA da Seção 6.2 do plano mestre.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
 from pydantic import Field
@@ -55,6 +56,16 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"
+
+    @property
+    def is_serverless(self) -> bool:
+        """True no ambiente serverless da Vercel (funções efêmeras, Seção 2.1).
+
+        A Vercel injeta ``VERCEL=1`` no runtime. Nesse modo o pool asyncpg deve
+        rodar com ``min_size=0`` e teto restrito para não vazar conexões ociosas
+        contra o Supavisor (ver ``app/db.py``).
+        """
+        return bool(os.environ.get("VERCEL"))
 
     @property
     def jwks_url(self) -> str:

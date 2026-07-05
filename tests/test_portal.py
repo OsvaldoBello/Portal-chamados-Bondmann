@@ -34,7 +34,7 @@ def _cliente() -> CurrentUser:
 class FakeRepo:
     """Implementa a superfície usada pelas rotas do portal."""
 
-    def __init__(self, *, chamado=None, categorias=None, departamentos=None):
+    def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None):
         self._chamado = chamado
         self._categorias = categorias or [{"id": "c1", "nome": "Logística / Entrega"}]
         self._departamentos = departamentos or [
@@ -42,8 +42,13 @@ class FakeRepo:
             {"id": "d2", "nome": "RH"},
             {"id": "d3", "nome": "Marketing"},
         ]
+        # subcategorias por categoria_id
+        self._subcategorias = subcategorias or {
+            "c1": [{"id": "s1", "nome": "Sub A"}, {"id": "s2", "nome": "Sub B"}]
+        }
         self.avaliacoes: list[dict] = []
         self.criados: list[dict] = []
+        self.mensagens_criadas: list[dict] = []
 
     async def perfil(self, claims):
         return {"id": UID, "nome": "Cliente Teste", "role": "CLIENTE", "empresa_id": EMPRESA}
@@ -73,6 +78,15 @@ class FakeRepo:
     async def departamentos_ativos(self, claims):
         return self._departamentos
 
+    async def subcategorias_ativas(self, claims, categoria_id):
+        return self._subcategorias.get(categoria_id, [])
+
+    async def subcategoria_valida(self, claims, *, categoria_id, subcategoria_id):
+        return any(
+            str(s["id"]) == str(subcategoria_id)
+            for s in self._subcategorias.get(categoria_id, [])
+        )
+
     async def criar(self, claims, **kwargs):
         self.criados.append(kwargs)
         return {"id": "novo-id", "codigo": "BOND-2026-00002"}
@@ -84,7 +98,10 @@ class FakeRepo:
             "avaliacao_em": datetime(2026, 6, 30, 15, 0, tzinfo=timezone.utc),
         }
 
-    async def adicionar_mensagem(self, claims, chamado_id, *, remetente_id, conteudo):
+    async def adicionar_mensagem(self, claims, chamado_id, *, remetente_id, conteudo, anexos=None):
+        self.mensagens_criadas.append(
+            {"chamado_id": chamado_id, "conteudo": conteudo, "anexos": anexos or []}
+        )
         return {"id": "m1", "created_at": datetime.now(timezone.utc)}
 
 
@@ -174,23 +191,114 @@ def test_criar_sem_departamento_retorna_400():
     assert repo.criados == []  # nada criado sem destino
 
 
-def test_criar_com_departamento_redireciona_e_repassa_destino():
+def _abertura_valida(**over):
+    """Payload de abertura com todos os campos obrigatórios preenchidos."""
+    base = {
+        "titulo": "Acesso ao sistema de RH",
+        "descricao": "Preciso de acesso",
+        "departamento_id": "d2",
+        "categoria_id": "c1",
+        "subcategoria_id": "s1",
+        "prioridade": "MEDIA",
+    }
+    base.update(over)
+    return base
+
+
+def test_criar_com_todos_campos_redireciona_e_repassa_destino():
     repo = FakeRepo()
     with portal_client(repo) as client:
         token = _csrf_token(client)
         resp = client.post(
             "/portal/chamados",
-            data={
-                "titulo": "Acesso ao sistema de RH",
-                "descricao": "Preciso de acesso",
-                "departamento_id": "d2",
-            },
+            data=_abertura_valida(),
             headers={"X-CSRF-Token": token},
             follow_redirects=False,
         )
     assert resp.status_code == 303
     assert len(repo.criados) == 1
     assert repo.criados[0]["departamento_id"] == "d2"
+    assert repo.criados[0]["categoria_id"] == "c1"
+    assert repo.criados[0]["subcategoria_id"] == "s1"
+    # Sem arquivos: nenhuma mensagem inicial de anexo.
+    assert repo.mensagens_criadas == []
+
+
+def test_criar_sem_categoria_retorna_400():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_valida(categoria_id="", subcategoria_id=""),
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "categoria" in resp.text.lower()
+    assert repo.criados == []
+
+
+def test_criar_sem_subcategoria_retorna_400():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_valida(subcategoria_id=""),
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "subcategoria" in resp.text.lower()
+    assert repo.criados == []
+
+
+def test_criar_subcategoria_de_outra_categoria_retorna_400():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            # s99 não pertence à categoria c1 → defesa em profundidade
+            data=_abertura_valida(subcategoria_id="s99"),
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert repo.criados == []
+
+
+def test_subcategorias_fragmento_lista_options_da_categoria():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/subcategorias", params={"categoria_id": "c1"})
+    assert resp.status_code == 200
+    assert "Sub A" in resp.text and "Sub B" in resp.text
+    assert 'value="s1"' in resp.text
+    # É só o fragmento de <option>s (sem o layout completo).
+    assert "Meus chamados" not in resp.text
+
+
+def test_subcategorias_fragmento_sem_categoria_pede_escolha():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/subcategorias")
+    assert resp.status_code == 200
+    assert "Escolha a categoria primeiro" in resp.text
+
+
+def test_criar_com_anexo_tipo_invalido_retorna_422_e_nao_cria():
+    """Anexo de tipo não permitido é barrado ANTES de criar o chamado
+    (validação sem efeito colateral)."""
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_valida(),
+            files={"arquivos": ("notas.txt", b"conteudo qualquer", "text/plain")},
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 422
+    assert repo.criados == []  # nenhum chamado criado por causa do anexo inválido
 
 
 def test_mensagens_fragmento_renderiza_sem_layout():

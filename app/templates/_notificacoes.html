@@ -1,0 +1,27 @@
+{# Lista do sino de notificações — carregada por HTMX. Escopo já vem da RLS. #}
+{% if itens %}
+<div class="divide-y divide-line/70">
+  {% for i in itens %}
+  {% set s = estado_sla(i.created_at, i.limite_resolucao, i.resolvido_em) %}
+  <a href="{{ base }}/{{ i.id }}" class="flex gap-3 px-4 py-3 hover:bg-surface transition">
+    <span class="mt-1.5 w-2 h-2 rounded-full shrink-0
+      {%- if i.status == 'RESOLVIDO' %} bg-brandgreen-600
+      {%- elif s.estado == 'danger' %} bg-sla-danger
+      {%- elif i.status == 'NOVO' %} bg-st_novo
+      {%- else %} bg-st_aguard{% endif %}"></span>
+    <div class="min-w-0">
+      <div class="text-sm font-medium text-navy leading-snug truncate">{{ i.titulo }}</div>
+      <div class="text-xs text-muted mt-0.5">
+        <span class="font-mono text-[11px]">{{ i.codigo }}</span>
+        ·
+        {% if i.status == 'RESOLVIDO' %}Resolvido — avalie o atendimento
+        {% elif s.estado == 'danger' %}<span class="text-sla-danger font-semibold">SLA {{ s.texto }}</span>
+        {% else %}{{ STATUS_META[i.status].label }}{% endif %}
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<p class="px-4 py-8 text-center text-sm text-muted">Nada pendente por aqui 🎉</p>
+{% endif %}

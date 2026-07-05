@@ -1,6 +1,6 @@
 {% extends "workspace/workspace_base.html" %}
 {% from "portal/_macros.html" import status_badge, prioridade_badge %}
-{% from "workspace/_macros.html" import sla_chip %}
+{% from "workspace/_macros.html" import sla_chip, sla_barra %}
 {% set active = "fila" %}
 {% block title %}{{ chamado.codigo }} — Atendimento{% endblock %}
 {% block heading %}Atendimento{% endblock %}
@@ -30,6 +30,9 @@
         </div>
       </div>
       <p class="mt-4 text-sm text-ink whitespace-pre-line">{{ chamado.descricao }}</p>
+      {% if chamado.status != 'RESOLVIDO' %}
+      <div class="mt-5">{{ sla_barra(chamado) }}</div>
+      {% endif %}
     </div>
 
     {# ---------- Conversa (Realtime + polling) ---------- #}
@@ -47,12 +50,23 @@
       </div>
 
       {% if chamado.status != 'RESOLVIDO' %}
-      {# Composer: mensagem pública OU nota interna (fundo amarelo via workspace.js) #}
+      {% if erro_composer %}
+      <div class="mt-4 rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-sm text-red-700">{{ erro_composer }}</div>
+      {% endif %}
+      {# Composer: mensagem pública OU nota interna (fundo amarelo via workspace.js).
+         multipart: aceita anexos (validação server-side — Seção 3.9). #}
       <form id="composer" method="post" action="/workspace/chamados/{{ chamado.id }}/mensagens"
+            enctype="multipart/form-data"
             class="mt-5 space-y-3 rounded-lg ring-1 ring-transparent p-3 -m-1 transition-colors">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <textarea name="conteudo" rows="3" required placeholder="Escreva a resposta…"
+        <textarea name="conteudo" rows="3" placeholder="Escreva a resposta…"
                   class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm resize-none"></textarea>
+        <div class="flex items-center gap-2 text-xs text-muted">
+          <input type="file" name="arquivos" multiple
+                 accept=".pdf,.jpg,.jpeg,.png,.mp4,.docx,.xlsx"
+                 class="block text-xs text-muted file:mr-3 file:rounded-lg file:border-0 file:bg-surface2 file:px-3 file:py-1.5 file:text-navy file:font-semibold">
+          <span>Até 5 arquivos · máx. 10MB · pdf, jpg, png, mp4, docx, xlsx</span>
+        </div>
         <div class="flex items-center justify-between">
           <label class="flex items-center gap-2 text-sm text-muted select-none">
             <input type="checkbox" id="is-interna" name="is_interna" value="1"
@@ -68,49 +82,95 @@
 
   {# ---------- Coluna de ações ---------- #}
   <div class="space-y-4">
+    {% if chamado.status == 'NOVO' %}
+    {# Iniciar atendimento: assume o chamado e move para "Em atendimento". #}
+    <form method="post" action="/workspace/chamados/{{ chamado.id }}/iniciar">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit"
+              class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 shadow-soft transition">
+        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"/></svg>
+        Iniciar atendimento
+      </button>
+    </form>
+    {% endif %}
+
+    {% if chamado.status != 'RESOLVIDO' %}
+    {# Encerramento em destaque (didático): a nota de solução vai ao solicitante. #}
+    <div class="bg-brandgreen-600/5 rounded-xl shadow-card border-2 border-brandgreen-600/40 p-5">
+      <div class="flex items-center gap-2 mb-1">
+        <svg class="w-5 h-5 text-brandgreen-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <h3 class="font-display font-bold text-navy">Encerrar chamado</h3>
+      </div>
+      <p class="text-xs text-muted mb-3 leading-relaxed">
+        Descreva a <strong>solução aplicada</strong>. Ela é enviada ao solicitante como resposta e o
+        chamado é marcado como <strong>Resolvido</strong> — ele poderá então avaliar o atendimento.
+      </p>
+      <form method="post" action="/workspace/chamados/{{ chamado.id }}/encerrar" class="space-y-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <textarea name="resolucao" rows="3"
+                  placeholder="Ex.: Substituído o sensor do dosador; linha 3 operando normalmente. Qualquer dúvida, reabra o chamado."
+                  class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-brandgreen-600 outline-none text-sm resize-none placeholder:text-faint"></textarea>
+        <button type="submit"
+                class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-brandgreen-600 text-white text-sm font-semibold hover:bg-brandgreen-700 shadow-soft transition">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12.75l6 6 9-13.5"/></svg>
+          Encerrar e notificar o solicitante
+        </button>
+      </form>
+    </div>
+    {% endif %}
+
     <div class="bg-white rounded-xl shadow-card border border-line/60 p-5 space-y-4">
       <h3 class="font-display font-bold text-navy">Ações</h3>
 
       <form method="post" action="/workspace/chamados/{{ chamado.id }}/status" class="space-y-1.5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="block text-[13px] font-semibold text-navy">Status</label>
-        <div class="flex gap-2">
-          <select name="novo_status" class="flex-1 px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
-            {% for s in status_validos %}
-            <option value="{{ s }}" {% if s == chamado.status %}selected{% endif %}>{{ STATUS_META[s].label }}</option>
-            {% endfor %}
-          </select>
-          <button class="px-3 py-2 rounded-lg bg-surface2 text-navy text-sm font-semibold hover:bg-line">OK</button>
-        </div>
+        <select name="novo_status" data-autosubmit class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+          {% for s in status_validos %}
+          <option value="{{ s }}" {% if s == chamado.status %}selected{% endif %}>{{ STATUS_META[s].label }}</option>
+          {% endfor %}
+        </select>
       </form>
 
       <form method="post" action="/workspace/chamados/{{ chamado.id }}/prioridade" class="space-y-1.5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="block text-[13px] font-semibold text-navy">Prioridade</label>
-        <div class="flex gap-2">
-          <select name="nova_prioridade" class="flex-1 px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
-            {% for p in prioridades %}
-            <option value="{{ p }}" {% if p == chamado.prioridade %}selected{% endif %}>{{ PRIORIDADE_META[p].label }}</option>
-            {% endfor %}
-          </select>
-          <button class="px-3 py-2 rounded-lg bg-surface2 text-navy text-sm font-semibold hover:bg-line">OK</button>
-        </div>
+        <select name="nova_prioridade" data-autosubmit class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+          {% for p in prioridades %}
+          <option value="{{ p }}" {% if p == chamado.prioridade %}selected{% endif %}>{{ PRIORIDADE_META[p].label }}</option>
+          {% endfor %}
+        </select>
         <p class="text-[11px] text-muted">Alterar a prioridade recalcula os prazos de SLA.</p>
       </form>
 
       <form method="post" action="/workspace/chamados/{{ chamado.id }}/atribuir" class="space-y-1.5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="block text-[13px] font-semibold text-navy">Operador responsável</label>
-        <div class="flex gap-2">
-          <select name="operador_id" class="flex-1 px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
-            <option value="">— Sem operador —</option>
-            {% for op in operadores %}
-            <option value="{{ op.id }}" {% if op.id|string == chamado.operador_id|string %}selected{% endif %}>{{ op.nome }}{% if op.departamento %} ({{ op.departamento }}){% endif %}</option>
-            {% endfor %}
-          </select>
-          <button class="px-3 py-2 rounded-lg bg-surface2 text-navy text-sm font-semibold hover:bg-line">OK</button>
-        </div>
+        <select name="operador_id" data-autosubmit class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+          <option value="">— Sem operador —</option>
+          {% for op in operadores %}
+          <option value="{{ op.id }}" {% if op.id|string == chamado.operador_id|string %}selected{% endif %}>{{ op.nome }}{% if op.departamento %} ({{ op.departamento }}){% endif %}</option>
+          {% endfor %}
+        </select>
+        <p class="text-[11px] text-muted">Apenas o staff do setor <strong>{{ chamado.departamento or "—" }}</strong> pode ser responsável.</p>
       </form>
+
+      {% if perfil.is_ti %}
+      {# Repasse entre departamentos — exclusivo do TI (RLS reforça no banco). #}
+      <form method="post" action="/workspace/chamados/{{ chamado.id }}/transferir" class="space-y-1.5 pt-1 border-t border-line/60">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label class="block text-[13px] font-semibold text-navy pt-3">Repassar para outro departamento</label>
+        <select name="departamento_id" data-autosubmit class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+          <option value="">— Manter em {{ chamado.departamento or "—" }} —</option>
+          {% for d in departamentos %}
+          {% if d.id|string != chamado.departamento_id|string %}
+          <option value="{{ d.id }}">{{ d.nome }}</option>
+          {% endif %}
+          {% endfor %}
+        </select>
+        <p class="text-[11px] text-muted">Só o TI repassa. O responsável atual é removido ao trocar de setor.</p>
+      </form>
+      {% endif %}
     </div>
 
     {% if chamado.avaliacao_nota %}
@@ -127,8 +187,7 @@
 {% block scripts %}
 <script src="/static/js/workspace.js"></script>
 {% if supabase_url and anon_key and access_token %}
-<script src="/static/vendor/supabase.min.js"
-        integrity="sha384-8ljL080xacUYrqBXUJRcP68fd1dVCh9qK/xi9QMzxUgOVNycXp0s6mBZAjBMp9W0"></script>
+{# chat.js liga o Realtime da conversa; supabase-js já é carregado pelo workspace_base. #}
 <script src="/static/js/chat.js"></script>
 {% endif %}
 {% endblock %}

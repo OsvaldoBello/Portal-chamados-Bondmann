@@ -1,7 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "fastapi",
-  "functions": {
-    "app/main.py": { "maxDuration": 30 }
-  }
+  "version": 2,
+  "builds": [
+    { "src": "app/static/**", "use": "@vercel/static" },
+    { "src": "app/main.py", "use": "@vercel/python" }
+  ],
+  "routes": [
+    { "src": "/static/(.*)", "dest": "/app/static/$1" },
+    { "src": "/(.*)", "dest": "/app/main.py" }
+  ]
 }

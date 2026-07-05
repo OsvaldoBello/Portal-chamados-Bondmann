@@ -31,6 +31,16 @@ class CSRFProtect:
         """Gera um token CSRF assinado (valor aleatório + assinatura)."""
         return self._serializer.dumps(secrets.token_urlsafe(32))
 
+    def get_or_issue(self, request: Request) -> str:
+        """Reusa o cookie CSRF **válido** se já existir; só emite um novo quando
+        ausente/adulterado. Evita rotacionar o token a cada render — a rotação
+        fazia o token do formulário visível divergir do cookie (ex.: página
+        restaurada do cache), causando 'CSRF inválido ou ausente' ao submeter."""
+        existing = request.cookies.get(CSRF_COOKIE)
+        if self._unsign(existing):
+            return existing
+        return self.issue()
+
     def _unsign(self, token: str | None) -> str | None:
         if not token:
             return None

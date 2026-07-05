@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Esqueci minha senha — Portal de Chamados Bondmann</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/anim.css">
+</head>
+<body class="font-sans bg-surface text-ink antialiased">
+  <div class="min-h-screen grid place-items-center p-6">
+    <div class="anim-pop w-full max-w-[420px] bg-white rounded-2xl shadow-card border border-line/60 p-8 sm:p-10">
+      <div class="flex items-center gap-2.5 select-none mb-8">
+        {% include "_logo.html" %}
+        <div class="leading-none">
+          <div class="font-display font-black tracking-tight text-lg text-navy">BONDMANN</div>
+          <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5 text-navy/80">QUÍMICA</div>
+        </div>
+      </div>
+
+      <h1 class="font-display font-bold text-2xl text-navy">Esqueci minha senha</h1>
+      <p class="text-muted text-sm mt-1.5 leading-relaxed">
+        Informe seu e-mail corporativo. Enviaremos um <strong>código de 6 dígitos</strong>
+        para você criar uma nova senha.
+      </p>
+
+      {% if erro %}<p class="mt-6 rounded-lg bg-pr_urgente/10 px-3.5 py-2.5 text-sm text-pr_urgente">{{ erro }}</p>{% endif %}
+
+      <form method="post" action="/esqueci-senha" class="mt-7 space-y-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label class="block">
+          <span class="block text-[13px] font-semibold text-navy mb-1.5">E-mail corporativo</span>
+          <div class="relative">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-faint"><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"/></svg></span>
+            <input name="email" type="email" required autocomplete="email" placeholder="voce@bondmann.com.br"
+                   class="w-full pl-10 pr-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+          </div>
+        </label>
+        <button type="submit"
+                class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-navy-900 text-white hover:bg-navy-700 shadow-soft w-full">
+          Enviar código
+        </button>
+      </form>
+
+      <p class="mt-7 text-center text-sm">
+        <a href="/login" class="text-navy-700 hover:text-navy font-medium">← Voltar ao login</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>

@@ -19,7 +19,7 @@
         {{ status_badge(chamado.status) }}
         <span class="text-muted">Prioridade: {{ prioridade_badge(chamado.prioridade) }}</span>
         <span class="inline-flex items-center gap-1 rounded-full bg-navy-100 px-2 py-0.5 text-xs font-semibold text-navy">{{ chamado.departamento or "—" }}</span>
-        <span class="text-muted">Categoria: {{ chamado.categoria or "—" }}</span>
+        <span class="text-muted">Categoria: {{ chamado.categoria or "—" }}{% if chamado.subcategoria %} › {{ chamado.subcategoria }}{% endif %}</span>
       </div>
     </div>
     <div class="text-right text-xs text-muted shrink-0">
@@ -80,9 +80,7 @@
 
 {% block scripts %}
 {% if supabase_url and anon_key and access_token %}
-{# supabase-js self-hosted (SRI) + chat.js: liga o Realtime da conversa. #}
-<script src="/static/vendor/supabase.min.js"
-        integrity="sha384-8ljL080xacUYrqBXUJRcP68fd1dVCh9qK/xi9QMzxUgOVNycXp0s6mBZAjBMp9W0"></script>
+{# chat.js liga o Realtime da conversa; supabase-js já é carregado pelo app_base. #}
 <script src="/static/js/chat.js"></script>
 {% endif %}
 {% endblock %}
