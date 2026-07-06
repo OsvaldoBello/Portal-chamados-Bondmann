@@ -49,13 +49,28 @@ async def lifespan(app: FastAPI):
     init_verifier(settings)
 
     if settings.database_url:
-        await init_pool(settings)
+        # Falha de conexão no boot (DSN placeholder, banco fora do ar, DNS) NÃO
+        # deve derrubar o servidor — senão o navegador só vê ERR_CONNECTION_REFUSED.
+        # Sobe em "modo limitado": as páginas que dependem do banco mostram erro
+        # tratado, mas o app fica de pé (login visível, diagnóstico no log).
+        try:
+            await init_pool(settings)
+        except Exception:  # noqa: BLE001 — resiliência de boot; ver log para a causa
+            log.exception(
+                "Falha ao conectar no banco (DATABASE_URL). Subindo em modo limitado — "
+                "preencha o .env com credenciais reais do Supabase (Supavisor 6543)."
+            )
     else:
         log.warning("DATABASE_URL ausente: pool não inicializado (modo limitado).")
 
     if settings.supabase_url and settings.supabase_anon_key:
-        await init_supabase(settings)
-        await init_storage(settings)
+        try:
+            await init_supabase(settings)
+            await init_storage(settings)
+        except Exception:  # noqa: BLE001 — idem: não derrubar o boot por Supabase
+            log.exception(
+                "Falha ao inicializar Supabase (auth/storage). Subindo em modo limitado."
+            )
     else:
         log.warning("Supabase não configurado: rotas de auth/anexos indisponíveis.")
 

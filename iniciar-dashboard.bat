@@ -60,7 +60,7 @@ if not exist "%PY%" (
 REM ----------------------------------------------------------------
 REM 3) Dependencias Python (instala so se faltar alguma)
 REM ----------------------------------------------------------------
-"%PY%" -c "import fastapi, uvicorn, asyncpg, jwt, jinja2, itsdangerous, slowapi" >nul 2>nul
+"%PY%" -c "import fastapi, uvicorn, asyncpg, jwt, jinja2, itsdangerous, slowapi, tzdata" >nul 2>nul
 if errorlevel 1 (
   echo [setup] Instalando dependencias Python ^(requirements.txt^) ...
   "%PY%" -m pip install --upgrade pip >nul

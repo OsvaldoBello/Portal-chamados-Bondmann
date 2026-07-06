@@ -19,6 +19,7 @@ from app.anexos import assinar_anexos, processar_uploads
 from app.auth.dependencies import CurrentUser, require_role
 from app.config import get_settings
 from app.db import rls_request_scope
+from app.domain.sla_visual import estado_sla
 from app.repositories.chamados import PRIORIDADES, ChamadosRepo, get_chamados_repo
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
@@ -59,6 +60,73 @@ def _access_token(request: Request) -> str | None:
     return request.cookies.get(ACCESS_COOKIE)
 
 
+# Filtros de SLA da fila → estado calculado por app.domain.sla_visual.estado_sla.
+_SLA_FILTROS = {"atrasado": "danger", "risco": "warn", "no_prazo": "ok"}
+
+
+def _parse_filtros(status: str, categoria: str, prioridade: str, operador: str, sla: str) -> dict:
+    """Normaliza os filtros da fila (status/categoria/prioridade/operador/SLA)."""
+    prio = (prioridade or "").strip().upper()
+    sla_v = (sla or "").strip()
+    return {
+        "status": status if status in STATUS_VALIDOS else None,
+        "categoria_id": (categoria or "").strip() or None,
+        "prioridade": prio if prio in PRIORIDADES else None,
+        "operador_id": (operador or "").strip() or None,
+        "sla": sla_v if sla_v in _SLA_FILTROS else "",
+    }
+
+
+def _filtros_qs(f: dict) -> str:
+    """Querystring que preserva os filtros ativos (para o polling do fragmento)."""
+    from urllib.parse import urlencode
+
+    pares = {}
+    if f["status"]:
+        pares["status"] = f["status"]
+    if f["categoria_id"]:
+        pares["categoria"] = f["categoria_id"]
+    if f["prioridade"]:
+        pares["prioridade"] = f["prioridade"]
+    if f["operador_id"]:
+        pares["operador"] = f["operador_id"]
+    if f["sla"]:
+        pares["sla"] = f["sla"]
+    return urlencode(pares)
+
+
+def _aplicar_sla(chamados: list[dict], sla: str) -> list[dict]:
+    """Filtra a lista pelo estado de SLA (calculado no domínio, não no SQL)."""
+    alvo = _SLA_FILTROS.get(sla)
+    if alvo is None:
+        return chamados
+    return [
+        c for c in chamados
+        if estado_sla(
+            c.get("created_at"), c.get("limite_resolucao"), c.get("resolvido_em")
+        ).estado == alvo
+    ]
+
+
+async def _opcoes_filtro(ctx: StaffCtx, repo: ChamadosRepo) -> tuple[list[dict], list[dict]]:
+    """Categorias e operadores do setor do staff (para os selects de filtro)."""
+    dep_id = str(ctx.perfil.get("departamento_id") or "") or None
+    categorias = await repo.categorias_ativas(ctx.user.claims, dep_id)
+    operadores = await repo.operadores(ctx.user.claims, departamento_id=dep_id)
+    return categorias, operadores
+
+
+async def _buscar_fila(repo: ChamadosRepo, claims: dict, f: dict) -> list[dict]:
+    chamados = await repo.fila(
+        claims,
+        status=f["status"],
+        categoria_id=f["categoria_id"],
+        prioridade=f["prioridade"],
+        operador_id=f["operador_id"],
+    )
+    return _aplicar_sla(chamados, f["sla"])
+
+
 # --------------------------------------------------------------------------
 # Fila — Lista e Kanban
 # --------------------------------------------------------------------------
@@ -66,16 +134,35 @@ def _access_token(request: Request) -> str | None:
 async def fila_lista(
     request: Request,
     status: str = "",
+    categoria: str = "",
+    prioridade: str = "",
+    operador: str = "",
+    sla: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
-    filtro = status if status in STATUS_VALIDOS else None
-    chamados = await repo.fila(ctx.user.claims, status=filtro)
+    f = _parse_filtros(status, categoria, prioridade, operador, sla)
+    chamados = await _buscar_fila(repo, ctx.user.claims, f)
     stats = await repo.fila_stats(ctx.user.claims)
+    categorias, operadores = await _opcoes_filtro(ctx, repo)
     return render(
         request,
         "workspace/fila.html",
-        {"perfil": ctx.perfil, "chamados": chamados, "stats": stats, "filtro": filtro},
+        {
+            "perfil": ctx.perfil,
+            "chamados": chamados,
+            "stats": stats,
+            "filtro": f["status"],
+            "categorias": categorias,
+            "operadores": operadores,
+            "prioridades": PRIORIDADES,
+            "sla_filtros": list(_SLA_FILTROS.keys()),
+            "categoria_sel": f["categoria_id"] or "",
+            "prioridade_sel": f["prioridade"] or "",
+            "operador_sel": f["operador_id"] or "",
+            "sla_sel": f["sla"],
+            "filtros_qs": _filtros_qs(f),
+        },
     )
 
 
@@ -83,17 +170,22 @@ async def fila_lista(
 async def fila_fragmento(
     request: Request,
     status: str = "",
+    categoria: str = "",
+    prioridade: str = "",
+    operador: str = "",
+    sla: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
-    filtro = status if status in STATUS_VALIDOS else None
+    f = _parse_filtros(status, categoria, prioridade, operador, sla)
     # ETag/304 (Seção 2.2): consulta leve de assinatura; se nada mudou desde o
-    # último poll, responde 304 sem buscar todas as linhas nem re-renderizar.
-    n, mx = await repo.fila_assinatura(ctx.user.claims, status=filtro)
-    etag = 'W/"%s"' % sha256(f"{filtro}:{n}:{mx}".encode()).hexdigest()[:16]
+    # último poll, responde 304 sem buscar todas as linhas nem re-renderizar. Os
+    # filtros entram na chave do ETag (via querystring) para não colidir entre si.
+    n, mx = await repo.fila_assinatura(ctx.user.claims, status=f["status"])
+    etag = 'W/"%s"' % sha256(f"{_filtros_qs(f)}:{n}:{mx}".encode()).hexdigest()[:16]
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304)  # 304 Not Modified
-    chamados = await repo.fila(ctx.user.claims, status=filtro)
+    chamados = await _buscar_fila(repo, ctx.user.claims, f)
     resp = render(request, "workspace/_fila_linhas.html", {"chamados": chamados})
     resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = "no-cache"
@@ -112,7 +204,12 @@ async def kanban(
     return render(
         request,
         "workspace/kanban.html",
-        {"perfil": ctx.perfil, "colunas": colunas, "stats": stats, "status_validos": STATUS_VALIDOS},
+        {
+            "perfil": ctx.perfil,
+            "colunas": colunas,
+            "stats": stats,
+            "status_validos": STATUS_VALIDOS,
+        },
     )
 
 

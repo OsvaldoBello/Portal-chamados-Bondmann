@@ -35,7 +35,7 @@ class ChamadosRepo:
     async def perfil(self, claims: dict) -> dict[str, Any] | None:
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
-                """SELECT p.id, p.nome, p.role, p.empresa_id,
+                """SELECT p.id, p.nome, p.role, p.empresa_id, p.departamento_id,
                           d.nome AS departamento,
                           COALESCE(d.nome = 'TI', false) AS is_ti
                      FROM perfis p
@@ -130,17 +130,36 @@ class ChamadosRepo:
                 out.append(d)
             return out
 
-    async def categorias_ativas(self, claims: dict) -> list[dict[str, Any]]:
-        cached = cache.get(CACHE_CATEGORIAS)
+    async def categorias_ativas(
+        self, claims: dict, departamento_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Categorias ativas, opcionalmente filtradas por departamento.
+
+        Categorias pertencem a um departamento (migration 0019); a abertura mostra
+        só as do setor de destino escolhido. Cacheado por departamento."""
+        chave = f"{CACHE_CATEGORIAS}:{departamento_id or 'all'}"
+        cached = cache.get(chave)
         if cached is not None:
             return cached
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
-                "SELECT id, nome FROM categorias WHERE ativo = true ORDER BY nome"
+                """SELECT id, nome FROM categorias
+                    WHERE ativo = true
+                      AND ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                    ORDER BY nome""",
+                departamento_id,
             )
         resultado = [dict(r) for r in rows]
-        cache.set(CACHE_CATEGORIAS, resultado, CATALOGO_TTL)
+        cache.set(chave, resultado, CATALOGO_TTL)
         return resultado
+
+    async def categoria_valida(
+        self, claims: dict, *, categoria_id: str, departamento_id: str
+    ) -> bool:
+        """A categoria existe, está ativa e pertence ao departamento informado?
+        Defesa em profundidade contra POST com par categoria/departamento forjado."""
+        cats = await self.categorias_ativas(claims, departamento_id)
+        return any(str(c["id"]) == str(categoria_id) for c in cats)
 
     async def departamentos_ativos(self, claims: dict) -> list[dict[str, Any]]:
         """Departamentos de destino disponíveis para abertura (TI/RH/Marketing)."""
@@ -282,11 +301,22 @@ class ChamadosRepo:
     # Workspace do operador (Fase 4) — escopo por departamento via RLS.
     # ---------------------------------------------------------------------
     async def fila(
-        self, claims: dict, *, status: str | None = None, limite: int = 200
+        self,
+        claims: dict,
+        *,
+        status: str | None = None,
+        categoria_id: str | None = None,
+        prioridade: str | None = None,
+        operador_id: str | None = None,
+        limite: int = 200,
     ) -> list[dict[str, Any]]:
-        """Fila de atendimento no escopo do staff (RLS: TI = tudo; RH/Mkt = seu setor).
+        """Fila de atendimento no escopo do staff (RLS: cada setor vê o seu; o TI
+        vê o setor TI — migration 0020).
 
-        Ordena por prioridade (URGENTE→BAIXA) e prazo de resolução mais próximo.
+        Filtros opcionais: ``status``, ``categoria_id``, ``prioridade`` e
+        ``operador_id`` (o filtro de SLA é aplicado na camada de rota, pois depende
+        do cálculo de estado do domínio). **Ordenação padrão: data de abertura
+        (mais recentes primeiro).**
         """
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
@@ -301,22 +331,26 @@ class ChamadosRepo:
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                   LEFT JOIN perfis op ON op.id = c.operador_id
                  WHERE ($1::status_chamado IS NULL OR c.status = $1::status_chamado)
-                 ORDER BY
-                   CASE c.prioridade WHEN 'URGENTE' THEN 0 WHEN 'ALTA' THEN 1
-                                     WHEN 'MEDIA' THEN 2 ELSE 3 END,
-                   c.limite_resolucao ASC NULLS LAST
+                   AND ($3::uuid IS NULL OR c.categoria_id = $3::uuid)
+                   AND ($4::prioridade_chamado IS NULL OR c.prioridade = $4::prioridade_chamado)
+                   AND ($5::uuid IS NULL OR c.operador_id = $5::uuid)
+                 ORDER BY c.created_at DESC
                  LIMIT $2
                 """,
                 status,
                 limite,
+                categoria_id,
+                prioridade,
+                operador_id,
             )
             return [dict(r) for r in rows]
 
     async def fila_assinatura(self, claims: dict, *, status: str | None = None):
-        """Assinatura leve da fila (count + max ``updated_at``) no mesmo escopo/filtro.
+        """Assinatura leve da fila (count + max ``updated_at``) no escopo do staff.
 
         Usada para ETag/304 no polling: se nada mudou, evita buscar todas as linhas
-        e re-renderizar o fragmento (Seção 2.2). O escopo vem da RLS."""
+        e re-renderizar o fragmento (Seção 2.2). O escopo vem da RLS; os demais
+        filtros entram no cálculo do ETag pela rota (via querystring)."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """SELECT count(*)::int AS n, max(updated_at) AS mx
@@ -327,7 +361,7 @@ class ChamadosRepo:
             return (row["n"], row["mx"])
 
     async def fila_stats(self, claims: dict) -> dict[str, int]:
-        """Contagem por status no escopo do staff (para os cabeçalhos do Kanban)."""
+        """Contagem por status no escopo do staff (cabeçalhos do Kanban/fila)."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch("SELECT status, count(*) AS n FROM chamados GROUP BY status")
         por = {r["status"]: r["n"] for r in rows}

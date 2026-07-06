@@ -36,10 +36,20 @@
   {# Categorias #}
   <section class="bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h3 class="font-display font-bold text-navy mb-3">Categorias</h3>
+    <p class="text-xs text-muted mb-3">Cada categoria pertence a um <strong>departamento</strong>; ela aparece na abertura de chamado apenas para esse setor.</p>
     <form method="post" action="/admin/categorias" class="space-y-2 mb-4">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input name="nome" required placeholder="Nova categoria"
-             class="w-full px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
+      <div class="flex gap-2">
+        <input name="nome" required placeholder="Nova categoria"
+               class="flex-1 px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
+        <select name="departamento_id" required
+                class="px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+          <option value="">Departamento…</option>
+          {% for d in departamentos %}{% if d.ativo %}
+          <option value="{{ d.id }}">{{ d.nome }}</option>
+          {% endif %}{% endfor %}
+        </select>
+      </div>
       <div class="flex gap-2">
         <input name="descricao" placeholder="Descrição (opcional)"
                class="flex-1 px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
@@ -49,7 +59,10 @@
     <ul class="divide-y divide-line">
       {% for c in categorias %}
       <li class="flex items-center justify-between py-2">
-        <span class="text-sm {{ 'text-navy' if c.ativo else 'text-faint line-through' }}">{{ c.nome }}</span>
+        <span class="text-sm {{ 'text-navy' if c.ativo else 'text-faint line-through' }}">
+          {{ c.nome }}
+          <span class="ml-1.5 inline-flex rounded-full bg-navy-100 px-2 py-0.5 text-[11px] font-semibold text-navy align-middle">{{ c.departamento or "sem setor" }}</span>
+        </span>
         {{ toggle_btn("/admin/categorias/" ~ c.id ~ "/toggle", c.ativo) }}
       </li>
       {% endfor %}

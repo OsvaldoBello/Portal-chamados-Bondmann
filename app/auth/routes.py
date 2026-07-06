@@ -46,7 +46,19 @@ def register_auth_routes(app, limiter: Limiter) -> None:
         password: str = Form(...),
         _: None = Depends(_csrf_guard),
     ):
-        supabase = await ensure_supabase()
+        # ensure_supabase() estoura RuntimeError se o Supabase não estiver
+        # configurado (.env incompleto). Sem este guard, viraria 500 "Erro interno"
+        # na tela de login em vez de uma mensagem amigável.
+        try:
+            supabase = await ensure_supabase()
+        except RuntimeError:
+            return render(
+                request,
+                "login.html",
+                {"erro": "Serviço de login indisponível: configuração do servidor "
+                         "incompleta. Contate o administrador (TI)."},
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         try:
             result = await supabase.auth.sign_in_with_password(
                 {"email": email, "password": password}

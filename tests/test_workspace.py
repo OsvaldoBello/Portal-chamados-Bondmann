@@ -50,12 +50,22 @@ class FakeRepo:
         return {"id": OP, "nome": "Op TI", "role": "OPERADOR", "empresa_id": "e1",
                 "departamento_id": "d1", "departamento": "TI", "is_ti": self._is_ti}
 
-    async def fila(self, claims, *, status=None, limite=200):
+    async def fila(self, claims, *, status=None, categoria_id=None,
+                   prioridade=None, operador_id=None, limite=200):
+        self.fila_filtros = {  # captura os filtros aplicados
+            "categoria_id": categoria_id, "prioridade": prioridade, "operador_id": operador_id,
+        }
         cs = [_chamado(), _chamado(id="c2", codigo="BOND-2026-00002", status="EM_ATENDIMENTO")]
         return [c for c in cs if status is None or c["status"] == status]
 
     async def fila_stats(self, claims):
         return {"total": 2, "NOVO": 1, "EM_ATENDIMENTO": 1, "AGUARDANDO": 0, "RESOLVIDO": 0}
+
+    async def fila_assinatura(self, claims, *, status=None):
+        return (2, NOW)
+
+    async def categorias_ativas(self, claims, departamento_id=None):
+        return [{"id": "cat1", "nome": "Suporte"}]
 
     async def obter(self, claims, cid):
         return _chamado(id=cid, status=self._status)

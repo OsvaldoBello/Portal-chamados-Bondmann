@@ -1,0 +1,5 @@
+{# Options do select de categoria — recarregado via HTMX ao trocar o departamento. #}
+<option value="">{% if categorias %}Selecione a categoria…{% else %}Escolha o departamento primeiro{% endif %}</option>
+{% for cat in categorias %}
+<option value="{{ cat.id }}" {% if form and cat.id|string == form.get('categoria_id') %}selected{% endif %}>{{ cat.nome }}</option>
+{% endfor %}

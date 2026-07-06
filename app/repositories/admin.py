@@ -145,14 +145,26 @@ class AdminRepo:
     async def categorias(self, claims: dict) -> list[dict[str, Any]]:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
-                "SELECT id, nome, descricao, ativo FROM categorias ORDER BY nome"
+                """SELECT c.id, c.nome, c.descricao, c.ativo,
+                          c.departamento_id, d.nome AS departamento
+                     FROM categorias c
+                     LEFT JOIN departamentos d ON d.id = c.departamento_id
+                    ORDER BY d.nome NULLS FIRST, c.nome"""
             )
             return [dict(r) for r in rows]
 
-    async def criar_categoria(self, claims: dict, nome: str, descricao: str | None) -> None:
+    async def criar_categoria(
+        self, claims: dict, nome: str, descricao: str | None, departamento_id: str | None = None
+    ) -> None:
+        """Cria categoria já vinculada a um departamento (categorias por setor,
+        migration 0019). ``departamento_id`` None deixa a categoria sem setor."""
         async with rls_connection(claims) as conn:
             await conn.execute(
-                "INSERT INTO categorias (nome, descricao) VALUES ($1, $2)", nome, descricao
+                "INSERT INTO categorias (nome, descricao, departamento_id) "
+                "VALUES ($1, $2, $3::uuid)",
+                nome,
+                descricao,
+                departamento_id,
             )
 
     async def toggle_categoria(self, claims: dict, cat_id: str) -> None:

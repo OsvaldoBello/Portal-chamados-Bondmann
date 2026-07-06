@@ -125,11 +125,21 @@ async def _render_form(
     Preserva o que o usuário digitou em ``form`` e recarrega as subcategorias da
     categoria escolhida (para o select vir preenchido no erro)."""
     form = form or {}
-    categorias = await repo.categorias_ativas(ctx.user.claims)
     departamentos = await repo.departamentos_ativos(ctx.user.claims)
+    # Categorias pertencem ao departamento (0019): só carregam após escolher o setor.
+    dep_sel = form.get("departamento_id") or ""
+    categorias = (
+        await repo.categorias_ativas(ctx.user.claims, dep_sel) if dep_sel else []
+    )
     subcategorias: list[dict] = []
     if form.get("categoria_id"):
         subcategorias = await repo.subcategorias_ativas(ctx.user.claims, form["categoria_id"])
+    # Id do departamento "Marketing" — o front usa para exibir o aviso de prazo (48h)
+    # e o texto de ajuda específico da descrição (ver novo_chamado.js).
+    marketing_dep_id = next(
+        (str(d["id"]) for d in departamentos if (d.get("nome") or "").strip().lower() == "marketing"),
+        "",
+    )
     return render(
         request,
         "portal/novo_chamado.html",
@@ -138,6 +148,7 @@ async def _render_form(
             "categorias": categorias,
             "departamentos": departamentos,
             "subcategorias": subcategorias,
+            "marketing_dep_id": marketing_dep_id,
             "prioridades": PRIORIDADES,
             "form": form,
             "erro": erro,
@@ -153,6 +164,25 @@ async def novo_chamado_form(
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
     return await _render_form(request, ctx, repo)
+
+
+@router.get("/chamados/categorias")
+async def categorias_fragmento(
+    request: Request,
+    departamento_id: str = "",
+    ctx: PortalCtx = Depends(portal_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+):
+    """Cascade da abertura: <option>s de categoria do departamento escolhido
+    (carregado via HTMX quando o usuário troca o departamento). Declarado ANTES
+    da rota dinâmica ``/chamados/{chamado_id}``."""
+    departamento_id = departamento_id.strip()
+    cats = (
+        await repo.categorias_ativas(ctx.user.claims, departamento_id)
+        if departamento_id
+        else []
+    )
+    return render(request, "portal/_categorias_options.html", {"categorias": cats})
 
 
 @router.get("/chamados/subcategorias")
@@ -209,19 +239,31 @@ async def criar_chamado(
     async def _erro(msg: str, code: int = status.HTTP_400_BAD_REQUEST):
         return await _render_form(request, ctx, repo, erro=msg, form=form, status_code=code)
 
-    # Todos os campos são obrigatórios (decisão de produto, Fase 2).
+    # Departamento, categoria e assunto/descrição são obrigatórios.
     if not departamento_id:
         return await _erro("Selecione o departamento de destino do chamado.")
     if not categoria_id:
         return await _erro("Selecione a categoria do chamado.")
-    if not subcategoria_id:
-        return await _erro("Selecione a subcategoria do chamado.")
+    # A categoria precisa pertencer ao departamento escolhido (0019 — defesa em
+    # profundidade contra POST forjado).
+    if not await repo.categoria_valida(
+        ctx.user.claims, categoria_id=categoria_id, departamento_id=departamento_id
+    ):
+        return await _erro("A categoria não pertence ao departamento escolhido.")
+    # Subcategoria só é exigida quando a categoria tem subcategorias ativas
+    # (categorias como "Identidade Visual" podem não ter).
+    subs_da_categoria = await repo.subcategorias_ativas(ctx.user.claims, categoria_id)
+    if subs_da_categoria:
+        if not subcategoria_id:
+            return await _erro("Selecione a subcategoria do chamado.")
+        if not await repo.subcategoria_valida(
+            ctx.user.claims, categoria_id=categoria_id, subcategoria_id=subcategoria_id
+        ):
+            return await _erro("A subcategoria não pertence à categoria escolhida.")
+    else:
+        subcategoria_id = ""  # categoria sem subcategorias → chamado sem subcategoria
     if not titulo or not descricao:
         return await _erro("Informe o assunto e a descrição do chamado.")
-    if not await repo.subcategoria_valida(
-        ctx.user.claims, categoria_id=categoria_id, subcategoria_id=subcategoria_id
-    ):
-        return await _erro("A subcategoria não pertence à categoria escolhida.")
 
     # Anexos lidos direto do multipart. Não declaramos ``UploadFile`` como parâmetro
     # aqui porque, neste endpoint com ``@limiter.limit`` (slowapi embrulha a função)
@@ -243,7 +285,7 @@ async def criar_chamado(
         empresa_id=str(ctx.perfil["empresa_id"]),
         cliente_id=ctx.user.id,
         categoria_id=categoria_id,
-        subcategoria_id=subcategoria_id,
+        subcategoria_id=subcategoria_id or None,
         departamento_id=departamento_id,
         titulo=titulo,
         descricao=descricao,

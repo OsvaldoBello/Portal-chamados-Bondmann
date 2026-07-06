@@ -17,3 +17,7 @@ httpx==0.27.2
 # de assinatura/exp/aud por request; chamar a API do Supabase a cada request
 # seria gargalo. PyJWT[crypto] cobre JWKS e HS256.
 pyjwt[crypto]==2.10.1
+# Base de fusos IANA para o zoneinfo (America/Sao_Paulo, Seção 5.2). Obrigatório
+# no Windows/imagens slim, onde o SO não traz o tz database — sem isto o import
+# de app.templating quebra (ZoneInfoNotFoundError) e o servidor não sobe.
+tzdata==2024.2

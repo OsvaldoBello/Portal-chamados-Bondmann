@@ -38,6 +38,15 @@
         </button>
       </div>
       <nav class="flex-1 p-3 space-y-1 text-sm overflow-y-auto">
+        {# Staff (Operador/Admin/TI) abre chamados pelo Portal, mas precisa voltar
+           ao Workspace de atendimento — sem este link ficaria preso aqui. #}
+        {% if perfil is defined and perfil and perfil.role in ('OPERADOR', 'ADMIN') %}
+        <a href="/workspace"
+           class="relative flex items-center gap-3 px-3.5 py-2.5 mb-1 rounded-lg font-semibold text-brandgreen bg-brandgreen/10 hover:bg-brandgreen/15 transition">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
+          <span>Voltar ao Workspace</span>
+        </a>
+        {% endif %}
         <a href="/portal"
            class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg font-medium transition
                   {% if active == 'dashboard' %}bg-white/10 text-white{% else %}text-white/70 hover:text-white hover:bg-white/5{% endif %}">

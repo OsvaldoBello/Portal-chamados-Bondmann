@@ -73,7 +73,10 @@ async def admin_context(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Área restrita a gestores (Admin do setor) e ao TI.",
             )
-        escopo = "Todos os setores" if is_ti else perfil["departamento"]
+        # O TI agora vê apenas o próprio setor (migration 0020) — a RLS escopa as
+        # queries. Por isso o rótulo de escopo é o departamento do usuário (inclusive
+        # para o TI), não mais "Todos os setores".
+        escopo = perfil.get("departamento") or "—"
         yield AdminCtx(user=user, perfil=perfil, is_ti=is_ti, escopo=escopo)
 
 
@@ -104,23 +107,12 @@ async def dashboard(
 ):
     claims = ctx.user.claims
 
-    # Filtro por departamento é exclusivo do TI (que enxerga todos os setores via
-    # RLS). O Admin de setor já é escopado pela RLS ao seu próprio departamento —
-    # para ele o seletor não se aplica.
+    # Todos os papéis do painel (inclusive TI) são escopados ao próprio setor pela
+    # RLS (migration 0020). Não há mais seletor cross-setor; os KPIs já vêm do setor
+    # do usuário sem precisar de filtro explícito.
     departamentos: list[dict] = []
     dep_id: str | None = None
     dep_nome: str | None = None
-    if ctx.is_ti:
-        departamentos = [
-            d for d in await repo.departamentos(claims) if d.get("ativo")
-        ]
-        escolhido = departamento.strip()
-        selecionado = next(
-            (d for d in departamentos if str(d["id"]) == escolhido), None
-        )
-        if selecionado:
-            dep_id = str(selecionado["id"])
-            dep_nome = selecionado["nome"]
 
     kpis = await repo.kpis(claims, departamento_id=dep_id)
     graficos = {
@@ -203,15 +195,18 @@ async def criar_categoria(
     request: Request,
     nome: str = Form(...),
     descricao: str = Form(""),
+    departamento_id: str = Form(""),
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
     _: None = Depends(_csrf_guard),
 ):
     _require_ti(ctx)
     nome = nome.strip()
-    if nome:
-        await repo.criar_categoria(ctx.user.claims, nome, descricao.strip() or None)
-        cache.invalidate(CACHE_CATEGORIAS)
+    # Categorias pertencem a um departamento (0019); valida o setor informado.
+    dep_id = await _depto_valido(repo, ctx.user.claims, departamento_id)
+    if nome and dep_id:
+        await repo.criar_categoria(ctx.user.claims, nome, descricao.strip() or None, dep_id)
+        cache.invalidate_prefix(CACHE_CATEGORIAS)
     return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -225,7 +220,7 @@ async def toggle_categoria(
 ):
     _require_ti(ctx)
     await repo.toggle_categoria(ctx.user.claims, cat_id)
-    cache.invalidate(CACHE_CATEGORIAS)
+    cache.invalidate_prefix(CACHE_CATEGORIAS)
     return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
 
 

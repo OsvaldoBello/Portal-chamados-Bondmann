@@ -42,6 +42,17 @@ def invalidate(key: str) -> None:
         _store.pop(key, None)
 
 
+def invalidate_prefix(prefix: str) -> None:
+    """Expurga todas as chaves que começam com ``prefix``.
+
+    Usado por catálogos cacheados por-escopo (ex.: categorias por departamento,
+    chave ``categorias_ativas:<dep>``), onde a escrita deve limpar todas as
+    variantes de uma vez."""
+    with _lock:
+        for k in [k for k in _store if k.startswith(prefix)]:
+            _store.pop(k, None)
+
+
 def clear() -> None:
     """Limpa todo o cache (útil em testes)."""
     with _lock:

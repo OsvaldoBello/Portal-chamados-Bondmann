@@ -6,7 +6,7 @@
 {% block heading %}Kanban{% endblock %}
 {% block content %}
 
-<div class="flex items-center justify-between mb-3">
+<div class="flex flex-wrap items-center justify-between gap-3 mb-3">
   <p class="text-sm text-muted">Arraste um cartão entre colunas para mudar o status (ou use a tela de atendimento).</p>
   <a href="/workspace" class="text-sm font-semibold text-navy hover:underline">Ver como Lista →</a>
 </div>
@@ -21,7 +21,8 @@
     <div class="kanban-col flex-1 p-2 space-y-2 min-h-[80px]" data-status="{{ s }}">
       {% for c in colunas[s] %}
       <article class="kanban-card bg-white rounded-lg border border-line/60 p-3 shadow-soft cursor-grab" data-id="{{ c.id }}">
-        <a href="/workspace/chamados/{{ c.id }}" class="block">
+        {# draggable=false: impede o drag nativo do link de sequestrar o Sortable. #}
+        <a href="/workspace/chamados/{{ c.id }}" class="block" draggable="false">
           <div class="font-mono text-[11px] text-brandgreen-700">{{ c.codigo }}</div>
           <div class="text-sm font-medium text-navy leading-snug mt-0.5">{{ c.titulo }}</div>
           <div class="flex items-center justify-between mt-2">

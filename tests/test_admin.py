@@ -171,22 +171,22 @@ def test_dashboard_mostra_kpis_e_dados_grafico():
     assert "/static/vendor/chart.umd.js" in r.text
 
 
-def test_ti_dashboard_tem_seletor_de_departamento():
-    # TI pode alternar o setor exibido (ou ver "Todos os setores" consolidado).
+def test_ti_dashboard_sem_seletor_escopado_ao_proprio_setor():
+    # Decisão 2026-07-06 (migration 0020): o TI vê APENAS o próprio setor (RLS
+    # escopa as queries), então o dashboard não tem mais seletor cross-setor.
     with admin_client(FakeAdmin()) as c:
         r = c.get("/admin")
     assert r.status_code == 200
-    assert 'name="departamento"' in r.text
-    assert "Todos os setores" in r.text
-    assert 'value="d1"' in r.text
+    assert 'name="departamento"' not in r.text
+    assert "Todos os setores" not in r.text
 
 
-def test_ti_dashboard_filtra_por_departamento():
+def test_ti_dashboard_ignora_departamento_na_querystring():
+    # O parâmetro ?departamento não filtra mais nada (sem visão cross-setor).
     with admin_client(FakeAdmin()) as c:
         r = c.get("/admin?departamento=d1")
     assert r.status_code == 200
-    # O setor escolhido fica selecionado no dropdown do topo.
-    assert 'value="d1" selected' in r.text
+    assert 'name="departamento"' not in r.text
 
 
 def test_admin_de_setor_nao_tem_seletor():

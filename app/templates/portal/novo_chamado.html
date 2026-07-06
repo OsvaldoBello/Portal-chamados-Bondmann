@@ -14,6 +14,7 @@
     {% endif %}
 
     <form method="post" action="/portal/chamados" enctype="multipart/form-data"
+          data-marketing-dep="{{ marketing_dep_id }}"
           class="bg-white rounded-xl shadow-card border border-line/60 p-6 space-y-5">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
@@ -25,10 +26,12 @@
         </p>
       </div>
 
-      {# Departamento de destino #}
+      {# Departamento de destino (dispara o cascade de categorias via HTMX) #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Departamento de destino</span>
-        <select name="departamento_id" required
+        <select name="departamento_id" id="departamento-select" required
+                hx-get="/portal/chamados/categorias"
+                hx-target="#categoria-select" hx-swap="innerHTML" hx-trigger="change"
                 class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
           <option value="">Selecione o departamento…</option>
           {% for dep in departamentos %}
@@ -38,24 +41,30 @@
         <span class="block text-xs text-muted mt-1">Só a equipe desse setor verá e atenderá o chamado.</span>
       </label>
 
-      {# Categoria (dispara o cascade de subcategoria via HTMX) #}
+      {# Aviso de prazo — exibido pelo novo_chamado.js quando o setor é o Marketing. #}
+      <div id="marketing-aviso" hidden
+           class="rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-sm text-amber-800">
+        <strong>Prazo de entrega:</strong> defina a data que necessita que a entrega seja realizada,
+        sempre respeitando o período mínimo de <strong>48h</strong> para início de desenvolvimento.
+      </div>
+
+      {# Categoria (recarregada conforme o departamento; dispara o cascade de subcategoria) #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Categoria</span>
-        <select name="categoria_id" required
+        <select name="categoria_id" id="categoria-select" required
                 hx-get="/portal/chamados/subcategorias"
                 hx-target="#subcategoria-select" hx-swap="innerHTML" hx-trigger="change"
                 class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
-          <option value="">Selecione a categoria…</option>
-          {% for cat in categorias %}
-          <option value="{{ cat.id }}" {% if cat.id|string == f.get('categoria_id') %}selected{% endif %}>{{ cat.nome }}</option>
-          {% endfor %}
+          {% include "portal/_categorias_options.html" %}
         </select>
       </label>
 
-      {# Subcategoria — options carregados conforme a categoria #}
+      {# Subcategoria — options carregados conforme a categoria. Sem `required` no
+         HTML: algumas categorias (ex.: Identidade Visual) não têm subcategoria; a
+         obrigatoriedade condicional é validada no servidor. #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Subcategoria</span>
-        <select id="subcategoria-select" name="subcategoria_id" required
+        <select id="subcategoria-select" name="subcategoria_id"
                 class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
           {% include "portal/_subcategorias_options.html" %}
         </select>
@@ -82,10 +91,13 @@
         </select>
       </label>
 
-      {# Descrição #}
+      {# Descrição — o placeholder muda para o texto do Marketing (via novo_chamado.js)
+         quando o departamento de destino é o Marketing. #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Descrição detalhada</span>
-        <textarea name="descricao" rows="5" required
+        <textarea name="descricao" id="descricao-input" rows="5" required
+                  data-placeholder-padrao="Descreva o que aconteceu, lote, linha de produção, etc."
+                  data-placeholder-marketing="Descreva a demanda da forma mais detalhada possível, isso ajuda a evitar retrabalhos e atrasos nos prazos"
                   placeholder="Descreva o que aconteceu, lote, linha de produção, etc."
                   class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint resize-none">{{ f.get('descricao', '') }}</textarea>
       </label>
@@ -130,4 +142,8 @@
     </div>
   </aside>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/novo_chamado.js"></script>
 {% endblock %}
