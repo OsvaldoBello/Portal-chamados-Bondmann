@@ -27,3 +27,7 @@ supabase/.temp/
 # OS
 .DS_Store
 *.log
+
+# Claude Agent Workspace
+.claude/
+

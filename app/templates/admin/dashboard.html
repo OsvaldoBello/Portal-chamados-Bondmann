@@ -1,8 +1,9 @@
-{% extends "admin/admin_base.html" %}
+{% extends "workspace/workspace_base.html" %}
 {% from "portal/_macros.html" import estrelas %}
 {% set active = "kpis" %}
 {% block title %}Indicadores — Admin{% endblock %}
 {% block heading %}Indicadores{% endblock %}
+{% block subheading %}Painel de indicadores e SLA{% endblock %}
 {% block content %}
 
 {# Escopo dos indicadores: TI escolhe o setor (ou todos) no dropdown; Admin de
@@ -68,6 +69,10 @@
   <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h3 class="font-display font-bold text-navy mb-3">Chamados por departamento</h3>
     <canvas id="chart-departamento" height="180"></canvas>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h3 class="font-display font-bold text-navy mb-3">Chamados por setor</h3>
+    <canvas id="chart-setor" height="180"></canvas>
   </div>
   <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h3 class="font-display font-bold text-navy mb-3">Produtividade por operador (resolvidos)</h3>

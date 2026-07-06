@@ -10,17 +10,31 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.db import rls_connection
+from app.db import admin_connection, rls_connection
 
 
 class AdminRepo:
+    def _kpi_scope(self, claims: dict, todos_setores: bool):
+        """Conexão para os indicadores.
+
+        - ``todos_setores=False`` (Admin de setor): usa a conexão RLS com os claims
+          — a RLS já escopa os chamados ao setor do gestor (migration 0020).
+        - ``todos_setores=True`` (**TI**): usa ``admin_connection`` (sem RLS) para
+          agregar TODOS os setores nos relatórios. Uso controlado e somente-leitura,
+          liberado apenas quando a rota confirmou ``is_ti`` (ver admin_context). O
+          filtro explícito de ``departamento_id`` continua permitindo focar um setor.
+        """
+        return admin_connection() if todos_setores else rls_connection(claims)
+
     async def is_ti(self, claims: dict) -> bool:
         async with rls_connection(claims) as conn:
             return bool(await conn.fetchval("SELECT auth_is_ti()"))
 
     # ---- KPIs -----------------------------------------------------------
-    async def kpis(self, claims: dict, *, departamento_id: str | None = None) -> dict[str, Any]:
-        async with rls_connection(claims) as conn:
+    async def kpis(
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+    ) -> dict[str, Any]:
+        async with self._kpi_scope(claims, todos_setores) as conn:
             row = await conn.fetchrow(
                 """
                 SELECT
@@ -47,8 +61,10 @@ class AdminRepo:
         d["tma_horas"] = round((d["tma_seg"] or 0) / 3600, 1) if d["tma_seg"] else None
         return d
 
-    async def por_status(self, claims: dict, *, departamento_id: str | None = None) -> dict[str, int]:
-        async with rls_connection(claims) as conn:
+    async def por_status(
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+    ) -> dict[str, int]:
+        async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """SELECT status, count(*) n FROM chamados
                     WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
@@ -58,8 +74,10 @@ class AdminRepo:
         por = {r["status"]: r["n"] for r in rows}
         return {s: por.get(s, 0) for s in ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")}
 
-    async def csat_distribuicao(self, claims: dict, *, departamento_id: str | None = None) -> dict[int, int]:
-        async with rls_connection(claims) as conn:
+    async def csat_distribuicao(
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+    ) -> dict[int, int]:
+        async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """SELECT avaliacao_nota n, count(*) c FROM chamados
                     WHERE avaliacao_nota IS NOT NULL
@@ -70,9 +88,11 @@ class AdminRepo:
         por = {int(r["n"]): r["c"] for r in rows}
         return {i: por.get(i, 0) for i in range(1, 6)}
 
-    async def produtividade(self, claims: dict, *, departamento_id: str | None = None) -> list[dict[str, Any]]:
+    async def produtividade(
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+    ) -> list[dict[str, Any]]:
         """Chamados resolvidos por operador (produtividade)."""
-        async with rls_connection(claims) as conn:
+        async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
                 SELECT COALESCE(op.nome, 'Sem operador') AS operador,
@@ -87,11 +107,12 @@ class AdminRepo:
             return [dict(r) for r in rows]
 
     async def avaliacoes_recentes(
-        self, claims: dict, *, limite: int = 8, departamento_id: str | None = None
+        self, claims: dict, *, limite: int = 8, departamento_id: str | None = None,
+        todos_setores: bool = False,
     ) -> list[dict[str, Any]]:
         """Últimas avaliações (CSAT) com comentário do solicitante, para o TI ver
         o feedback qualitativo — não só a média. Nota sempre; comentário opcional."""
-        async with rls_connection(claims) as conn:
+        async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
                 SELECT c.codigo, c.titulo, c.avaliacao_nota AS nota,
@@ -109,8 +130,10 @@ class AdminRepo:
             )
             return [dict(r) for r in rows]
 
-    async def por_departamento(self, claims: dict, *, departamento_id: str | None = None) -> list[dict[str, Any]]:
-        async with rls_connection(claims) as conn:
+    async def por_departamento(
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+    ) -> list[dict[str, Any]]:
+        async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
                 SELECT COALESCE(d.nome, '—') AS departamento, count(*) AS total
@@ -121,6 +144,22 @@ class AdminRepo:
                 departamento_id,
             )
             return [dict(r) for r in rows]
+
+    async def por_setor(
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+    ) -> list[dict[str, Any]]:
+        async with self._kpi_scope(claims, todos_setores) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT COALESCE(setor, 'Não informado') AS setor, count(*) AS total
+                  FROM chamados
+                 WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                 GROUP BY setor ORDER BY total DESC
+                """,
+                departamento_id,
+            )
+            return [dict(r) for r in rows]
+
 
     # ---- Gestão de catálogos -------------------------------------------
     async def departamentos(self, claims: dict) -> list[dict[str, Any]]:

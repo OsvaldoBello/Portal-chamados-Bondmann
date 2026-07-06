@@ -203,6 +203,7 @@ def _abertura_valida(**over):
         "categoria_id": "c1",
         "subcategoria_id": "s1",
         "prioridade": "MEDIA",
+        "setor": "Financeiro",
     }
     base.update(over)
     return base
@@ -223,8 +224,24 @@ def test_criar_com_todos_campos_redireciona_e_repassa_destino():
     assert repo.criados[0]["departamento_id"] == "d2"
     assert repo.criados[0]["categoria_id"] == "c1"
     assert repo.criados[0]["subcategoria_id"] == "s1"
+    assert repo.criados[0]["setor"] == "Financeiro"
     # Sem arquivos: nenhuma mensagem inicial de anexo.
     assert repo.mensagens_criadas == []
+
+
+def test_criar_sem_setor_retorna_400():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(setor="")
+        resp = client.post(
+            "/portal/chamados",
+            data=data,
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "setor" in resp.text.lower()
+    assert repo.criados == []
 
 
 def test_criar_sem_categoria_retorna_400():

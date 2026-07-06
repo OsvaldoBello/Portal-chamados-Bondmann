@@ -42,24 +42,27 @@ class FakeAdmin:
     async def is_ti(self, claims):
         return self._ti
 
-    async def kpis(self, claims, *, departamento_id=None):
+    async def kpis(self, claims, *, departamento_id=None, todos_setores=False):
         return {"total": 10, "abertos": 4, "resolvidos": 6, "resolvidos_no_prazo": 5,
                 "conformidade_sla": 83.3, "csat_media": 4.5, "csat_respostas": 4,
                 "tma_horas": 12.0, "tma_seg": 43200}
 
-    async def por_status(self, claims, *, departamento_id=None):
+    async def por_status(self, claims, *, departamento_id=None, todos_setores=False):
         return {"NOVO": 2, "EM_ATENDIMENTO": 2, "AGUARDANDO": 0, "RESOLVIDO": 6}
 
-    async def csat_distribuicao(self, claims, *, departamento_id=None):
+    async def csat_distribuicao(self, claims, *, departamento_id=None, todos_setores=False):
         return {1: 0, 2: 0, 3: 1, 4: 1, 5: 2}
 
-    async def por_departamento(self, claims, *, departamento_id=None):
+    async def por_departamento(self, claims, *, departamento_id=None, todos_setores=False):
         return [{"departamento": "TI", "total": 7}, {"departamento": "RH", "total": 3}]
 
-    async def produtividade(self, claims, *, departamento_id=None):
+    async def por_setor(self, claims, *, departamento_id=None, todos_setores=False):
+        return [{"setor": "Financeiro", "total": 6}, {"setor": "Vendas", "total": 4}]
+
+    async def produtividade(self, claims, *, departamento_id=None, todos_setores=False):
         return [{"operador": "Op TI", "resolvidos": 6, "atribuidos": 8}]
 
-    async def avaliacoes_recentes(self, claims, *, limite=8, departamento_id=None):
+    async def avaliacoes_recentes(self, claims, *, limite=8, departamento_id=None, todos_setores=False):
         return [{"codigo": "BOND-2026-00001", "titulo": "Impressora", "nota": 5,
                  "comentario": "Ótimo atendimento", "solicitante": "Ana",
                  "em": datetime(2026, 7, 1, tzinfo=timezone.utc)}]
@@ -171,22 +174,23 @@ def test_dashboard_mostra_kpis_e_dados_grafico():
     assert "/static/vendor/chart.umd.js" in r.text
 
 
-def test_ti_dashboard_sem_seletor_escopado_ao_proprio_setor():
-    # Decisão 2026-07-06 (migration 0020): o TI vê APENAS o próprio setor (RLS
-    # escopa as queries), então o dashboard não tem mais seletor cross-setor.
+def test_ti_dashboard_tem_seletor_de_departamento():
+    # INDICADORES do TI: vê todos os setores, com seletor para focar um (o Workspace
+    # é que fica escopado ao setor TI — migration 0020). Restaurado a pedido.
     with admin_client(FakeAdmin()) as c:
         r = c.get("/admin")
     assert r.status_code == 200
-    assert 'name="departamento"' not in r.text
-    assert "Todos os setores" not in r.text
+    assert 'name="departamento"' in r.text
+    assert "Todos os setores" in r.text
+    assert 'value="d1"' in r.text
 
 
-def test_ti_dashboard_ignora_departamento_na_querystring():
-    # O parâmetro ?departamento não filtra mais nada (sem visão cross-setor).
+def test_ti_dashboard_filtra_por_departamento():
     with admin_client(FakeAdmin()) as c:
         r = c.get("/admin?departamento=d1")
     assert r.status_code == 200
-    assert 'name="departamento"' not in r.text
+    # O setor escolhido fica selecionado no dropdown do topo.
+    assert 'value="d1" selected' in r.text
 
 
 def test_admin_de_setor_nao_tem_seletor():

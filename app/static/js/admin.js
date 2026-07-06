@@ -42,6 +42,11 @@
   bar("chart-departamento", dep.map(function (x) { return x.departamento; }),
       dep.map(function (x) { return x.total; }), NAVY, true);
 
+  // Setor
+  var set = d.por_setor || [];
+  bar("chart-setor", set.map(function (x) { return x.setor; }),
+      set.map(function (x) { return x.total; }), NAVY, true);
+
   // Produtividade
   var pr = d.produtividade || [];
   bar("chart-produtividade", pr.map(function (x) { return x.operador; }),

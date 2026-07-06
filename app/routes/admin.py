@@ -73,10 +73,9 @@ async def admin_context(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Área restrita a gestores (Admin do setor) e ao TI.",
             )
-        # O TI agora vê apenas o próprio setor (migration 0020) — a RLS escopa as
-        # queries. Por isso o rótulo de escopo é o departamento do usuário (inclusive
-        # para o TI), não mais "Todos os setores".
-        escopo = perfil.get("departamento") or "—"
+        # Nos INDICADORES o TI vê todos os setores (com seletor); o Admin de setor é
+        # escopado pela RLS. (No Workspace o TI é escopado ao próprio setor — 0020.)
+        escopo = "Todos os setores" if is_ti else (perfil.get("departamento") or "—")
         yield AdminCtx(user=user, perfil=perfil, is_ti=is_ti, escopo=escopo)
 
 
@@ -107,22 +106,33 @@ async def dashboard(
 ):
     claims = ctx.user.claims
 
-    # Todos os papéis do painel (inclusive TI) são escopados ao próprio setor pela
-    # RLS (migration 0020). Não há mais seletor cross-setor; os KPIs já vêm do setor
-    # do usuário sem precisar de filtro explícito.
+    # INDICADORES: o TI vê TODOS os setores (com seletor para focar um). Diferente
+    # do Workspace, onde a RLS 0020 escopa o TI ao próprio setor: aqui os KPIs usam
+    # `todos_setores=True` (agregação cross-setor via admin_connection, uso de leitura
+    # controlado). O Admin de setor continua escopado pela RLS ao seu departamento.
+    todos = ctx.is_ti
     departamentos: list[dict] = []
     dep_id: str | None = None
     dep_nome: str | None = None
+    if ctx.is_ti:
+        departamentos = [d for d in await repo.departamentos(claims) if d.get("ativo")]
+        escolhido = departamento.strip()
+        selecionado = next((d for d in departamentos if str(d["id"]) == escolhido), None)
+        if selecionado:
+            dep_id = str(selecionado["id"])
+            dep_nome = selecionado["nome"]
 
-    kpis = await repo.kpis(claims, departamento_id=dep_id)
+    kpis = await repo.kpis(claims, departamento_id=dep_id, todos_setores=todos)
     graficos = {
-        "por_status": await repo.por_status(claims, departamento_id=dep_id),
-        "csat": await repo.csat_distribuicao(claims, departamento_id=dep_id),
-        "por_departamento": await repo.por_departamento(claims, departamento_id=dep_id),
-        "produtividade": await repo.produtividade(claims, departamento_id=dep_id),
+        "por_status": await repo.por_status(claims, departamento_id=dep_id, todos_setores=todos),
+        "csat": await repo.csat_distribuicao(claims, departamento_id=dep_id, todos_setores=todos),
+        "por_departamento": await repo.por_departamento(claims, departamento_id=dep_id, todos_setores=todos),
+        "por_setor": await repo.por_setor(claims, departamento_id=dep_id, todos_setores=todos),
+        "produtividade": await repo.produtividade(claims, departamento_id=dep_id, todos_setores=todos),
     }
-    avaliacoes = await repo.avaliacoes_recentes(claims, departamento_id=dep_id)
-    escopo = dep_nome or ctx.escopo
+    avaliacoes = await repo.avaliacoes_recentes(claims, departamento_id=dep_id, todos_setores=todos)
+    # Rótulo do escopo: setor escolhido, ou "Todos os setores" p/ TI, ou o setor do gestor.
+    escopo = dep_nome or ("Todos os setores" if ctx.is_ti else ctx.escopo)
     return render(
         request,
         "admin/dashboard.html",

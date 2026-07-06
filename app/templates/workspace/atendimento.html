@@ -26,7 +26,11 @@
         <div class="text-right text-xs text-muted shrink-0">
           <div>Autor: {{ chamado.cliente_nome or "—" }}</div>
           <div>Aberto {{ fmt_dt(chamado.created_at) }}</div>
+          {% if chamado.data_entrega %}
+          <div class="text-amber-700 font-semibold">Entrega: {{ chamado.data_entrega.strftime('%d/%m/%Y') }}</div>
+          {% else %}
           <div>Prazo {{ fmt_dt(chamado.limite_resolucao) }}</div>
+          {% endif %}
         </div>
       </div>
       <p class="mt-4 text-sm text-ink whitespace-pre-line">{{ chamado.descricao }}</p>

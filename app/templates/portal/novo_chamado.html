@@ -41,6 +41,15 @@
         <span class="block text-xs text-muted mt-1">Só a equipe desse setor verá e atenderá o chamado.</span>
       </label>
 
+      {# Setor para o qual a demanda está sendo pedida #}
+      <label class="block">
+        <span class="block text-[13px] font-semibold text-navy mb-1.5">Setor</span>
+        <input type="text" name="setor" required maxlength="100" value="{{ f.get('setor', '') }}"
+               placeholder="Ex: Comercial, Financeiro, Logística, PCP, etc."
+               class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+        <span class="block text-xs text-muted mt-1">Informe o setor para o qual a demanda está sendo pedida.</span>
+      </label>
+
       {# Aviso de prazo — exibido pelo novo_chamado.js quando o setor é o Marketing. #}
       <div id="marketing-aviso" hidden
            class="rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-sm text-amber-800">
@@ -78,10 +87,11 @@
                class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
       </label>
 
-      {# Prioridade #}
-      <label class="block">
+      {# Prioridade (TI/RH) OU Data de entrega (Marketing) — alternado por
+         novo_chamado.js conforme o departamento escolhido. #}
+      <label class="block" id="campo-prioridade">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Prioridade</span>
-        <select name="prioridade" required
+        <select name="prioridade"
                 class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
           {% for p in prioridades %}
           <option value="{{ p }}" {% if p == f.get('prioridade', 'MEDIA') %}selected{% endif %}>
@@ -89,6 +99,16 @@
           </option>
           {% endfor %}
         </select>
+      </label>
+
+      {# Data de entrega (Marketing) — mínimo de 48h; escondido por padrão via
+         classe .hidden (o atributo `hidden` sozinho seria sobreposto por .block). #}
+      <label class="hidden" id="campo-data-entrega">
+        <span class="block text-[13px] font-semibold text-navy mb-1.5">Data de entrega desejada</span>
+        <input type="date" name="data_entrega" id="data-entrega-input"
+               min="{{ data_entrega_min }}" value="{{ f.get('data_entrega', '') }}"
+               class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+        <span class="block text-xs text-muted mt-1">O Marketing trabalha por demanda: prazo mínimo de <strong>48h</strong> (2 dias) para início do desenvolvimento.</span>
       </label>
 
       {# Descrição — o placeholder muda para o texto do Marketing (via novo_chamado.js)

@@ -14,6 +14,10 @@
   }
 
   // ---- Kanban DnD ----
+  // forceFallback: usa o arraste por eventos de mouse do próprio Sortable (não o
+  // HTML5 Drag nativo), evitando que o <a> do cartão sequestre o gesto. handle no
+  // próprio cartão; o clique no link continua abrindo o chamado (o Sortable
+  // distingue clique de arraste pela tolerância).
   if (window.Sortable) {
     var cols = document.querySelectorAll(".kanban-col");
     cols.forEach(function (col) {
@@ -21,6 +25,8 @@
         group: "chamados",
         animation: 150,
         ghostClass: "opacity-40",
+        forceFallback: true,
+        fallbackTolerance: 4,
         onEnd: function (evt) {
           var card = evt.item;
           var destino = evt.to.getAttribute("data-status");

@@ -10,6 +10,18 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+# Marketing trabalha por demanda: a data de entrega deve respeitar um mínimo de
+# 48h (2 dias) para início de desenvolvimento.
+_TZ_BR = ZoneInfo("America/Sao_Paulo")
+_ENTREGA_MIN_DIAS = 2
+
+
+def _data_entrega_min() -> date:
+    """Menor data de entrega permitida (hoje + 48h, no fuso de Brasília)."""
+    return datetime.now(_TZ_BR).date() + timedelta(days=_ENTREGA_MIN_DIAS)
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import RedirectResponse
@@ -150,6 +162,7 @@ async def _render_form(
             "subcategorias": subcategorias,
             "marketing_dep_id": marketing_dep_id,
             "prioridades": PRIORIDADES,
+            "data_entrega_min": _data_entrega_min().isoformat(),
             "form": form,
             "erro": erro,
         },
@@ -214,6 +227,8 @@ async def criar_chamado(
     categoria_id: str = Form(""),
     subcategoria_id: str = Form(""),
     prioridade: str = Form("MEDIA"),
+    setor: str = Form(""),             # setor demandante
+    data_entrega: str = Form(""),      # fluxo por demanda (Marketing)
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
@@ -223,6 +238,8 @@ async def criar_chamado(
     departamento_id = departamento_id.strip()
     categoria_id = categoria_id.strip()
     subcategoria_id = subcategoria_id.strip()
+    setor = setor.strip()
+    data_entrega = data_entrega.strip()
     prioridade = prioridade.upper()
     if prioridade not in PRIORIDADES:
         prioridade = "MEDIA"
@@ -234,6 +251,8 @@ async def criar_chamado(
         "titulo": titulo,
         "descricao": descricao,
         "prioridade": prioridade,
+        "setor": setor,
+        "data_entrega": data_entrega,
     }
 
     async def _erro(msg: str, code: int = status.HTTP_400_BAD_REQUEST):
@@ -242,6 +261,33 @@ async def criar_chamado(
     # Departamento, categoria e assunto/descrição são obrigatórios.
     if not departamento_id:
         return await _erro("Selecione o departamento de destino do chamado.")
+    if not setor:
+        return await _erro("Informe o setor para o qual a demanda está sendo pedida.")
+
+    # Marketing trabalha por DEMANDA: em vez de prioridade, exige uma DATA DE
+    # ENTREGA com no mínimo 48h (2 dias). Para os demais setores, mantém a prioridade.
+    departamentos = await repo.departamentos_ativos(ctx.user.claims)
+    marketing_id = next(
+        (str(d["id"]) for d in departamentos if (d.get("nome") or "").strip().lower() == "marketing"),
+        "",
+    )
+    is_marketing = bool(marketing_id) and departamento_id == marketing_id
+    data_entrega_val: date | None = None
+    if is_marketing:
+        prioridade = "MEDIA"  # não usada no fluxo por demanda
+        if not data_entrega:
+            return await _erro("Informe a data de entrega desejada (mínimo de 48h).")
+        try:
+            escolhida = date.fromisoformat(data_entrega)
+        except ValueError:
+            return await _erro("Data de entrega inválida.")
+        minimo = _data_entrega_min()
+        if escolhida < minimo:
+            return await _erro(
+                "A data de entrega deve ser a partir de "
+                f"{minimo.strftime('%d/%m/%Y')} — mínimo de 48h para início do desenvolvimento."
+            )
+        data_entrega_val = escolhida
     if not categoria_id:
         return await _erro("Selecione a categoria do chamado.")
     # A categoria precisa pertencer ao departamento escolhido (0019 — defesa em
@@ -290,6 +336,8 @@ async def criar_chamado(
         titulo=titulo,
         descricao=descricao,
         prioridade=prioridade,
+        setor=setor,
+        data_entrega=data_entrega_val,
     )
 
     # Anexos da abertura viram a primeira mensagem (pública) do autor.

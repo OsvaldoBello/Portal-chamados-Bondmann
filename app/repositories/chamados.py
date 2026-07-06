@@ -89,7 +89,7 @@ class ChamadosRepo:
             row = await conn.fetchrow(
                 """
                 SELECT c.id, c.codigo, c.titulo, c.descricao, c.status, c.prioridade,
-                       c.cliente_id, c.operador_id, c.departamento_id,
+                       c.cliente_id, c.operador_id, c.departamento_id, c.data_entrega,
                        c.created_at, c.limite_resposta, c.limite_resolucao,
                        c.respondido_em, c.resolvido_em,
                        c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
@@ -216,15 +216,22 @@ class ChamadosRepo:
         titulo: str,
         descricao: str,
         prioridade: str,
+        setor: str,
+        data_entrega: "date | None" = None,
     ) -> dict[str, Any]:
-        """Cria um chamado endereçado a um departamento. Código/SLA via triggers."""
+        """Cria um chamado endereçado a um departamento. Código/SLA via triggers.
+
+        ``data_entrega`` (fluxo por demanda do Marketing) define o prazo de SLA
+        diretamente — o trigger ``calcular_sla_chamado`` usa a data em vez da
+        prioridade quando ela é informada (migration 0022)."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO chamados
                     (empresa_id, cliente_id, categoria_id, subcategoria_id, departamento_id,
-                     titulo, descricao, prioridade)
-                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7, $8::prioridade_chamado)
+                     titulo, descricao, prioridade, data_entrega, setor)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7,
+                        $8::prioridade_chamado, $9::date, $10)
                 RETURNING id, codigo
                 """,
                 empresa_id,
@@ -235,6 +242,8 @@ class ChamadosRepo:
                 titulo,
                 descricao,
                 prioridade,
+                data_entrega,
+                setor,
             )
             return dict(row)
 
