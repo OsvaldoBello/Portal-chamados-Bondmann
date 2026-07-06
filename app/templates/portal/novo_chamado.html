@@ -14,14 +14,15 @@
     {% endif %}
 
     <form method="post" action="/portal/chamados" enctype="multipart/form-data"
-          data-marketing-dep="{{ marketing_dep_id }}"
-          class="bg-white rounded-xl shadow-card border border-line/60 p-6 space-y-5">
+      data-marketing-dep="{{ marketing_dep_id }}"
+      class="bg-white rounded-xl shadow-card border border-line/60 p-6 space-y-5">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
       <div>
         <h3 class="font-display font-bold text-lg text-navy">Dados do chamado</h3>
         <p class="text-xs text-muted mt-1">
-          Escolha o <strong>departamento</strong> responsável (TI, RH ou Marketing) e descreva o <strong>assunto</strong>.
+          Escolha o <strong>departamento</strong> responsável (TI, RH ou Marketing) e descreva o
+          <strong>assunto</strong>.
           Todos os campos são obrigatórios.
         </p>
       </div>
@@ -29,13 +30,13 @@
       {# Departamento de destino (dispara o cascade de categorias via HTMX) #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Departamento de destino</span>
-        <select name="departamento_id" id="departamento-select" required
-                hx-get="/portal/chamados/categorias"
-                hx-target="#categoria-select" hx-swap="innerHTML" hx-trigger="change"
-                class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+        <select name="departamento_id" id="departamento-select" required hx-get="/portal/chamados/categorias"
+          hx-target="#categoria-select" hx-swap="innerHTML" hx-trigger="change"
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
           <option value="">Selecione o departamento…</option>
           {% for dep in departamentos %}
-          <option value="{{ dep.id }}" {% if dep.id|string == f.get('departamento_id') %}selected{% endif %}>{{ dep.nome }}</option>
+          <option value="{{ dep.id }}" {% if dep.id|string==f.get('departamento_id') %}selected{% endif %}>{{ dep.nome
+            }}</option>
           {% endfor %}
         </select>
         <span class="block text-xs text-muted mt-1">Só a equipe desse setor verá e atenderá o chamado.</span>
@@ -44,15 +45,20 @@
       {# Setor para o qual a demanda está sendo pedida #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Setor</span>
-        <input type="text" name="setor" required maxlength="100" value="{{ f.get('setor', '') }}"
-               placeholder="Ex: Comercial, Financeiro, Logística, PCP, etc."
-               class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
-        <span class="block text-xs text-muted mt-1">Informe o setor para o qual a demanda está sendo pedida.</span>
+        <select name="setor" required
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+          <option value="">Selecione seu setor…</option>
+          {% for s in setores or ["Brigadistas", "Comercial", "Controladoria", "Diretoria", "Dpto Químico",
+          "Financeiro", "Marketing", "RH", "SIG"] %}
+          <option value="{{ s }}" {% if s==f.get('setor', '' ) %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+        <span class="block text-xs text-muted mt-1">Informe seu setor.</span>
       </label>
 
       {# Aviso de prazo — exibido pelo novo_chamado.js quando o setor é o Marketing. #}
       <div id="marketing-aviso" hidden
-           class="rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-sm text-amber-800">
+        class="rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-sm text-amber-800">
         <strong>Prazo de entrega:</strong> defina a data que necessita que a entrega seja realizada,
         sempre respeitando o período mínimo de <strong>48h</strong> para início de desenvolvimento.
       </div>
@@ -60,21 +66,20 @@
       {# Categoria (recarregada conforme o departamento; dispara o cascade de subcategoria) #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Categoria</span>
-        <select name="categoria_id" id="categoria-select" required
-                hx-get="/portal/chamados/subcategorias"
-                hx-target="#subcategoria-select" hx-swap="innerHTML" hx-trigger="change"
-                class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+        <select name="categoria_id" id="categoria-select" required hx-get="/portal/chamados/subcategorias"
+          hx-target="#subcategoria-select" hx-swap="innerHTML" hx-trigger="change"
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
           {% include "portal/_categorias_options.html" %}
         </select>
       </label>
 
       {# Subcategoria — options carregados conforme a categoria. Sem `required` no
-         HTML: algumas categorias (ex.: Identidade Visual) não têm subcategoria; a
-         obrigatoriedade condicional é validada no servidor. #}
+      HTML: algumas categorias (ex.: Identidade Visual) não têm subcategoria; a
+      obrigatoriedade condicional é validada no servidor. #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Subcategoria</span>
         <select id="subcategoria-select" name="subcategoria_id"
-                class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
           {% include "portal/_subcategorias_options.html" %}
         </select>
       </label>
@@ -83,18 +88,18 @@
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Assunto</span>
         <input type="text" name="titulo" required maxlength="160" value="{{ f.get('titulo', '') }}"
-               placeholder="Resuma o problema em uma frase"
-               class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+          placeholder="Resuma o problema em uma frase"
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
       </label>
 
       {# Prioridade (TI/RH) OU Data de entrega (Marketing) — alternado por
-         novo_chamado.js conforme o departamento escolhido. #}
+      novo_chamado.js conforme o departamento escolhido. #}
       <label class="block" id="campo-prioridade">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Prioridade</span>
         <select name="prioridade"
-                class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
           {% for p in prioridades %}
-          <option value="{{ p }}" {% if p == f.get('prioridade', 'MEDIA') %}selected{% endif %}>
+          <option value="{{ p }}" {% if p==f.get('prioridade', 'MEDIA' ) %}selected{% endif %}>
             {{ PRIORIDADE_META.get(p, {}).get('label', p) }}
           </option>
           {% endfor %}
@@ -102,39 +107,41 @@
       </label>
 
       {# Data de entrega (Marketing) — mínimo de 48h; escondido por padrão via
-         classe .hidden (o atributo `hidden` sozinho seria sobreposto por .block). #}
+      classe .hidden (o atributo `hidden` sozinho seria sobreposto por .block). #}
       <label class="hidden" id="campo-data-entrega">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Data de entrega desejada</span>
-        <input type="date" name="data_entrega" id="data-entrega-input"
-               min="{{ data_entrega_min }}" value="{{ f.get('data_entrega', '') }}"
-               class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
-        <span class="block text-xs text-muted mt-1">O Marketing trabalha por demanda: prazo mínimo de <strong>48h</strong> (2 dias) para início do desenvolvimento.</span>
+        <input type="date" name="data_entrega" id="data-entrega-input" min="{{ data_entrega_min }}"
+          value="{{ f.get('data_entrega', '') }}"
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+        <span class="block text-xs text-muted mt-1">O Marketing trabalha por demanda: prazo mínimo de
+          <strong>48h</strong> (2 dias) para início do desenvolvimento.</span>
       </label>
 
       {# Descrição — o placeholder muda para o texto do Marketing (via novo_chamado.js)
-         quando o departamento de destino é o Marketing. #}
+      quando o departamento de destino é o Marketing. #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Descrição detalhada</span>
         <textarea name="descricao" id="descricao-input" rows="5" required
-                  data-placeholder-padrao="Descreva o que aconteceu, lote, linha de produção, etc."
-                  data-placeholder-marketing="Descreva a demanda da forma mais detalhada possível, isso ajuda a evitar retrabalhos e atrasos nos prazos"
-                  placeholder="Descreva o que aconteceu, lote, linha de produção, etc."
-                  class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint resize-none">{{ f.get('descricao', '') }}</textarea>
+          data-placeholder-padrao="Descreva o que aconteceu, lote, linha de produção, etc."
+          data-placeholder-marketing="Descreva a demanda da forma mais detalhada possível, isso ajuda a evitar retrabalhos e atrasos nos prazos"
+          placeholder="Descreva o que aconteceu, lote, linha de produção, etc."
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint resize-none">{{ f.get('descricao', '') }}</textarea>
       </label>
 
       {# Anexos (opcionais) — imagens/documentos na abertura #}
       <label class="block">
-        <span class="block text-[13px] font-semibold text-navy mb-1.5">Anexos <span class="text-faint font-normal">(opcional)</span></span>
-        <input type="file" name="arquivos" multiple
-               accept=".pdf,.jpg,.jpeg,.png,.mp4,.docx,.xlsx"
-               class="block w-full text-sm text-muted file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-navy-50 file:text-navy-800 hover:file:bg-navy-100">
-        <span class="block text-xs text-muted mt-1">Até 5 arquivos, 10&nbsp;MB cada. Tipos: PDF, JPG, PNG, MP4, DOCX, XLSX.</span>
+        <span class="block text-[13px] font-semibold text-navy mb-1.5">Anexos <span
+            class="text-faint font-normal">(opcional)</span></span>
+        <input type="file" name="arquivos" multiple accept=".pdf,.jpg,.jpeg,.png,.mp4,.docx,.xlsx"
+          class="block w-full text-sm text-muted file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-navy-50 file:text-navy-800 hover:file:bg-navy-100">
+        <span class="block text-xs text-muted mt-1">Até 5 arquivos, 10&nbsp;MB cada. Tipos: PDF, JPG, PNG, MP4, DOCX,
+          XLSX.</span>
       </label>
 
       <div class="flex items-center justify-end gap-3 pt-2">
         <a href="/portal" class="px-4 py-2.5 rounded-lg text-sm text-muted hover:text-navy">Cancelar</a>
         <button type="submit"
-                class="px-5 py-2.5 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 transition">
+          class="px-5 py-2.5 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 transition">
           Abrir chamado
         </button>
       </div>
@@ -147,18 +154,26 @@
       <div class="absolute -right-6 -top-8 w-28 h-28 rounded-full border-[10px] border-white/5"></div>
       <h3 class="font-display font-bold relative">Como abrir um bom chamado</h3>
       <ul class="mt-3 space-y-2.5 text-sm text-white/80 relative">
-        <li class="flex gap-2"><span class="text-brandgreen">•</span> Escolha o <strong class="text-white">setor</strong> correto para agilizar o atendimento.</li>
-        <li class="flex gap-2"><span class="text-brandgreen">•</span> Use um <strong class="text-white">assunto</strong> curto e específico.</li>
-        <li class="flex gap-2"><span class="text-brandgreen">•</span> Na <strong class="text-white">descrição</strong>, inclua lote, linha, horário e o que já tentou.</li>
-        <li class="flex gap-2"><span class="text-brandgreen">•</span> Defina a <strong class="text-white">prioridade</strong> conforme o impacto na operação.</li>
+        <li class="flex gap-2"><span class="text-brandgreen">•</span> Escolha o <strong
+            class="text-white">setor</strong> correto para agilizar o atendimento.</li>
+        <li class="flex gap-2"><span class="text-brandgreen">•</span> Use um <strong class="text-white">assunto</strong>
+          curto e específico.</li>
+        <li class="flex gap-2"><span class="text-brandgreen">•</span> Na <strong class="text-white">descrição</strong>,
+          inclua lote, linha, horário e o que já tentou.</li>
+        <li class="flex gap-2"><span class="text-brandgreen">•</span> Defina a <strong
+            class="text-white">prioridade</strong> conforme o impacto na operação.</li>
       </ul>
     </div>
     <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
       <div class="flex items-center gap-2 text-navy">
-        <svg class="w-5 h-5 text-brandgreen-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <svg class="w-5 h-5 text-brandgreen-600" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
         <span class="font-display font-bold text-sm">Prazo (SLA)</span>
       </div>
-      <p class="text-xs text-muted mt-1.5">Após a abertura, o sistema calcula o prazo de resposta e resolução conforme a prioridade — acompanhe pelo painel “Meus chamados”.</p>
+      <p class="text-xs text-muted mt-1.5">Após a abertura, o sistema calcula o prazo de resposta e resolução conforme a
+        prioridade — acompanhe pelo painel “Meus chamados”.</p>
     </div>
   </aside>
 </div>

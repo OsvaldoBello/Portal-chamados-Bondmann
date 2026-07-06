@@ -244,6 +244,22 @@ def test_criar_sem_setor_retorna_400():
     assert repo.criados == []
 
 
+def test_criar_com_setor_invalido_retorna_400():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(setor="Inexistente")
+        resp = client.post(
+            "/portal/chamados",
+            data=data,
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "setor selecionado inválido" in resp.text.lower() or "inválido" in resp.text.lower()
+    assert repo.criados == []
+
+
+
 def test_criar_sem_categoria_retorna_400():
     repo = FakeRepo()
     with portal_client(repo) as client:

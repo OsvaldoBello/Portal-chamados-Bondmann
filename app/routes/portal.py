@@ -18,6 +18,18 @@ from zoneinfo import ZoneInfo
 _TZ_BR = ZoneInfo("America/Sao_Paulo")
 _ENTREGA_MIN_DIAS = 2
 
+SETORES = [
+    "Brigadistas",
+    "Comercial",
+    "Controladoria",
+    "Diretoria",
+    "Dpto Químico",
+    "Financeiro",
+    "Marketing",
+    "RH",
+    "SIG",
+]
+
 
 def _data_entrega_min() -> date:
     """Menor data de entrega permitida (hoje + 48h, no fuso de Brasília)."""
@@ -165,6 +177,7 @@ async def _render_form(
             "data_entrega_min": _data_entrega_min().isoformat(),
             "form": form,
             "erro": erro,
+            "setores": SETORES,
         },
         status_code=status_code,
     )
@@ -263,6 +276,8 @@ async def criar_chamado(
         return await _erro("Selecione o departamento de destino do chamado.")
     if not setor:
         return await _erro("Informe o setor para o qual a demanda está sendo pedida.")
+    if setor not in SETORES:
+        return await _erro("Setor selecionado inválido.")
 
     # Marketing trabalha por DEMANDA: em vez de prioridade, exige uma DATA DE
     # ENTREGA com no mínimo 48h (2 dias). Para os demais setores, mantém a prioridade.
