@@ -21,13 +21,13 @@
            class="fixed md:static inset-y-0 left-0 z-40 w-64 md:w-60 shrink-0 flex flex-col bg-navy-900 text-white
                   -translate-x-full md:translate-x-0 transition-transform duration-200 ease-out">
       <div class="px-5 h-16 flex items-center justify-between border-b border-white/10">
-        <div class="flex items-center gap-2.5 select-none">
+        <a href="/admin" class="flex items-center gap-2.5 select-none hover:opacity-90 transition-opacity">
           {% include "_logo.html" %}
           <div class="leading-none">
             <div class="font-display font-black tracking-tight text-[19px] text-white">BONDMANN</div>
             <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5 text-brandgreen">{% if is_ti is defined and is_ti %}ADMIN · TI{% else %}RELATÓRIOS{% endif %}</div>
           </div>
-        </div>
+        </a>
         <button data-sidebar-close class="md:hidden text-white/60 hover:text-white" aria-label="Fechar menu">
           <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
