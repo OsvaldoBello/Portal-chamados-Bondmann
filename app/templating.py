@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -35,6 +36,44 @@ PRIORIDADE_META = {
     "URGENTE": {"label": "Urgente", "text": "text-pr_urgente"},
 }
 
+# Paleta de rótulos (estilo Trello) para os badges de setor/categoria do Kanban.
+# Cada valor de texto recebe uma cor estável (hash determinístico) — o mesmo
+# setor/categoria sempre aparece na mesma cor entre cartões e sessões.
+#
+# ⚠️ As classes PRECISAM estar escritas literalmente aqui: o purge do Tailwind
+# escaneia os .py (ver tailwind.config.js) e só mantém no bundle as classes que
+# encontra como string literal. Não gere estas strings dinamicamente.
+PALETA_ROTULOS = (
+    "bg-rose-100 text-rose-800 ring-1 ring-inset ring-rose-600/20",
+    "bg-orange-100 text-orange-800 ring-1 ring-inset ring-orange-600/20",
+    "bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-600/20",
+    "bg-lime-100 text-lime-800 ring-1 ring-inset ring-lime-600/20",
+    "bg-green-100 text-green-800 ring-1 ring-inset ring-green-600/20",
+    "bg-emerald-100 text-emerald-800 ring-1 ring-inset ring-emerald-600/20",
+    "bg-teal-100 text-teal-800 ring-1 ring-inset ring-teal-600/20",
+    "bg-cyan-100 text-cyan-800 ring-1 ring-inset ring-cyan-600/20",
+    "bg-sky-100 text-sky-800 ring-1 ring-inset ring-sky-600/20",
+    "bg-blue-100 text-blue-800 ring-1 ring-inset ring-blue-600/20",
+    "bg-indigo-100 text-indigo-800 ring-1 ring-inset ring-indigo-600/20",
+    "bg-violet-100 text-violet-800 ring-1 ring-inset ring-violet-600/20",
+    "bg-fuchsia-100 text-fuchsia-800 ring-1 ring-inset ring-fuchsia-600/20",
+    "bg-pink-100 text-pink-800 ring-1 ring-inset ring-pink-600/20",
+)
+_ROTULO_NEUTRO = "bg-navy-100 text-navy-800 ring-1 ring-inset ring-navy-500/20"
+
+
+def cor_rotulo(texto: str | None) -> str:
+    """Classes Tailwind (bg/text/ring) para um badge de rótulo, cor por texto.
+
+    Determinístico e estável entre processos: usa MD5 do texto normalizado em
+    vez de ``hash()`` (que é aleatorizado por processo). Rótulo vazio → neutro.
+    """
+    chave = (texto or "").strip().lower()
+    if not chave:
+        return _ROTULO_NEUTRO
+    indice = int(hashlib.md5(chave.encode("utf-8")).hexdigest(), 16)
+    return PALETA_ROTULOS[indice % len(PALETA_ROTULOS)]
+
 
 def fmt_dt(value: datetime | None, fmt: str = "%d/%m/%Y %H:%M") -> str:
     """Formata um ``timestamptz`` (UTC no banco) em horário de Brasília."""
@@ -49,6 +88,7 @@ templates.env.autoescape = True
 templates.env.globals.update(
     STATUS_META=STATUS_META,
     PRIORIDADE_META=PRIORIDADE_META,
+    cor_rotulo=cor_rotulo,   # cor estável por setor/categoria no Kanban
     fmt_dt=fmt_dt,
     estado_sla=estado_sla,   # indicador visual de SLA (Fase 4)
     barra_sla=barra_sla,     # barra de progresso de SLA (Fase 3 do usuário)

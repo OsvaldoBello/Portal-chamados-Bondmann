@@ -32,14 +32,16 @@
         <a href="/workspace/chamados/{{ c.id }}?origem=kanban" class="block" draggable="false">
           <div class="font-mono text-[11px] text-brandgreen-700">{{ c.codigo }}</div>
           
+          {# Badges de setor/categoria com cor estável por valor (estilo Trello):
+             cor derivada do texto via cor_rotulo() — ver app/templating.py. #}
           <div class="flex flex-wrap gap-1 mt-1">
             {% if c.setor %}
-            <span class="inline-flex items-center rounded bg-navy-900 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+            <span class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold {{ cor_rotulo(c.setor) }}">
               {{ c.setor }}
             </span>
             {% endif %}
             {% if c.categoria %}
-            <span class="inline-flex items-center rounded bg-navy-100 px-1.5 py-0.5 text-[10px] font-semibold text-navy-800">
+            <span class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold {{ cor_rotulo(c.categoria) }}">
               {{ c.categoria }}
             </span>
             {% endif %}

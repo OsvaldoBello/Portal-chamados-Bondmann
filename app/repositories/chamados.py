@@ -335,7 +335,7 @@ class ChamadosRepo:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
-                SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade,
+                SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade, c.setor,
                        c.created_at, c.limite_resolucao, c.respondido_em, c.resolvido_em,
                        cat.nome AS categoria, dep.nome AS departamento,
                        autor.nome AS cliente_nome, op.nome AS operador_nome
