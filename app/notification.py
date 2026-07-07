@@ -1,9 +1,11 @@
+import asyncio
 import logging
 import smtplib
 import hmac
 import hashlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import httpx
 from fastapi import BackgroundTasks
 from app.config import get_settings
 from app.auth.supabase_client import ensure_admin_client
@@ -27,18 +29,79 @@ def validar_token_resposta(codigo: str, usuario_id: str, token: str, secret: str
     return hmac.compare_digest(esperado, token)
 
 
-def enviar_email_smtp(para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None) -> None:
-    """Dispara um e-mail utilizando os parâmetros SMTP configurados no ambiente.
-    Caso não esteja configurado, realiza um log para desenvolvimento local/mock.
+async def enviar_email(para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None) -> bool:
+    """Dispatcher de envio de e-mail. Prefere a API HTTP do Mailgun (confiável em
+    serverless/Vercel); se ela não estiver configurada, cai para SMTP (executado
+    fora do event loop para não bloquear). Retorna ``True`` se o e-mail saiu.
+
+    Nunca levanta exceção para o chamador — falha de e-mail não deve quebrar o
+    fluxo do chat (Seção 6.3). O motivo real vai para o log.
+    """
+    settings = get_settings()
+
+    if settings.mailgun_ativo:
+        try:
+            await _enviar_via_mailgun_api(para, assunto, corpo_texto, corpo_html, reply_to)
+            return True
+        except Exception as e:
+            log.error(f"[EMAIL MAILGUN ERROR] Falha ao enviar via Mailgun para {para}: {e}")
+            # Cai para SMTP se disponível; senão, encerra com log abaixo.
+
+    if settings.smtp_host and settings.smtp_user and settings.smtp_password:
+        # smtplib é bloqueante: roda em thread para não travar o event loop.
+        return await asyncio.to_thread(
+            enviar_email_smtp, para, assunto, corpo_texto, corpo_html, reply_to
+        )
+
+    faltando = []
+    if not settings.mailgun_api_key:
+        faltando.append("MAILGUN_API_KEY")
+    if not settings.mailgun_domain:
+        faltando.append("MAILGUN_DOMAIN")
+    log.warning(
+        f"[EMAIL NÃO CONFIGURADO] E-mail NÃO enviado para {para}. "
+        f"Configure o Mailgun (faltando: {', '.join(faltando) or 'nenhuma'}) "
+        f"ou as credenciais SMTP. Assunto: {assunto}"
+    )
+    return False
+
+
+async def _enviar_via_mailgun_api(para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None) -> None:
+    """Envia o e-mail pela API HTTP do Mailgun (POST multipart, HTTP basic auth).
+    Assíncrono via httpx — sem socket SMTP bloqueante. Levanta em caso de falha
+    para o dispatcher decidir o fallback.
+    """
+    settings = get_settings()
+    url = f"{settings.mailgun_base_url.rstrip('/')}/v3/{settings.mailgun_domain}/messages"
+    data = {
+        "from": settings.email_from,
+        "to": para,
+        "subject": assunto,
+        "text": corpo_texto,
+    }
+    if corpo_html:
+        data["html"] = corpo_html
+    if reply_to:
+        data["h:Reply-To"] = reply_to
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(url, auth=("api", settings.mailgun_api_key), data=data)
+        resp.raise_for_status()
+    log.info(f"[EMAIL MAILGUN SUCCESS] E-mail enviado para {para} (HTTP {resp.status_code})")
+
+
+def enviar_email_smtp(para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None) -> bool:
+    """Envia um e-mail via SMTP (fallback). Bloqueante — chamar via
+    ``asyncio.to_thread``. Retorna ``True`` em sucesso, ``False`` em falha.
     """
     settings = get_settings()
     if not (settings.smtp_host and settings.smtp_user and settings.smtp_password):
-        log.info(f"[EMAIL NOTIFICATION MOCK] To: {para} | Subject: {assunto} | Reply-To: {reply_to} | Body: {corpo_texto.strip()}")
-        return
+        log.warning(f"[EMAIL SMTP MOCK] SMTP não configurado. E-mail NÃO enviado para {para} | Subject: {assunto}")
+        return False
 
     try:
         msg = MIMEMultipart('alternative')
-        msg['From'] = settings.smtp_from
+        msg['From'] = settings.email_from
         msg['To'] = para
         msg['Subject'] = assunto
         if reply_to:
@@ -48,13 +111,15 @@ def enviar_email_smtp(para: str, assunto: str, corpo_texto: str, corpo_html: str
         if corpo_html:
             msg.attach(MIMEText(corpo_html, 'html', 'utf-8'))
 
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as server:
             server.starttls()
             server.login(settings.smtp_user, settings.smtp_password)
             server.send_message(msg)
-        log.info(f"[EMAIL NOTIFICATION SUCCESS] Email successfully sent to {para}")
+        log.info(f"[EMAIL SMTP SUCCESS] Email successfully sent to {para}")
+        return True
     except Exception as e:
-        log.error(f"[EMAIL NOTIFICATION ERROR] Failed to send email to {para}: {e}")
+        log.error(f"[EMAIL SMTP ERROR] Failed to send email to {para}: {e}")
+        return False
 
 
 async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteudo: str) -> None:
@@ -247,7 +312,7 @@ async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteu
         token = gerar_token_resposta(codigo, destinatario_id, secret)
         reply_to = f"chamado+{codigo.lower()}+{token}@{settings.inbound_email_domain}"
 
-    enviar_email_smtp(email, assunto, corpo_texto, corpo_html, reply_to=reply_to)
+    await enviar_email(email, assunto, corpo_texto, corpo_html, reply_to=reply_to)
 
 
 async def agendar_notificacao_email(background_tasks: BackgroundTasks, chamado: dict, remetente_id: str, conteudo: str) -> None:

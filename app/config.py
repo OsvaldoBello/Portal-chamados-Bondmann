@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # --- Cookies ---
     cookie_secure: bool = Field(default=True)
 
-    # --- SMTP / E-mail (Notificações) ---
+    # --- SMTP / E-mail (Notificações — fallback quando Mailgun não está ativo) ---
     smtp_host: str = Field(default="")
     smtp_port: int = Field(default=587)
     smtp_user: str = Field(default="")
@@ -62,6 +62,31 @@ class Settings(BaseSettings):
     site_url: str = Field(default="http://localhost:8000")
     inbound_email_domain: str = Field(default="")
     inbound_email_secret: str = Field(default="")
+
+    # --- Mailgun (provedor transacional preferencial: envio via API HTTP +
+    #     recebimento de respostas via webhook inbound). Usar API é mais confiável
+    #     que SMTP em ambiente serverless (Vercel): sem socket TCP bloqueante,
+    #     sem timeouts de STARTTLS, entrega por HTTPS. ---
+    mailgun_api_key: str = Field(default="")
+    mailgun_domain: str = Field(default="")
+    # Região da conta: US = https://api.mailgun.net | EU = https://api.eu.mailgun.net
+    mailgun_base_url: str = Field(default="https://api.mailgun.net")
+
+    @property
+    def email_from(self) -> str:
+        """Remetente do e-mail. Para alinhamento DKIM/DMARC no Mailgun o domínio
+        do From deve casar com ``mailgun_domain`` (domínio verificado). Se
+        ``smtp_from`` foi definido, respeita-o; senão deriva do domínio Mailgun.
+        """
+        if self.smtp_from:
+            return self.smtp_from
+        if self.mailgun_domain:
+            return f"Portal Bondmann <no-reply@{self.mailgun_domain}>"
+        return "no-reply@bondmann.com.br"
+
+    @property
+    def mailgun_ativo(self) -> bool:
+        return bool(self.mailgun_api_key and self.mailgun_domain)
 
     @property
     def is_production(self) -> bool:
