@@ -15,8 +15,8 @@
 {% set sla_labels = {"atrasado": "Atrasado / vencido", "risco": "Em risco", "no_prazo": "No prazo"} %}
 
 {# Contadores por status #}
-<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
-  {% for chave, rot in [("", "Total"), ("NOVO","Novos"), ("EM_ATENDIMENTO","Em atendimento"), ("AGUARDANDO","Aguardando"), ("RESOLVIDO","Resolvidos")] %}
+<div class="grid grid-cols-2 {% if perfil.departamento == 'Marketing' %}lg:grid-cols-6{% else %}lg:grid-cols-5{% endif %} gap-3 mb-5">
+  {% for chave, rot in status_cards %}
   <a href="/workspace{% if chave %}?status={{ chave }}{{ ns }}{% elif ns %}?{{ ns[1:] }}{% endif %}"
      class="rounded-xl border p-4 bg-white shadow-card {% if filtro == (chave or None) %}border-navy-500 ring-1 ring-navy-500{% else %}border-line/60{% endif %}">
     <div class="text-2xl font-display font-bold text-navy">

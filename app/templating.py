@@ -19,6 +19,8 @@ _TZ = ZoneInfo("America/Sao_Paulo")  # exibição em horário de Brasília (Seç
 STATUS_META = {
     "NOVO":           {"label": "Novo",           "dot": "bg-st_novo",   "text": "text-st_novo",
                        "bg": "bg-st_novo/10",   "icon": "M12 4.5v15m7.5-7.5h-15"},
+    "A_FAZER":        {"label": "A fazer",        "dot": "bg-amber-500", "text": "text-amber-500",
+                       "bg": "bg-amber-500/10", "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"},
     "EM_ATENDIMENTO": {"label": "Em atendimento", "dot": "bg-st_atend",  "text": "text-st_atend",
                        "bg": "bg-st_atend/10",  "icon": "M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"},
     "AGUARDANDO":     {"label": "Aguardando",     "dot": "bg-st_aguard", "text": "text-st_aguard",

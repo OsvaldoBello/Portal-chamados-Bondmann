@@ -6,7 +6,9 @@
 {% block heading %}Atendimento{% endblock %}
 {% block content %}
 
-<div class="mb-4"><a href="/workspace" class="text-sm text-muted hover:text-navy">&larr; Voltar à fila</a></div>
+{% set voltar_url = "/workspace/kanban" if origem == "kanban" else "/workspace" %}
+{% set voltar_label = "Voltar ao kanban" if origem == "kanban" else "Voltar à fila" %}
+<div class="mb-4"><a href="{{ voltar_url }}" class="text-sm text-muted hover:text-navy">&larr; {{ voltar_label }}</a></div>
 
 <div class="grid lg:grid-cols-3 gap-5">
   {# ---------- Coluna principal ---------- #}
@@ -17,7 +19,7 @@
           <div class="font-mono text-xs text-muted mb-1">{{ chamado.codigo }}</div>
           <h2 class="font-display font-bold text-xl text-navy">{{ chamado.titulo }}</h2>
           <div class="flex flex-wrap items-center gap-2.5 mt-2 text-sm">
-            {{ status_badge(chamado.status) }}
+            {{ status_badge(chamado.status, chamado.departamento) }}
             {{ prioridade_badge(chamado.prioridade) }}
             <span class="inline-flex rounded-full bg-navy-100 px-2 py-0.5 text-xs font-semibold text-navy">{{ chamado.departamento or "—" }}</span>
             {{ sla_chip(chamado) }}
@@ -59,7 +61,7 @@
       {% endif %}
       {# Composer: mensagem pública OU nota interna (fundo amarelo via workspace.js).
          multipart: aceita anexos (validação server-side — Seção 3.9). #}
-      <form id="composer" method="post" action="/workspace/chamados/{{ chamado.id }}/mensagens"
+      <form id="composer" method="post" action="/workspace/chamados/{{ chamado.id }}/mensagens{% if origem %}?origem={{ origem }}{% endif %}"
             enctype="multipart/form-data"
             class="mt-5 space-y-3 rounded-lg ring-1 ring-transparent p-3 -m-1 transition-colors">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -88,7 +90,7 @@
   <div class="space-y-4">
     {% if chamado.status == 'NOVO' %}
     {# Iniciar atendimento: assume o chamado e move para "Em atendimento". #}
-    <form method="post" action="/workspace/chamados/{{ chamado.id }}/iniciar">
+    <form method="post" action="/workspace/chamados/{{ chamado.id }}/iniciar{% if origem %}?origem={{ origem }}{% endif %}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit"
               class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 shadow-soft transition">
@@ -109,7 +111,7 @@
         Descreva a <strong>solução aplicada</strong>. Ela é enviada ao solicitante como resposta e o
         chamado é marcado como <strong>Resolvido</strong> — ele poderá então avaliar o atendimento.
       </p>
-      <form method="post" action="/workspace/chamados/{{ chamado.id }}/encerrar" class="space-y-3">
+      <form method="post" action="/workspace/chamados/{{ chamado.id }}/encerrar{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-3">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <textarea name="resolucao" rows="3"
                   placeholder="Ex.: Substituído o sensor do dosador; linha 3 operando normalmente. Qualquer dúvida, reabra o chamado."
@@ -126,17 +128,24 @@
     <div class="bg-white rounded-xl shadow-card border border-line/60 p-5 space-y-4">
       <h3 class="font-display font-bold text-navy">Ações</h3>
 
-      <form method="post" action="/workspace/chamados/{{ chamado.id }}/status" class="space-y-1.5">
+      <form method="post" action="/workspace/chamados/{{ chamado.id }}/status{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-1.5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="block text-[13px] font-semibold text-navy">Status</label>
         <select name="novo_status" data-autosubmit class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
           {% for s in status_validos %}
-          <option value="{{ s }}" {% if s == chamado.status %}selected{% endif %}>{{ STATUS_META[s].label }}</option>
+          {% set label = STATUS_META[s].label %}
+          {% if chamado.departamento == 'Marketing' %}
+            {% if s == 'EM_ATENDIMENTO' %}{% set label = 'Em andamento' %}
+            {% elif s == 'AGUARDANDO' %}{% set label = 'Aguardando Validação' %}
+            {% elif s == 'RESOLVIDO' %}{% set label = 'Concluídos' %}
+            {% endif %}
+          {% endif %}
+          <option value="{{ s }}" {% if s == chamado.status %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
       </form>
 
-      <form method="post" action="/workspace/chamados/{{ chamado.id }}/prioridade" class="space-y-1.5">
+      <form method="post" action="/workspace/chamados/{{ chamado.id }}/prioridade{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-1.5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="block text-[13px] font-semibold text-navy">Prioridade</label>
         <select name="nova_prioridade" data-autosubmit class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
@@ -147,7 +156,7 @@
         <p class="text-[11px] text-muted">Alterar a prioridade recalcula os prazos de SLA.</p>
       </form>
 
-      <form method="post" action="/workspace/chamados/{{ chamado.id }}/atribuir" class="space-y-1.5">
+      <form method="post" action="/workspace/chamados/{{ chamado.id }}/atribuir{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-1.5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="block text-[13px] font-semibold text-navy">Operador responsável</label>
         <select name="operador_id" data-autosubmit class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
@@ -161,7 +170,7 @@
 
       {% if perfil.is_ti %}
       {# Repasse entre departamentos — exclusivo do TI (RLS reforça no banco). #}
-      <form method="post" action="/workspace/chamados/{{ chamado.id }}/transferir" class="space-y-1.5 pt-1 border-t border-line/60">
+      <form method="post" action="/workspace/chamados/{{ chamado.id }}/transferir{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-1.5 pt-1 border-t border-line/60">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="block text-[13px] font-semibold text-navy pt-3">Repassar para outro departamento</label>
         <select name="departamento_id" data-autosubmit class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
@@ -176,6 +185,43 @@
       </form>
       {% endif %}
     </div>
+
+    {% if chamado.departamento == 'Marketing' %}
+    <div class="bg-white rounded-xl shadow-card border border-line/60 p-5 space-y-4">
+      <h3 class="font-display font-bold text-navy">Informações do Dashboard</h3>
+      <form method="post" action="/workspace/chamados/{{ chamado.id }}/marketing-meta{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        
+        <label class="block">
+          <span class="text-[13px] font-semibold text-navy">Volume</span>
+          <input type="number" name="volume" value="{{ chamado.volume or 1 }}" min="1" required
+                 class="w-full mt-1.5 px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+        </label>
+        
+        <label class="block">
+          <span class="text-[13px] font-semibold text-navy">Origem da Demanda</span>
+          <select name="origem_demanda" class="w-full mt-1.5 px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+            <option value="Solicitação" {% if chamado.origem_demanda == 'Solicitação' %}selected{% endif %}>Solicitação</option>
+            <option value="Marketing" {% if chamado.origem_demanda == 'Marketing' %}selected{% endif %}>Marketing</option>
+          </select>
+        </label>
+
+        <label class="block">
+          <span class="text-[13px] font-semibold text-navy">Causa do Atraso (se > 5 dias)</span>
+          <select name="causa_atraso" class="w-full mt-1.5 px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+            <option value="" {% if not chamado.causa_atraso %}selected{% endif %}>— Nenhuma registrada —</option>
+            <option value="Sem causa registrada" {% if chamado.causa_atraso == 'Sem causa registrada' %}selected{% endif %}>Sem causa registrada</option>
+            <option value="Aguardando definição interna" {% if chamado.causa_atraso == 'Aguardando definição interna' %}selected{% endif %}>Aguardando definição interna</option>
+            <option value="Dependência de execução" {% if chamado.causa_atraso == 'Dependência de execução' %}selected{% endif %}>Dependência de execução</option>
+          </select>
+        </label>
+        
+        <button type="submit" class="w-full py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 transition shadow-soft">
+          Salvar Dados
+        </button>
+      </form>
+    </div>
+    {% endif %}
 
     {% if chamado.avaliacao_nota %}
     <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">

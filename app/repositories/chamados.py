@@ -93,6 +93,7 @@ class ChamadosRepo:
                        c.created_at, c.limite_resposta, c.limite_resolucao,
                        c.respondido_em, c.resolvido_em,
                        c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
+                       c.volume, c.origem_demanda, c.causa_atraso,
                        cat.nome AS categoria, sub.nome AS subcategoria,
                        dep.nome AS departamento,
                        autor.nome AS cliente_nome, op.nome AS operador_nome
@@ -218,6 +219,8 @@ class ChamadosRepo:
         prioridade: str,
         setor: str,
         data_entrega: "date | None" = None,
+        volume: int = 1,
+        origem_demanda: str = "Solicitação",
     ) -> dict[str, Any]:
         """Cria um chamado endereçado a um departamento. Código/SLA via triggers.
 
@@ -229,9 +232,9 @@ class ChamadosRepo:
                 """
                 INSERT INTO chamados
                     (empresa_id, cliente_id, categoria_id, subcategoria_id, departamento_id,
-                     titulo, descricao, prioridade, data_entrega, setor)
+                     titulo, descricao, prioridade, data_entrega, setor, volume, origem_demanda)
                 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7,
-                        $8::prioridade_chamado, $9::date, $10)
+                        $8::prioridade_chamado, $9::date, $10, $11::integer, $12)
                 RETURNING id, codigo
                 """,
                 empresa_id,
@@ -244,6 +247,8 @@ class ChamadosRepo:
                 prioridade,
                 data_entrega,
                 setor,
+                volume,
+                origem_demanda,
             )
             return dict(row)
 
@@ -611,6 +616,32 @@ class ChamadosRepo:
                 limite,
             )
             return [dict(r) for r in rows]
+
+    async def salvar_marketing_meta(
+        self, claims: dict, chamado_id: str, *, volume: int, origem_demanda: str, causa_atraso: str | None
+    ) -> dict[str, Any] | None:
+        """Salva as informações de volume, origem da demanda e causa de atraso (staff no escopo)."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE chamados
+                   SET volume = $2::integer,
+                       origem_demanda = $3,
+                       causa_atraso = $4
+                 WHERE id = $1::uuid
+             RETURNING id, volume, origem_demanda, causa_atraso
+                """,
+                chamado_id,
+                volume,
+                origem_demanda,
+                causa_atraso,
+            )
+            if row is not None:
+                await self._registrar(
+                    conn, chamado_id, claims["sub"], "MARKETING_META_ALTERADO",
+                    {"volume": volume, "origem_demanda": origem_demanda, "causa_atraso": causa_atraso},
+                )
+            return dict(row) if row else None
 
 
 _repo = ChamadosRepo()

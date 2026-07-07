@@ -1,0 +1,225 @@
+{% extends "workspace/workspace_base.html" %}
+{% from "portal/_macros.html" import estrelas %}
+{% set active = "kpis" %}
+{% block title %}Indicadores de Marketing — Admin{% endblock %}
+{% block heading %}Indicadores de Marketing{% endblock %}
+{% block subheading %}Painel de indicadores de Marketing e Mídia Regional{% endblock %}
+
+{% block content %}
+<style>
+  :root {
+    --green: #1D9E75;
+    --blue: #378ADD;
+    --orange: #D85A30;
+    --purple: #534AB7;
+    --amber: #EF9F27;
+  }
+  .tab-panel {
+    display: none;
+  }
+  .tab-panel.active {
+    display: block;
+  }
+  .tab-btn.active {
+    background-color: #83c964;
+    color: #1a3a10;
+  }
+  .filter-pill.active {
+    background-color: #004270;
+    color: white;
+  }
+</style>
+
+<div class="anim-fade mb-5 flex flex-wrap items-center justify-between gap-4 text-sm">
+  {% if is_ti is defined and is_ti and departamentos %}
+  <form method="get" action="/admin"
+        class="inline-flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-full bg-surface border border-line">
+    <svg class="w-4 h-4 text-brandgreen-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21"/></svg>
+    <label for="filtro-departamento" class="text-brandgreen-700 font-medium">Indicadores de:</label>
+    <select id="filtro-departamento" name="departamento" data-autosubmit
+            class="bg-transparent font-bold text-navy outline-none cursor-pointer pr-1">
+      <option value="">Todos os setores</option>
+      {% for d in departamentos %}
+      <option value="{{ d.id }}" {% if departamento_sel == d.id|string %}selected{% endif %}>{{ d.nome }}</option>
+      {% endfor %}
+    </select>
+    <svg class="w-4 h-4 text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+  </form>
+  {% else %}
+  <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface text-brandgreen-700 font-medium border border-line">
+    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21"/></svg>
+    Indicadores de: <strong>{{ escopo }}</strong>
+  </span>
+  {% endif %}
+  <h2 id="header-title" class="font-display font-black text-navy text-base">Dashboard de Marketing</h2>
+</div>
+
+<!-- FILTER BAR -->
+<div id="filter-bar" class="flex flex-wrap items-center gap-2 mb-6">
+  <span class="text-xs font-bold uppercase tracking-wider text-muted mr-2">Filtrar Período:</span>
+  <button class="filter-pill active px-3.5 py-1.5 rounded-full bg-gray-200 text-navy font-semibold text-xs transition" onclick="setFilter('all',this)">Acumulado</button>
+  {% for m in mkt_data.monthly %}
+  <button class="filter-pill px-3.5 py-1.5 rounded-full bg-gray-200 text-navy font-semibold text-xs transition" onclick="setFilter('{{ m.label }}',this)">{{ m.label }}</button>
+  {% endfor %}
+  <span id="filter-period-label" class="text-xs text-muted italic ml-2"></span>
+</div>
+
+<!-- SUMMARY CARDS -->
+<div id="summary" class="grid md:grid-cols-2 gap-4 mb-6">
+  <div id="sum-left" class="bg-white rounded-xl shadow-card border-l-4 border-l-brandgreen-600 border border-line/60 p-5">
+  </div>
+  <div id="sum-right" class="bg-white rounded-xl shadow-card border-l-4 border-l-purple-600 border border-line/60 p-5">
+  </div>
+</div>
+
+<!-- TABS BAR -->
+<div id="tabs" class="flex flex-wrap gap-2 mb-6">
+  <button class="tab-btn active px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy transition shadow-soft" onclick="switchTab('entrega',this)">1. Taxa de Entrega</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" onclick="switchTab('volume',this)">2. Volume Produzido</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" onclick="switchTab('origem',this)">3. Origem de Demanda</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" onclick="switchTab('dept',this)">4. Solicitantes</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" onclick="switchTab('tempo',this)">5. Tempo de Entrega</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" onclick="switchTab('midia',this)">6. Mídia Regional</button>
+</div>
+
+<!-- TAB PANELS -->
+<div id="tab-entrega" class="tab-panel active">
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Status das Demandas — Histórico Mensal</h4>
+    <p class="text-xs text-muted mb-4">Total de demandas recebidas por mês e status</p>
+    <div style="height:360px"><canvas id="chartEntrega"></canvas></div>
+  </div>
+</div>
+
+<div id="tab-volume" class="tab-panel">
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Demandas vs Volume Produzido — Evolução Mensal</h4>
+    <p class="text-xs text-muted mb-4">Quantidade de demandas vs total de peças/cards produzidos</p>
+    <div style="height:360px"><canvas id="chartVolume"></canvas></div>
+  </div>
+</div>
+
+<div id="tab-origem" class="tab-panel">
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Origem da Demanda — Evolução Mensal</h4>
+    <p class="text-xs text-muted mb-4">Comparativo de demandas criadas pelo próprio Marketing vs Solicitações de outros setores</p>
+    <div style="height:360px"><canvas id="chartOrigem"></canvas></div>
+  </div>
+</div>
+
+<div id="tab-dept" class="tab-panel">
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Demandas por Setor Solicitante — Ranking Acumulado</h4>
+    <p class="text-xs text-muted mb-4">Ordenado do maior para o menor setor solicitante</p>
+    <div style="height:420px"><canvas id="chartDept"></canvas></div>
+  </div>
+</div>
+
+<div id="tab-tempo" class="tab-panel space-y-4">
+  <div class="insight-row grid grid-cols-2 md:grid-cols-5 gap-3">
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="tempo-media-acumulado" class="text-lg font-bold text-brandgreen-700">0.0 d</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Tempo médio acumulado</div>
+      <div class="text-[11px] text-muted mt-0.5">Apenas demandas concluídas</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="tempo-atrasos-qtd" class="text-lg font-bold text-red-600">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Atrasos >5 dias</div>
+      <div id="tempo-atrasos-pct" class="text-[11px] text-muted mt-0.5">0.0% do total</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="tempo-maior-atraso" class="text-lg font-bold text-red-600">0 d</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Maior atraso registrado</div>
+      <div id="tempo-maior-atraso-nome" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="tempo-melhor-media" class="text-lg font-bold text-brandgreen-700">0.0 d</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Melhor média mensal</div>
+      <div id="tempo-melhor-media-mes" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="tempo-causa-principal" class="text-lg font-bold text-amber-600 truncate">—</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Causa principal</div>
+      <div id="tempo-causa-principal-detalhes" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+  </div>
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Tempo Médio de Entrega (dias) — Evolução Mensal</h4>
+    <p class="text-xs text-muted mb-4">Apenas demandas concluídas · Linha tracejada = limite de 5 dias</p>
+    <div style="height:360px"><canvas id="chartTempo"></canvas></div>
+  </div>
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+      <h4 class="font-display font-bold text-navy text-sm">⚠️ Demandas com Atraso > 5 dias — Causas Registradas</h4>
+      <p class="text-xs text-muted mb-4">Causas informadas no atendimento</p>
+      <div class="overflow-x-auto">
+        <table class="tbl table-auto w-full text-left border-collapse text-xs mt-3">
+          <thead>
+            <tr class="bg-gray-100 text-muted uppercase text-[10px] tracking-wider">
+              <th class="p-2 border-b">Demanda</th>
+              <th class="p-2 border-b">Mês</th>
+              <th class="p-2 border-b">Dias</th>
+              <th class="p-2 border-b">Causa</th>
+            </tr>
+          </thead>
+          <tbody id="atrasos-tbody" class="divide-y">
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+      <h4 class="font-display font-bold text-navy text-sm">Ranking de Causas de Atraso</h4>
+      <p class="text-xs text-muted mb-4">Distribuição de causas para atrasos > 5 dias</p>
+      <div style="height:260px"><canvas id="chartCausas"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<div id="tab-midia" class="tab-panel space-y-4">
+  <div class="insight-row grid grid-cols-2 md:grid-cols-5 gap-3">
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="midia-investimento-total" class="text-lg font-bold text-brandgreen-700">R$ 0,00</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Investimento total</div>
+      <div class="text-[11px] text-muted mt-0.5">Período selecionado</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="midia-regioes-var" class="text-lg font-bold text-navy">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Regiões ativas</div>
+      <div id="midia-regioes-nota" class="text-[11px] text-muted mt-0.5 truncate">Último mês</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="midia-descontinuidades" class="text-lg font-bold text-red-600">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Descontinuidades</div>
+      <div class="text-[11px] text-muted mt-0.5">Total no período</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="midia-aderencias" class="text-lg font-bold text-brandgreen-700">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Aderências totais</div>
+      <div class="text-[11px] text-muted mt-0.5">Total no período</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="midia-invest-var" class="text-lg font-bold text-amber-600">0.0%</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Variação investimento</div>
+      <div id="midia-invest-var-detalhe" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+  </div>
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Mídia Regional — Indicadores por Mês</h4>
+    <p class="text-xs text-muted mb-4">Regiões Ativas · Descontinuidades · Aderências</p>
+    <div style="height:360px"><canvas id="chartMidiaIndicadores"></canvas></div>
+  </div>
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Investimento BD (R$) — Evolução Mensal</h4>
+    <p class="text-xs text-muted mb-4">Valores mensais de veiculação regional</p>
+    <div style="height:280px"><canvas id="chartMidiaInvest"></canvas></div>
+  </div>
+  <script type="application/json" id="mkt-data">{{ mkt_data | tojson }}</script>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/chart.umd.js"
+        integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG"></script>
+<script src="/static/js/admin_marketing.js"></script>
+{% endblock %}

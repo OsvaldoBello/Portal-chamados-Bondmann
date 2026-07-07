@@ -133,6 +133,21 @@ async def dashboard(
     avaliacoes = await repo.avaliacoes_recentes(claims, departamento_id=dep_id, todos_setores=todos)
     # Rótulo do escopo: setor escolhido, ou "Todos os setores" p/ TI, ou o setor do gestor.
     escopo = dep_nome or ("Todos os setores" if ctx.is_ti else ctx.escopo)
+
+    if escopo == "Marketing":
+        mkt_data = await repo.mkt_dashboard_data(claims)
+        return render(
+            request,
+            "admin/dashboard_marketing.html",
+            {
+                **_base_ctx(ctx),
+                "escopo": escopo,
+                "departamentos": departamentos,
+                "departamento_sel": dep_id or "",
+                "mkt_data": mkt_data,
+            },
+        )
+
     return render(
         request,
         "admin/dashboard.html",

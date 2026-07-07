@@ -111,6 +111,41 @@ class FakeAdmin:
     async def toggle_categoria(self, claims, cat_id):
         self.acoes.append(("cat_toggle", cat_id))
 
+    async def mkt_dashboard_data(self, claims):
+        return {
+            "monthly": [
+                {
+                    "label": "JAN/26",
+                    "total": 5,
+                    "concluidas": 4,
+                    "em_andamento": 1,
+                    "abertas": 0,
+                    "volume": 8,
+                    "mkt_orig": 2,
+                    "sol_orig": 3,
+                    "tempo_soma": 6.0,
+                    "tempo_qtd": 4,
+                    "tempo_medio": 1.5,
+                    "atrasos": 1,
+                    "pct_conc": 80.0,
+                    "pct_mkt": 40.0
+                }
+            ],
+            "deptByMonth": {
+                "JAN/26": {"RH": 3, "Marketing": 2}
+            },
+            "atrasosData": [
+                {"nome": "Demanda A", "mes": "JAN/26", "dias": 6, "causa": "Sem causa registrada"}
+            ],
+            "midia": {
+                "meses": ["Jan"],
+                "investimento": [1000.0],
+                "regioes": [10],
+                "descontinuidades": [1],
+                "aderencias": [1]
+            }
+        }
+
     async def exportar(self, claims):
         return [{"codigo": "BOND-2026-00001", "titulo": "Impressora", "status": "RESOLVIDO",
                  "prioridade": "ALTA", "departamento": "TI", "categoria": "Suporte",

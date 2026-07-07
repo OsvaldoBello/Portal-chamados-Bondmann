@@ -75,27 +75,25 @@ REM 4) CSS (Tailwind) - precisa do Node/npm. Se o npm faltar E o
 REM    app.css ainda nao existir, tenta instalar o Node.js LTS via
 REM    winget. Se o app.css ja existe, o Node nao e necessario agora.
 REM ----------------------------------------------------------------
-call :detect_npm
-if not defined NPM (
-  if not exist "app\static\css\app.css" (
+if exist "app\static\css\app.css" (
+  echo [ok] CSS ja presente ^(app.css^) - Node.js nao e necessario agora.
+) else (
+  call :detect_npm
+  if not defined NPM (
     echo [setup] Node.js nao encontrado - instalando o Node.js LTS ^(para gerar o CSS^)...
     call :install_node_winget
     call :detect_npm
   )
-)
-if defined NPM (
-  if not exist "node_modules" (
-    echo [setup] Instalando pacotes do npm ...
-    call "%NPM%" install --silent
-  )
-  echo [setup] Gerando CSS ^(Tailwind^) ...
-  call "%NPM%" run build:css
-) else (
-  if not exist "app\static\css\app.css" (
+  if defined NPM (
+    if not exist "node_modules" (
+      echo [setup] Instalando pacotes do npm ...
+      call "%NPM%" install --silent
+    )
+    echo [setup] Gerando CSS ^(Tailwind^) ...
+    call "%NPM%" run build:css
+  ) else (
     echo [aviso] Node.js indisponivel e app.css ausente - os estilos podem faltar.
     echo         Instale o Node.js ^(https://nodejs.org^) e rode novamente.
-  ) else (
-    echo [ok] CSS ja presente ^(app.css^) - Node.js nao e necessario agora.
   )
 )
 
@@ -115,13 +113,17 @@ REM    O navegador abre depois de ~5s, quando o servidor ja esta no ar
 REM    (evita o "ERR_CONNECTION_REFUSED" por abrir cedo demais).
 REM ----------------------------------------------------------------
 set "PORT=8000"
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :%PORT% ^| findstr LISTENING') do (
+  echo [setup] Liberando porta %PORT% ^(parando processo %%a antigo^)...
+  taskkill /f /pid %%a >nul 2>&1
+)
 echo(
 echo [ok] Iniciando em http://localhost:%PORT%
 echo      Login de teste: ti@ / rh@ / func@bondmann.com.br  (senha definida no seu Supabase)
 echo      Pressione Ctrl+C nesta janela para parar o servidor.
 echo(
 start "" /min cmd /c "timeout /t 5 >nul & start "" http://localhost:%PORT%"
-"%PY%" -m uvicorn app.main:app --port %PORT%
+"%PY%" -m uvicorn app.main:app --port %PORT% --reload
 goto :fim
 
 :fim_erro
@@ -184,7 +186,7 @@ REM --- Detecta o npm e guarda em NPM (vazio se nao houver) --------
 :detect_npm
 REM NPM fica sem aspas; quem chama usa "%NPM%" (ver secao 4).
 set "NPM="
-npm --version >nul 2>nul
+where npm >nul 2>nul
 if not errorlevel 1 ( set "NPM=npm" & goto :eof )
 if exist "%ProgramFiles%\nodejs\npm.cmd" ( set "NPM=%ProgramFiles%\nodejs\npm.cmd" & goto :eof )
 if exist "!ProgramFiles(x86)!\nodejs\npm.cmd" ( set "NPM=!ProgramFiles(x86)!\nodejs\npm.cmd" & goto :eof )

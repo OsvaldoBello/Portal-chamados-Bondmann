@@ -310,6 +310,180 @@ class AdminRepo:
                 departamento_id,
             )
 
+    async def mkt_dashboard_data(self, claims: dict) -> dict[str, Any]:
+        """Calcula de forma agregada a série histórica e estatísticas para o
+        Dashboard de Marketing dinâmico."""
+        from collections import defaultdict
+        import datetime
+
+        async with rls_connection(claims) as conn:
+            # 1. Fetch all marketing tickets
+            tickets_rows = await conn.fetch(
+                """
+                SELECT c.id, c.codigo, c.titulo, c.status, c.created_at, c.resolvido_em,
+                       c.volume, c.origem_demanda, c.causa_atraso, c.setor
+                  FROM chamados c
+                  JOIN departamentos dep ON dep.id = c.departamento_id
+                 WHERE dep.nome = 'Marketing'
+                 ORDER BY c.created_at ASC
+                """
+            )
+            # 2. Fetch all regional media records
+            midia_rows = await conn.fetch(
+                """
+                SELECT mes, investimento, regioes, descontinuidades, aderencias
+                  FROM marketing_midia_regional
+                 ORDER BY created_at ASC
+                """
+            )
+
+        tickets = [dict(r) for r in tickets_rows]
+        midia_list = [dict(r) for r in midia_rows]
+
+        MESES_MAP = {1: "JAN", 2: "FEV", 3: "MAR", 4: "ABR", 5: "MAI", 6: "JUN", 7: "JUL", 8: "AGO", 9: "SET", 10: "OUT", 11: "NOV", 12: "DEZ"}
+        
+        def get_mes_label(dt):
+            if not dt:
+                return ""
+            return f"{MESES_MAP[dt.month]}/{dt.year % 100:02d}"
+
+        # Initialize monthly structures
+        monthly_data = {}
+        dept_by_month = defaultdict(dict)
+        atrasos_data = []
+
+        all_months = []
+        for m in midia_list:
+            if m["mes"] not in all_months:
+                all_months.append(m["mes"])
+
+        for t in tickets:
+            mes = get_mes_label(t["created_at"])
+            if mes and mes not in all_months:
+                all_months.append(mes)
+
+        for mes in all_months:
+            monthly_data[mes] = {
+                "label": mes,
+                "total": 0,
+                "concluidas": 0,
+                "em_andamento": 0,
+                "abertas": 0,
+                "volume": 0,
+                "mkt_orig": 0,
+                "sol_orig": 0,
+                "tempo_soma": 0.0,
+                "tempo_qtd": 0,
+                "tempo_medio": 0.0,
+                "atrasos": 0,
+                "pct_conc": 0.0,
+                "pct_mkt": 0.0
+            }
+
+        for t in tickets:
+            mes = get_mes_label(t["created_at"])
+            if not mes:
+                continue
+
+            md = monthly_data[mes]
+            md["total"] += 1
+
+            status_upper = (t["status"] or "").upper()
+            if status_upper == "RESOLVIDO":
+                md["concluidas"] += 1
+            elif status_upper == "NOVO":
+                md["abertas"] += 1
+            else: # A_FAZER, EM_ATENDIMENTO, AGUARDANDO
+                md["em_andamento"] += 1
+
+            vol = t["volume"] if t["volume"] is not None else 1
+            md["volume"] += vol
+
+            orig = (t["origem_demanda"] or "").strip().lower()
+            if orig == "marketing":
+                md["mkt_orig"] += 1
+            else:
+                md["sol_orig"] += 1
+
+            created = t["created_at"]
+            resolved = t["resolvido_em"]
+            
+            if resolved:
+                duration_days = (resolved - created).total_seconds() / 86400.0
+            else:
+                duration_days = (datetime.datetime.now(datetime.timezone.utc) - created).total_seconds() / 86400.0
+
+            duration_days = round(max(0.0, duration_days), 1)
+
+            if resolved:
+                md["tempo_soma"] += duration_days
+                md["tempo_qtd"] += 1
+
+            if duration_days > 5.0:
+                md["atrasos"] += 1
+                atrasos_data.append({
+                    "nome": t["titulo"] or "Sem assunto",
+                    "mes": mes,
+                    "dias": int(duration_days),
+                    "causa": t["causa_atraso"] or "Sem causa registrada"
+                })
+
+            sec = t["setor"] or "Outros"
+            dept_by_month[mes][sec] = dept_by_month[mes].get(sec, 0) + 1
+
+        monthly_list = []
+        def month_sort_key(m_label):
+            try:
+                m_str, y_str = m_label.split("/")
+                m_num = list(MESES_MAP.values()).index(m_str) + 1
+                y_num = int(y_str)
+                return (y_num, m_num)
+            except Exception:
+                return (99, 99)
+
+        all_months_sorted = sorted(all_months, key=month_sort_key)
+
+        for mes in all_months_sorted:
+            md = monthly_data[mes]
+            tot = md["total"]
+            conc = md["concluidas"]
+            
+            if tot > 0:
+                md["pct_conc"] = round((conc / tot) * 100, 1)
+                md["pct_mkt"] = round((md["mkt_orig"] / tot) * 100, 1)
+            
+            if md["tempo_qtd"] > 0:
+                md["tempo_medio"] = round(md["tempo_soma"] / md["tempo_qtd"], 1)
+            else:
+                md["tempo_medio"] = 0.0
+
+            monthly_list.append(md)
+
+        midia_final = {
+            "meses": [],
+            "investimento": [],
+            "regioes": [],
+            "descontinuidades": [],
+            "aderencias": []
+        }
+        for m in midia_list:
+            try:
+                m_part = m["mes"].split("/")[0].capitalize()
+            except Exception:
+                m_part = m["mes"]
+            midia_final["meses"].append(m_part)
+            midia_final["investimento"].append(float(m["investimento"]))
+            midia_final["regioes"].append(int(m["regioes"]))
+            midia_final["descontinuidades"].append(int(m["descontinuidades"]))
+            midia_final["aderencias"].append(int(m["aderencias"]))
+
+        return {
+            "monthly": monthly_list,
+            "deptByMonth": dict(dept_by_month),
+            "atrasosData": atrasos_data,
+            "midia": midia_final
+        }
+
     # ---- Export CSV -----------------------------------------------------
     async def exportar(self, claims: dict) -> list[dict[str, Any]]:
         async with rls_connection(claims) as conn:

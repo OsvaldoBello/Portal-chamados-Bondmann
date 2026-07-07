@@ -35,7 +35,7 @@ def _data_entrega_min() -> date:
     """Menor data de entrega permitida (hoje + 48h, no fuso de Brasília)."""
     return datetime.now(_TZ_BR).date() + timedelta(days=_ENTREGA_MIN_DIAS)
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status, BackgroundTasks
 from fastapi.responses import RedirectResponse
 
 from app.auth.dependencies import CurrentUser, get_current_user
@@ -333,6 +333,13 @@ async def criar_chamado(
     form_data = await request.form()
     arquivos = [f for f in form_data.getlist("arquivos") if getattr(f, "filename", "")]
 
+    volume_str = form_data.get("volume") or "1"
+    try:
+        volume_val = int(volume_str)
+    except ValueError:
+        volume_val = 1
+    origem_demanda_val = form_data.get("origem_demanda") or "Solicitação"
+
     # Valida anexos ANTES de criar (barra tipos/tamanhos inválidos sem efeito colateral).
     try:
         validados = await _validar_uploads(
@@ -353,6 +360,8 @@ async def criar_chamado(
         prioridade=prioridade,
         setor=setor,
         data_entrega=data_entrega_val,
+        volume=volume_val,
+        origem_demanda=origem_demanda_val,
     )
 
     # Anexos da abertura viram a primeira mensagem (pública) do autor.
@@ -426,6 +435,7 @@ async def mensagens_fragmento(
 async def responder_chamado(
     request: Request,
     chamado_id: str,
+    background_tasks: BackgroundTasks,
     conteudo: str = Form(""),
     arquivos: list[UploadFile] = File(default=[]),
     ctx: PortalCtx = Depends(portal_context),
@@ -466,6 +476,15 @@ async def responder_chamado(
         conteudo=conteudo,
         anexos=anexos,
     )
+
+    # Buscar informações do chamado para disparar notificação por email
+    chamado = await repo.obter(ctx.user.claims, chamado_id)
+    if chamado:
+        from app.notification import notificar_nova_mensagem_email
+        background_tasks.add_task(
+            notificar_nova_mensagem_email, chamado, ctx.user.id, conteudo or "[Arquivo anexo]"
+        )
+
     return RedirectResponse(
         f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER
     )

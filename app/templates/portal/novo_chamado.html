@@ -117,6 +117,25 @@
           <strong>48h</strong> (2 dias) para início do desenvolvimento.</span>
       </label>
 
+      {# Volume (Marketing) #}
+      <label class="hidden" id="campo-volume">
+        <span class="block text-[13px] font-semibold text-navy mb-1.5">Volume</span>
+        <input type="number" name="volume" value="{{ f.get('volume', 1) }}" min="1"
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+        <span class="block text-xs text-muted mt-1">Volume de demandas / peças solicitadas.</span>
+      </label>
+
+      {# Origem da Demanda (Marketing) #}
+      <label class="hidden" id="campo-origem-demanda">
+        <span class="block text-[13px] font-semibold text-navy mb-1.5">Origem da Demanda</span>
+        <select name="origem_demanda"
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm cursor-pointer">
+          <option value="Solicitação" {% if f.get('origem_demanda') == 'Solicitação' %}selected{% endif %}>Solicitação</option>
+          <option value="Marketing" {% if f.get('origem_demanda') == 'Marketing' %}selected{% endif %}>Marketing</option>
+        </select>
+        <span class="block text-xs text-muted mt-1">De onde partiu esta demanda.</span>
+      </label>
+
       {# Descrição — o placeholder muda para o texto do Marketing (via novo_chamado.js)
       quando o departamento de destino é o Marketing. #}
       <label class="block">

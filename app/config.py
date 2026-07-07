@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # --- Cookies ---
     cookie_secure: bool = Field(default=True)
 
+    # --- SMTP / E-mail (Notificações) ---
+    smtp_host: str = Field(default="")
+    smtp_port: int = Field(default=587)
+    smtp_user: str = Field(default="")
+    smtp_password: str = Field(default="")
+    smtp_from: str = Field(default="no-reply@bondmann.com.br")
+
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"

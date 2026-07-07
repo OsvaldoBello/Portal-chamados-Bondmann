@@ -1,10 +1,20 @@
 {# Componentes reutilizáveis de UI do portal (badges, estrelas). #}
 
-{% macro status_badge(status) -%}
+{% macro status_badge(status, departamento=None) -%}
+  {% set label_override = "" %}
+  {% if (departamento or "").strip().lower() == "marketing" %}
+    {% if status == "EM_ATENDIMENTO" %}
+      {% set label_override = "Em andamento" %}
+    {% elif status == "AGUARDANDO" %}
+      {% set label_override = "Aguardando Validação" %}
+    {% elif status == "RESOLVIDO" %}
+      {% set label_override = "Concluídos" %}
+    {% endif %}
+  {% endif %}
   {% set m = STATUS_META.get(status, {"label": status, "text": "text-muted", "bg": "bg-surface2", "icon": ""}) %}
   <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold leading-none {{ m.bg }} {{ m.text }}">
     {% if m.icon %}<svg class="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ m.icon }}"/></svg>{% endif %}
-    <span>{{ m.label }}</span>
+    <span>{{ label_override or m.label }}</span>
   </span>
 {%- endmacro %}
 

@@ -126,6 +126,11 @@ def create_app() -> FastAPI:
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
+    # Favicon redirect
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        return RedirectResponse(url="/static/favicon.svg")
+
     return app
 
 

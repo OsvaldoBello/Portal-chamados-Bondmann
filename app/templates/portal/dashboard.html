@@ -70,7 +70,7 @@
           <a href="/portal/chamados/{{ c.id }}" class="font-medium text-navy hover:underline">{{ c.titulo }}</a>
         </td>
         <td class="px-4 py-3 text-muted">{{ c.categoria or "—" }}</td>
-        <td class="px-4 py-3">{{ status_badge(c.status) }}</td>
+        <td class="px-4 py-3">{{ status_badge(c.status, c.departamento) }}</td>
         <td class="px-4 py-3 text-muted">{{ fmt_dt(c.created_at) }}</td>
         <td class="px-4 py-3">
           {% if c.avaliacao_nota %}{{ estrelas(c.avaliacao_nota) }}{% else %}<span class="text-faint text-xs">—</span>{% endif %}

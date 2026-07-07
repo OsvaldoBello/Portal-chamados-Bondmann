@@ -11,18 +11,25 @@
   <a href="/workspace" class="text-sm font-semibold text-navy hover:underline">Ver como Lista →</a>
 </div>
 
-<div id="kanban" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+<div id="kanban" class="grid grid-cols-1 md:grid-cols-2 {% if status_validos|length == 5 %}xl:grid-cols-5{% else %}xl:grid-cols-4{% endif %} gap-4">
   {% for s in status_validos %}
   <section class="bg-surface2/60 rounded-xl border border-line/60 flex flex-col">
     <header class="px-3 py-2.5 flex items-center justify-between">
-      <span class="text-xs font-bold uppercase tracking-wide text-muted">{{ STATUS_META[s].label }}</span>
+      {% set label = STATUS_META[s].label %}
+      {% if perfil.departamento == 'Marketing' %}
+        {% if s == 'EM_ATENDIMENTO' %}{% set label = 'Em andamento' %}
+        {% elif s == 'AGUARDANDO' %}{% set label = 'Aguardando Validação' %}
+        {% elif s == 'RESOLVIDO' %}{% set label = 'Concluídos' %}
+        {% endif %}
+      {% endif %}
+      <span class="text-xs font-bold uppercase tracking-wide text-muted">{{ label }}</span>
       <span class="text-xs font-semibold text-navy bg-white rounded-full px-2 py-0.5">{{ colunas[s]|length }}</span>
     </header>
     <div class="kanban-col flex-1 p-2 space-y-2 min-h-[80px]" data-status="{{ s }}">
       {% for c in colunas[s] %}
       <article class="kanban-card bg-white rounded-lg border border-line/60 p-3 shadow-soft cursor-grab" data-id="{{ c.id }}">
         {# draggable=false: impede o drag nativo do link de sequestrar o Sortable. #}
-        <a href="/workspace/chamados/{{ c.id }}" class="block" draggable="false">
+        <a href="/workspace/chamados/{{ c.id }}?origem=kanban" class="block" draggable="false">
           <div class="font-mono text-[11px] text-brandgreen-700">{{ c.codigo }}</div>
           <div class="text-sm font-medium text-navy leading-snug mt-0.5">{{ c.titulo }}</div>
           <div class="flex items-center justify-between mt-2">

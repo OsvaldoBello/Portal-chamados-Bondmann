@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status, BackgroundTasks
 from fastapi.responses import RedirectResponse, Response
 
 from app.anexos import assinar_anexos, processar_uploads
@@ -27,7 +27,7 @@ from app.templating import render
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
-STATUS_VALIDOS = ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
+STATUS_VALIDOS = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
 
 
 @dataclass(frozen=True)
@@ -145,6 +145,26 @@ async def fila_lista(
     chamados = await _buscar_fila(repo, ctx.user.claims, f)
     stats = await repo.fila_stats(ctx.user.claims)
     categorias, operadores = await _opcoes_filtro(ctx, repo)
+
+    is_marketing = ctx.perfil.get("departamento") == "Marketing"
+    if is_marketing:
+        status_cards = [
+            ("", "Total"),
+            ("NOVO", "Novos"),
+            ("A_FAZER", "A fazer"),
+            ("EM_ATENDIMENTO", "Em andamento"),
+            ("AGUARDANDO", "Aguardando Validação"),
+            ("RESOLVIDO", "Concluídos"),
+        ]
+    else:
+        status_cards = [
+            ("", "Total"),
+            ("NOVO", "Novos"),
+            ("EM_ATENDIMENTO", "Em atendimento"),
+            ("AGUARDANDO", "Aguardando"),
+            ("RESOLVIDO", "Resolvidos"),
+        ]
+
     return render(
         request,
         "workspace/fila.html",
@@ -162,6 +182,7 @@ async def fila_lista(
             "operador_sel": f["operador_id"] or "",
             "sla_sel": f["sla"],
             "filtros_qs": _filtros_qs(f),
+            "status_cards": status_cards,
         },
     )
 
@@ -198,8 +219,14 @@ async def kanban(
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
+    is_marketing = ctx.perfil.get("departamento") == "Marketing"
+    if is_marketing:
+        status_list = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
+    else:
+        status_list = ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
+
     chamados = await repo.fila(ctx.user.claims)
-    colunas = {s: [c for c in chamados if c["status"] == s] for s in STATUS_VALIDOS}
+    colunas = {s: [c for c in chamados if c["status"] == s] for s in status_list}
     stats = await repo.fila_stats(ctx.user.claims)
     return render(
         request,
@@ -208,7 +235,7 @@ async def kanban(
             "perfil": ctx.perfil,
             "colunas": colunas,
             "stats": stats,
-            "status_validos": STATUS_VALIDOS,
+            "status_validos": status_list,
         },
     )
 
@@ -216,7 +243,7 @@ async def kanban(
 # --------------------------------------------------------------------------
 # Atendimento (tela individual)
 # --------------------------------------------------------------------------
-async def _carregar_atendimento(request, chamado_id, ctx, repo, **extra):
+async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str = "", **extra):
     chamado = await repo.obter(ctx.user.claims, chamado_id)
     if chamado is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
@@ -242,6 +269,7 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, **extra):
         "supabase_url": settings.supabase_url or None,
         "anon_key": settings.supabase_anon_key or None,
         "access_token": _access_token(request),
+        "origem": origem,
     }
     ctx_render.update(extra)
     return render(request, "workspace/atendimento.html", ctx_render)
@@ -251,10 +279,11 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, **extra):
 async def atendimento(
     request: Request,
     chamado_id: str,
+    origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
-    return await _carregar_atendimento(request, chamado_id, ctx, repo)
+    return await _carregar_atendimento(request, chamado_id, ctx, repo, origem=origem)
 
 
 @router.get("/chamados/{chamado_id}/mensagens/fragmento")
@@ -272,9 +301,10 @@ async def mensagens_fragmento(
     return render(request, "portal/_mensagens.html", {"chamado": chamado, "mensagens": mensagens})
 
 
-def _voltar(chamado_id: str) -> RedirectResponse:
+def _voltar(chamado_id: str, origem: str = "") -> RedirectResponse:
+    qs = f"?origem={origem}" if origem else ""
     return RedirectResponse(
-        f"/workspace/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER
+        f"/workspace/chamados/{chamado_id}{qs}", status_code=status.HTTP_303_SEE_OTHER
     )
 
 
@@ -286,13 +316,36 @@ async def mudar_status(
     request: Request,
     chamado_id: str,
     novo_status: str = Form(...),
+    origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
 ):
     if novo_status in STATUS_VALIDOS:
         await repo.alterar_status(ctx.user.claims, chamado_id, novo_status)
-    return _voltar(chamado_id)
+    return _voltar(chamado_id, origem)
+
+
+@router.post("/chamados/{chamado_id}/marketing-meta")
+async def salvar_marketing_meta(
+    request: Request,
+    chamado_id: str,
+    volume: int = Form(...),
+    origem_demanda: str = Form(...),
+    causa_atraso: str = Form(""),
+    origem: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    await repo.salvar_marketing_meta(
+        ctx.user.claims,
+        chamado_id,
+        volume=volume,
+        origem_demanda=origem_demanda,
+        causa_atraso=causa_atraso.strip() or None
+    )
+    return _voltar(chamado_id, origem)
 
 
 @router.post("/chamados/{chamado_id}/prioridade")
@@ -300,13 +353,14 @@ async def mudar_prioridade(
     request: Request,
     chamado_id: str,
     nova_prioridade: str = Form(...),
+    origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
 ):
     if nova_prioridade in PRIORIDADES:
         await repo.alterar_prioridade(ctx.user.claims, chamado_id, nova_prioridade)
-    return _voltar(chamado_id)
+    return _voltar(chamado_id, origem)
 
 
 @router.post("/chamados/{chamado_id}/atribuir")
@@ -314,25 +368,27 @@ async def atribuir(
     request: Request,
     chamado_id: str,
     operador_id: str = Form(""),
+    origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
 ):
     await repo.atribuir(ctx.user.claims, chamado_id, operador_id.strip() or None)
-    return _voltar(chamado_id)
+    return _voltar(chamado_id, origem)
 
 
 @router.post("/chamados/{chamado_id}/iniciar")
 async def iniciar_atendimento(
     request: Request,
     chamado_id: str,
+    origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
 ):
     """Botão "Iniciar atendimento": NOVO→EM_ATENDIMENTO e assume o chamado."""
     await repo.iniciar_atendimento(ctx.user.claims, chamado_id, operador_id=ctx.user.id)
-    return _voltar(chamado_id)
+    return _voltar(chamado_id, origem)
 
 
 @router.post("/chamados/{chamado_id}/transferir")
@@ -340,6 +396,7 @@ async def transferir(
     request: Request,
     chamado_id: str,
     departamento_id: str = Form(""),
+    origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
@@ -349,16 +406,18 @@ async def transferir(
     departamento_id = departamento_id.strip()
     if departamento_id and ctx.perfil.get("is_ti"):
         await repo.transferir(ctx.user.claims, chamado_id, departamento_id=departamento_id)
-    return _voltar(chamado_id)
+    return _voltar(chamado_id, origem)
 
 
 @router.post("/chamados/{chamado_id}/mensagens")
 async def responder(
     request: Request,
     chamado_id: str,
+    background_tasks: BackgroundTasks,
     conteudo: str = Form(""),
     is_interna: str = Form(""),
     arquivos: list[UploadFile] = File(default=[]),
+    origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
@@ -378,21 +437,30 @@ async def responder(
         )
     except UploadInvalido as exc:
         return await _carregar_atendimento(
-            request, chamado_id, ctx, repo, erro_composer=str(exc)
+            request, chamado_id, ctx, repo, erro_composer=str(exc), origem=origem
         )
 
     if conteudo or anexos:
         await repo.responder_staff(
             ctx.user.claims, chamado_id, conteudo=conteudo, is_interna=interna, anexos=anexos
         )
-    return _voltar(chamado_id)
+        if not interna:
+            chamado = await repo.obter(ctx.user.claims, chamado_id)
+            if chamado:
+                from app.notification import notificar_nova_mensagem_email
+                background_tasks.add_task(
+                    notificar_nova_mensagem_email, chamado, ctx.user.id, conteudo or "[Arquivo anexo]"
+                )
+    return _voltar(chamado_id, origem)
 
 
 @router.post("/chamados/{chamado_id}/encerrar")
 async def encerrar(
     request: Request,
     chamado_id: str,
+    background_tasks: BackgroundTasks,
     resolucao: str = Form(""),
+    origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
@@ -405,8 +473,14 @@ async def encerrar(
         await repo.responder_staff(
             ctx.user.claims, chamado_id, conteudo=resolucao, is_interna=False
         )
+        chamado = await repo.obter(ctx.user.claims, chamado_id)
+        if chamado:
+            from app.notification import notificar_nova_mensagem_email
+            background_tasks.add_task(
+                notificar_nova_mensagem_email, chamado, ctx.user.id, resolucao
+            )
     await repo.alterar_status(ctx.user.claims, chamado_id, "RESOLVIDO")
-    return _voltar(chamado_id)
+    return _voltar(chamado_id, origem)
 
 
 def register_workspace_routes(app) -> None:
