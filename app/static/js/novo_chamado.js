@@ -16,7 +16,6 @@
   var campoPrioridade = document.getElementById("campo-prioridade");
   var campoData = document.getElementById("campo-data-entrega");
   var campoVolume = document.getElementById("campo-volume");
-  var campoOrigem = document.getElementById("campo-origem-demanda");
 
   function ehMarketing() {
     return marketingId !== "" && depSelect && depSelect.value === marketingId;
@@ -36,7 +35,6 @@
     if (campoPrioridade) campoPrioridade.style.display = marketing ? "none" : "block";
     if (campoData) campoData.style.display = marketing ? "block" : "none";
     if (campoVolume) campoVolume.style.display = marketing ? "block" : "none";
-    if (campoOrigem) campoOrigem.style.display = marketing ? "block" : "none";
   }
 
   if (depSelect) depSelect.addEventListener("change", aplicar);

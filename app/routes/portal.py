@@ -338,7 +338,10 @@ async def criar_chamado(
         volume_val = int(volume_str)
     except ValueError:
         volume_val = 1
-    origem_demanda_val = form_data.get("origem_demanda") or "Solicitação"
+    # A abertura SEMPRE entra como "Solicitação". A classificação Solicitação/Marketing
+    # é decisão do operador/admin na tela de atendimento — nunca de quem abre o chamado
+    # (forçado no servidor, mesmo que alguém envie o campo manualmente).
+    origem_demanda_val = "Solicitação"
 
     # Valida anexos ANTES de criar (barra tipos/tamanhos inválidos sem efeito colateral).
     try:
