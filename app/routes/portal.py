@@ -480,9 +480,9 @@ async def responder_chamado(
     # Buscar informações do chamado para disparar notificação por email
     chamado = await repo.obter(ctx.user.claims, chamado_id)
     if chamado:
-        from app.notification import notificar_nova_mensagem_email
-        background_tasks.add_task(
-            notificar_nova_mensagem_email, chamado, ctx.user.id, conteudo or "[Arquivo anexo]"
+        from app.notification import agendar_notificacao_email
+        await agendar_notificacao_email(
+            background_tasks, chamado, ctx.user.id, conteudo or "[Arquivo anexo]"
         )
 
     return RedirectResponse(

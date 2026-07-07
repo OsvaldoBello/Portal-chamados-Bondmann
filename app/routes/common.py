@@ -225,9 +225,10 @@ async def inbound_email(
 
         log.info(f"Processed inbound reply from {sender_email} on ticket {codigo}: msg {msg_row['id']}")
 
-    # 6. Notifica o outro participante via e-mail em background task
-    background_tasks.add_task(
-        notificar_nova_mensagem_email,
+    # 6. Notifica o outro participante via e-mail
+    from app.notification import agendar_notificacao_email
+    await agendar_notificacao_email(
+        background_tasks,
         chamado,
         sender_id,
         cleaned_content

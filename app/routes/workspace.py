@@ -447,9 +447,9 @@ async def responder(
         if not interna:
             chamado = await repo.obter(ctx.user.claims, chamado_id)
             if chamado:
-                from app.notification import notificar_nova_mensagem_email
-                background_tasks.add_task(
-                    notificar_nova_mensagem_email, chamado, ctx.user.id, conteudo or "[Arquivo anexo]"
+                from app.notification import agendar_notificacao_email
+                await agendar_notificacao_email(
+                    background_tasks, chamado, ctx.user.id, conteudo or "[Arquivo anexo]"
                 )
     return _voltar(chamado_id, origem)
 
@@ -475,9 +475,9 @@ async def encerrar(
         )
         chamado = await repo.obter(ctx.user.claims, chamado_id)
         if chamado:
-            from app.notification import notificar_nova_mensagem_email
-            background_tasks.add_task(
-                notificar_nova_mensagem_email, chamado, ctx.user.id, resolucao
+            from app.notification import agendar_notificacao_email
+            await agendar_notificacao_email(
+                background_tasks, chamado, ctx.user.id, resolucao
             )
     await repo.alterar_status(ctx.user.claims, chamado_id, "RESOLVIDO")
     return _voltar(chamado_id, origem)

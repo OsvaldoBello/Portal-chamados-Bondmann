@@ -4,6 +4,7 @@ import hmac
 import hashlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from fastapi import BackgroundTasks
 from app.config import get_settings
 from app.auth.supabase_client import ensure_admin_client
 
@@ -247,3 +248,17 @@ async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteu
         reply_to = f"chamado+{codigo.lower()}+{token}@{settings.inbound_email_domain}"
 
     enviar_email_smtp(email, assunto, corpo_texto, corpo_html, reply_to=reply_to)
+
+
+async def agendar_notificacao_email(background_tasks: BackgroundTasks, chamado: dict, remetente_id: str, conteudo: str) -> None:
+    """Dispara a notificação de e-mail de forma assíncrona usando BackgroundTasks (em servidores tradicionais)
+    ou de forma síncrona/inline (se rodando em ambiente Serverless como a Vercel) para garantir
+    que a execução não seja congelada antes da entrega da mensagem.
+    """
+    settings = get_settings()
+    if settings.is_serverless:
+        log.info("[NOTIFICATION] Running inline email notification for serverless (Vercel)")
+        await notificar_nova_mensagem_email(chamado, remetente_id, conteudo)
+    else:
+        log.info("[NOTIFICATION] Queueing background task for email notification")
+        background_tasks.add_task(notificar_nova_mensagem_email, chamado, remetente_id, conteudo)
