@@ -67,39 +67,66 @@ async def realtime_config(
     )
 
 
-def extrair_resposta_email(texto: str) -> str:
-    """Extrai apenas a resposta recente do e-mail do usuário,
-    removendo a citação histórica e a assinatura.
+# Delimitadores que marcam o INÍCIO da citação histórica (tudo dali pra baixo é lixo).
+_RE_CITACAO = [
+    r"^\s*on\s+.*\s+wrote:\s*$",
+    r"^\s*em\s+.*\s+escreveu:\s*$",
+    r"^\s*-+\s*Original Message\s*-+",
+    r"^\s*-+\s*Mensagem Original\s*-+",
+    r"^\s*De:\s*.+",
+    r"^\s*From:\s*.+",
+    r"^\s*Enviada em:\s*.+",
+    r"^\s*Sent:\s*.+",
+    r"^_{5,}\s*$",                       # linha de sublinhados do Outlook
+    r"^\s*--\s*$",                       # delimitador RFC de assinatura
+    r"^\s*(Obter|Baixar) o Outlook",     # rodapé "Obter o Outlook para..."
+    r"^\s*Get Outlook for",
+    r"^\s*(Enviado do meu|Sent from my)\b",
+]
+
+# Artefatos da conversão HTML→texto de assinaturas (imagens embutidas e links).
+_RE_CID = re.compile(r"\[cid:[^\]]+\]", re.IGNORECASE)
+_RE_URL_ANGULO = re.compile(r"<https?://[^>]+>", re.IGNORECASE)
+
+
+def extrair_resposta_email(texto: str, nome_remetente: str | None = None) -> str:
+    """Extrai apenas a resposta recente do e-mail, removendo a citação histórica
+    e a assinatura (best-effort). O Outlook não usa o delimitador ``-- ``, então,
+    além dos delimitadores conhecidos, usamos o **nome do remetente** como âncora:
+    numa assinatura corporativa a linha do nome quase sempre inicia o bloco.
     """
     if not texto:
         return ""
-    
-    linhas = texto.splitlines()
+
+    # Normaliza a âncora do nome (ex.: "Felipe Schöffler") para comparação simples.
+    nome_norm = None
+    if nome_remetente:
+        nome_norm = re.sub(r"\s+", " ", nome_remetente).strip().casefold()
+        if len(nome_norm) < 3:
+            nome_norm = None
+
     linhas_resultado = []
-    
-    re_headers = [
-        r"^\s*on\s+.*,\s+.*wrote:\s*$",
-        r"^\s*em\s+.*,\s+.*escreveu:\s*$",
-        r"^---+Original Message---+",
-        r"^---+Mensagem Original---+",
-        r"^\s*De:\s*.*",
-        r"^\s*From:\s*.*",
-        r"^________________________________",
-        r"^--\s*$"
-    ]
-    
-    for linha in linhas:
-        matched = False
-        for pattern in re_headers:
-            if re.search(pattern, linha, re.IGNORECASE):
-                matched = True
-                break
-        if matched:
+    viu_conteudo = False
+    for linha in texto.splitlines():
+        # Corta na citação histórica.
+        if any(re.search(p, linha, re.IGNORECASE) for p in _RE_CITACAO):
             break
+        # Corta na assinatura: linha == nome do remetente (após já haver conteúdo).
+        if nome_norm and viu_conteudo:
+            linha_norm = re.sub(r"\s+", " ", linha).strip().casefold()
+            if linha_norm == nome_norm:
+                break
         linhas_resultado.append(linha)
-        
-    resultado = "\n".join(linhas_resultado).strip()
-    return resultado
+        if linha.strip():
+            viu_conteudo = True
+
+    resultado = "\n".join(linhas_resultado)
+    # Remove artefatos de imagens embutidas e links entre <> deixados pela assinatura.
+    resultado = _RE_CID.sub("", resultado)
+    resultado = _RE_URL_ANGULO.sub("", resultado)
+    # Colapsa 3+ quebras de linha em no máximo duas.
+    resultado = re.sub(r"\n{3,}", "\n\n", resultado)
+    return resultado.strip()
 
 
 @router.post("/api/inbound-email")
@@ -142,8 +169,9 @@ async def inbound_email(
         log.warning(f"Inbound webhook received incomplete data: recipient={recipient}, sender={sender}")
         return JSONResponse({"error": "Dados incompletos"}, status_code=400)
 
-    # Extrai o endereço de e-mail puro do remetente
-    _, sender_email = parseaddr(str(sender))
+    # Extrai o nome de exibição e o endereço puro do remetente. O nome ("Felipe
+    # Schöffler") vira âncora para cortar a assinatura no parser abaixo.
+    sender_nome, sender_email = parseaddr(str(sender))
     sender_email = sender_email.strip().lower()
 
     # Identifica o chamado e o token na caixa de entrada
@@ -156,7 +184,7 @@ async def inbound_email(
     codigo = match.group(1).upper().strip()
     token = match.group(2).strip()
 
-    cleaned_content = extrair_resposta_email(str(content))
+    cleaned_content = extrair_resposta_email(str(content), nome_remetente=sender_nome)
     if not cleaned_content:
         log.warning("Cleaned inbound email content is empty.")
         return JSONResponse({"error": "Conteúdo vazio"}, status_code=400)
