@@ -11,9 +11,9 @@
   <a href="/workspace" class="text-sm font-semibold text-navy hover:underline">Ver como Lista →</a>
 </div>
 
-<div id="kanban" class="grid grid-cols-1 md:grid-cols-2 {% if status_validos|length == 5 %}xl:grid-cols-5{% else %}xl:grid-cols-4{% endif %} gap-4">
+<div id="kanban" class="flex flex-row overflow-x-auto gap-4 pb-4 items-start">
   {% for s in status_validos %}
-  <section class="bg-surface2/60 rounded-xl border border-line/60 flex flex-col">
+  <section class="flex-1 min-w-[280px] shrink-0 bg-surface2/60 rounded-xl border border-line/60 flex flex-col">
     <header class="px-3 py-2.5 flex items-center justify-between">
       {% set label = STATUS_META[s].label %}
       {% if perfil.departamento == 'Marketing' %}
@@ -31,7 +31,21 @@
         {# draggable=false: impede o drag nativo do link de sequestrar o Sortable. #}
         <a href="/workspace/chamados/{{ c.id }}?origem=kanban" class="block" draggable="false">
           <div class="font-mono text-[11px] text-brandgreen-700">{{ c.codigo }}</div>
-          <div class="text-sm font-medium text-navy leading-snug mt-0.5">{{ c.titulo }}</div>
+          
+          <div class="flex flex-wrap gap-1 mt-1">
+            {% if c.setor %}
+            <span class="inline-flex items-center rounded bg-navy-900 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+              {{ c.setor }}
+            </span>
+            {% endif %}
+            {% if c.categoria %}
+            <span class="inline-flex items-center rounded bg-navy-100 px-1.5 py-0.5 text-[10px] font-semibold text-navy-800">
+              {{ c.categoria }}
+            </span>
+            {% endif %}
+          </div>
+
+          <div class="text-sm font-medium text-navy leading-snug mt-1.5">{{ c.titulo }}</div>
           <div class="flex items-center justify-between mt-2">
             {{ prioridade_badge(c.prioridade) }}
             {{ sla_chip(c) }}
