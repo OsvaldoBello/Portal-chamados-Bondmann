@@ -1,5 +1,7 @@
 import logging
 import smtplib
+import hmac
+import hashlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from app.config import get_settings
@@ -7,13 +9,30 @@ from app.auth.supabase_client import ensure_admin_client
 
 log = logging.getLogger("app.notification")
 
-def enviar_email_smtp(para: str, assunto: str, corpo_texto: str, corpo_html: str = None) -> None:
+
+def gerar_token_resposta(codigo: str, usuario_id: str, secret: str) -> str:
+    """Gera um token criptográfico determinístico e curto para identificar e validar
+    a resposta de e-mail do usuário para um determinado chamado.
+    """
+    if not secret:
+        secret = "insecure-fallback-secret"
+    msg = f"{codigo.upper().strip()}:{str(usuario_id).strip()}"
+    return hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()[:16]
+
+
+def validar_token_resposta(codigo: str, usuario_id: str, token: str, secret: str) -> bool:
+    """Verifica se o token fornecido confere com o token esperado para o chamado e usuário."""
+    esperado = gerar_token_resposta(codigo, usuario_id, secret)
+    return hmac.compare_digest(esperado, token)
+
+
+def enviar_email_smtp(para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None) -> None:
     """Dispara um e-mail utilizando os parâmetros SMTP configurados no ambiente.
     Caso não esteja configurado, realiza um log para desenvolvimento local/mock.
     """
     settings = get_settings()
     if not (settings.smtp_host and settings.smtp_user and settings.smtp_password):
-        log.info(f"[EMAIL NOTIFICATION MOCK] To: {para} | Subject: {assunto} | Body: {corpo_texto.strip()}")
+        log.info(f"[EMAIL NOTIFICATION MOCK] To: {para} | Subject: {assunto} | Reply-To: {reply_to} | Body: {corpo_texto.strip()}")
         return
 
     try:
@@ -21,6 +40,8 @@ def enviar_email_smtp(para: str, assunto: str, corpo_texto: str, corpo_html: str
         msg['From'] = settings.smtp_from
         msg['To'] = para
         msg['Subject'] = assunto
+        if reply_to:
+            msg['Reply-To'] = reply_to
 
         msg.attach(MIMEText(corpo_texto, 'plain', 'utf-8'))
         if corpo_html:
@@ -37,7 +58,7 @@ def enviar_email_smtp(para: str, assunto: str, corpo_texto: str, corpo_html: str
 
 async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteudo: str) -> None:
     """Identifica o destinatário (cliente ou operador) e envia uma notificação por e-mail
-    com layout HTML organizado quando uma nova mensagem é postada no chat do chamado.
+    com layout HTML organizado e cabeçalho Reply-To para processamento inbound.
     """
     cliente_id = str(chamado.get("cliente_id"))
     operador_id = str(chamado.get("operador_id")) if chamado.get("operador_id") else None
@@ -194,7 +215,7 @@ async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteu
         <div class="header-sub">PORTAL DE CHAMADOS</div>
       </div>
       <div class="content">
-        <h2 class="title">Nova mensagem no chamado {codigo}</h2>
+        <h2 class="title" style="margin-top: 0; margin-bottom: 8px;">Nova mensagem no chamado {codigo}</h2>
         <div class="subtitle">Assunto: <strong>{titulo}</strong></div>
         
         <p style="margin-top:0; font-size:14px; color: #475569;">Você recebeu uma nova mensagem no chat do atendimento:</p>
@@ -219,4 +240,10 @@ async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteu
 </html>
 """
 
-    enviar_email_smtp(email, assunto, corpo_texto, corpo_html)
+    reply_to = None
+    if settings.inbound_email_domain:
+        secret = settings.inbound_email_secret or settings.session_secret
+        token = gerar_token_resposta(codigo, destinatario_id, secret)
+        reply_to = f"chamado+{codigo.lower()}+{token}@{settings.inbound_email_domain}"
+
+    enviar_email_smtp(email, assunto, corpo_texto, corpo_html, reply_to=reply_to)

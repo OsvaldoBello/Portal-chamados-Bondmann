@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     smtp_password: str = Field(default="")
     smtp_from: str = Field(default="no-reply@bondmann.com.br")
     site_url: str = Field(default="http://localhost:8000")
+    inbound_email_domain: str = Field(default="")
+    inbound_email_secret: str = Field(default="")
 
     @property
     def is_production(self) -> bool:
