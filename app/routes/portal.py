@@ -28,6 +28,7 @@ SETORES = [
     "Marketing",
     "RH",
     "SIG",
+    "TI",
 ]
 
 
