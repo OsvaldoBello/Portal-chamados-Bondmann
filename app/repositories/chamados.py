@@ -562,6 +562,17 @@ class ChamadosRepo:
             )
             return dict(row)
 
+    async def excluir(self, claims: dict, chamado_id: str) -> bool:
+        """Exclui definitivamente o chamado (operador/admin do setor, ou TI —
+        RLS `chamados_delete_staff`, migration 0025). `mensagens` e
+        `historico_chamados` somem junto via FK `ON DELETE CASCADE`. Devolve
+        ``False`` se o chamado não existe ou está fora do escopo do usuário."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                "DELETE FROM chamados WHERE id = $1::uuid RETURNING id", chamado_id
+            )
+            return row is not None
+
     async def responder_staff(
         self,
         claims: dict,

@@ -48,6 +48,30 @@
     });
   }
 
+  // ---- Exclusão rápida (lixeira do cartão do Kanban) ----
+  document.querySelectorAll(".kanban-delete-btn").forEach(function (btn) {
+    btn.addEventListener("click", function (evt) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      var id = btn.getAttribute("data-id");
+      var codigo = btn.getAttribute("data-codigo") || "este chamado";
+      if (!id) return;
+      if (!window.confirm("Excluir o chamado " + codigo + "? Esta ação é permanente e apaga toda a conversa.")) {
+        return;
+      }
+      var body = new URLSearchParams();
+      body.set("origem", "kanban");
+      body.set("csrf_token", csrf());
+      fetch("/workspace/chamados/" + id + "/excluir", {
+        method: "POST",
+        headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+        credentials: "same-origin",
+      }).then(function () { window.location.reload(); })
+        .catch(function () { window.location.reload(); });
+    });
+  });
+
   // ---- Toggle nota interna ----
   var chk = document.getElementById("is-interna");
   var composer = document.getElementById("composer");

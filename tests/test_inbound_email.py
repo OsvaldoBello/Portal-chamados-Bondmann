@@ -65,6 +65,7 @@ def test_inbound_webhook_valid_token(mock_notify, mock_admin_conn):
         "titulo": "Integração Mídia",
         "cliente_id": "22222222-2222-2222-2222-222222222222",
         "operador_id": "33333333-3333-3333-3333-333333333333",
+        "empresa_id": "55555555-5555-5555-5555-555555555555",
     }
     # 2ª consulta: perfil do usuário pelo email
     profile_row = {

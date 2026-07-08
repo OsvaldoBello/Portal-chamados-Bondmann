@@ -546,6 +546,26 @@ _CSV_COLS = [
     "avaliacao_comentario",
 ]
 
+# Cabeçalho legível (pt-BR) — mesmo padrão de planilha de relatório usado pela
+# empresa: nomes de coluna por extenso em vez das chaves internas do banco.
+_CSV_HEADERS = {
+    "codigo": "Chamado",
+    "titulo": "Título",
+    "status": "Status",
+    "prioridade": "Prioridade",
+    "departamento": "Departamento",
+    "categoria": "Categoria",
+    "solicitante": "Solicitante",
+    "operador": "Operador",
+    "created_at": "Data de criação",
+    "limite_resolucao": "Prazo de resolução",
+    "respondido_em": "Respondido em",
+    "resolvido_em": "Resolvido em",
+    "avaliacao_nota": "Avaliação",
+    "avaliacao_em": "Avaliado em",
+    "avaliacao_comentario": "Comentário da avaliação",
+}
+
 
 @router.get("/export/csv")
 async def export_csv(
@@ -553,15 +573,28 @@ async def export_csv(
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
 ):
+    from app.templating import fmt_dt
+
     linhas = await repo.exportar(ctx.user.claims)
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=_CSV_COLS, extrasaction="ignore")
-    writer.writeheader()
+    writer = csv.DictWriter(
+        buf, fieldnames=_CSV_COLS, extrasaction="ignore", delimiter=";"
+    )
+    writer.writerow(_CSV_HEADERS)
     for r in linhas:
-        writer.writerow({k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in r.items()})
+        writer.writerow(
+            {
+                k: (fmt_dt(v, "%d/%m/%Y %H:%M") if isinstance(v, datetime) else (v if v is not None else ""))
+                for k, v in r.items()
+            }
+        )
     nome = f"chamados_{datetime.utcnow():%Y%m%d}.csv"
+    # BOM UTF-8: sem ele o Excel (padrão pt-BR) lê acentos como lixo (mojibake).
+    # ";" como delimitador é o padrão de CSV que o Excel pt-BR abre já separado
+    # em colunas (o separador decimal "," do locale conflita com "," de campo).
+    conteudo = "﻿" + buf.getvalue()
     return Response(
-        content=buf.getvalue(),
+        content=conteudo,
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{nome}"'},
     )

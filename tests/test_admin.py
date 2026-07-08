@@ -452,7 +452,10 @@ def test_export_csv():
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/csv")
     assert "attachment" in r.headers["content-disposition"]
-    assert "codigo,titulo,status" in r.text
-    assert "avaliacao_comentario" in r.text          # feedback no relatório do TI
+    # BOM UTF-8 (Excel pt-BR lê acentos sem virar mojibake) + ";" como
+    # delimitador (padrão de planilha usado pela empresa — ver plano mestre).
+    assert r.text.startswith("﻿")
+    assert "Chamado;Título;Status" in r.text
+    assert "Comentário da avaliação" in r.text        # feedback no relatório do TI
     assert "Resolveu rápido, obrigado" in r.text
     assert "BOND-2026-00001" in r.text

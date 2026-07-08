@@ -12,6 +12,7 @@ mesma decisão da Seção 6.2 (o browser recebe URL+anon key+JWT do usuário).
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from email.utils import parseaddr
@@ -19,10 +20,13 @@ from email.utils import parseaddr
 from fastapi import APIRouter, Depends, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 
+from app.anexos import MAX_ANEXOS
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.auth.session import ACCESS_COOKIE
 from app.config import get_settings
 from app.repositories.chamados import ChamadosRepo, get_chamados_repo
+from app.security.uploads import UploadInvalido, validar_anexo
+from app.storage import AnexosStorage, StorageError, ensure_storage
 from app.templating import render
 
 log = logging.getLogger("app.routes.common")
@@ -129,6 +133,66 @@ def extrair_resposta_email(texto: str, nome_remetente: str | None = None) -> str
     return resultado.strip()
 
 
+async def _extrair_anexos_inbound(data: dict) -> list:
+    """Lê e valida os arquivos anexados no webhook (campos ``attachment-1..N``
+    do Mailgun, ``attachment-count`` informa o total). Sem isso, uma imagem
+    anexada na resposta por e-mail era descartada silenciosamente (só o texto
+    ia pro chat — às vezes com um link/cid solto da assinatura).
+
+    Best-effort: um arquivo inválido (tipo não permitido, tamanho excedido) é
+    apenas descartado com log — não derruba o processamento da resposta.
+    """
+    try:
+        total = int(data.get("attachment-count") or 0)
+    except (TypeError, ValueError):
+        total = 0
+
+    settings = get_settings()
+    validados = []
+    for i in range(1, min(total, MAX_ANEXOS) + 1):
+        arquivo = data.get(f"attachment-{i}")
+        filename = getattr(arquivo, "filename", None)
+        if arquivo is None or not filename:
+            continue
+        conteudo = await arquivo.read()
+        try:
+            validados.append(
+                validar_anexo(filename, conteudo, max_bytes=settings.anexo_max_bytes)
+            )
+        except UploadInvalido as exc:
+            log.warning(f"Anexo inbound rejeitado ({filename}): {exc}")
+    return validados
+
+
+async def _enviar_anexos_inbound(validados: list, *, empresa_id: str, chamado_id: str) -> list[dict]:
+    """Envia os anexos já validados ao Storage privado usando a service_role key.
+
+    Rota de webhook server-to-server (sem sessão de usuário/cookie JWT), então
+    não há como autenticar o upload como o remetente faria pelo Portal/Workspace
+    (Seção 1.4 / 3.9): usamos a chave admin para este caso pontual e auditado,
+    já autorizado pela verificação HMAC do token de resposta feita antes."""
+    if not validados:
+        return []
+    settings = get_settings()
+    if not settings.supabase_service_role_key:
+        log.warning("Anexos inbound descartados: SUPABASE_SERVICE_ROLE_KEY não configurada.")
+        return []
+    storage = await ensure_storage()
+    if storage is None:
+        log.warning("Anexos inbound descartados: Storage não configurado.")
+        return []
+    anexos: list[dict] = []
+    for v in validados:
+        path = AnexosStorage.path(empresa_id, chamado_id, v.nome_objeto)
+        try:
+            await storage.upload(settings.supabase_service_role_key, path, v.conteudo, v.mime)
+        except StorageError as exc:
+            log.warning(f"Falha ao subir anexo inbound ({v.nome_original}): {exc}")
+            continue
+        anexos.append({"path": path, "nome": v.nome_original, "mime": v.mime, "tamanho": v.tamanho})
+    return anexos
+
+
 @router.post("/api/inbound-email")
 async def inbound_email(
     request: Request,
@@ -163,9 +227,9 @@ async def inbound_email(
     if not sender and "from" in data:
         sender = data["from"]
 
-    content = data.get("stripped-text") or data.get("body-plain") or data.get("text")
+    content = data.get("stripped-text") or data.get("body-plain") or data.get("text") or ""
 
-    if not recipient or not sender or not content:
+    if not recipient or not sender:
         log.warning(f"Inbound webhook received incomplete data: recipient={recipient}, sender={sender}")
         return JSONResponse({"error": "Dados incompletos"}, status_code=400)
 
@@ -184,9 +248,14 @@ async def inbound_email(
     codigo = match.group(1).upper().strip()
     token = match.group(2).strip()
 
-    cleaned_content = extrair_resposta_email(str(content), nome_remetente=sender_nome)
-    if not cleaned_content:
-        log.warning("Cleaned inbound email content is empty.")
+    cleaned_content = extrair_resposta_email(str(content), nome_remetente=sender_nome) if content else ""
+
+    # Anexos (ex.: imagem colada/anexada na resposta) — lidos e validados antes
+    # de tocar no banco; um arquivo inválido não derruba a resposta em texto.
+    anexos_validados = await _extrair_anexos_inbound(data)
+
+    if not cleaned_content and not anexos_validados:
+        log.warning("Cleaned inbound email content is empty and no valid attachments.")
         return JSONResponse({"error": "Conteúdo vazio"}, status_code=400)
 
     # Conecta no banco sem claims (modo Admin) para tratar a verificação e a inserção
@@ -194,7 +263,7 @@ async def inbound_email(
         # 1. Recupera informações do chamado
         chamado_row = await conn.fetchrow(
             """
-            SELECT c.id, c.codigo, c.titulo, c.cliente_id, c.operador_id
+            SELECT c.id, c.codigo, c.titulo, c.cliente_id, c.operador_id, c.empresa_id
               FROM chamados c
              WHERE c.codigo = $1
             """,
@@ -239,16 +308,23 @@ async def inbound_email(
             log.warning(f"Invalid reply signature token for user {sender_id} on ticket {codigo}.")
             return JSONResponse({"error": "Assinatura inválida"}, status_code=403)
 
+        # 4.5. Envia os anexos validados ao Storage (imagem etc. vira anexo real
+        # no chat, não só um link/cid solto vindo da assinatura do e-mail).
+        anexos = await _enviar_anexos_inbound(
+            anexos_validados, empresa_id=str(chamado.get("empresa_id") or ""), chamado_id=str(chamado["id"])
+        )
+
         # 5. Insere a resposta no chat do chamado (como mensagem pública)
         msg_row = await conn.fetchrow(
             """
             INSERT INTO mensagens (chamado_id, remetente_id, conteudo, is_interna, anexos)
-            VALUES ($1::uuid, $2::uuid, $3, false, '[]'::jsonb)
+            VALUES ($1::uuid, $2::uuid, $3, false, $4::jsonb)
             RETURNING id, created_at
             """,
             chamado["id"],
             sender_id,
-            cleaned_content
+            cleaned_content,
+            json.dumps(anexos),
         )
 
         log.info(f"Processed inbound reply from {sender_email} on ticket {codigo}: msg {msg_row['id']}")
@@ -259,7 +335,7 @@ async def inbound_email(
         background_tasks,
         chamado,
         sender_id,
-        cleaned_content
+        cleaned_content or "[Imagem anexada]"
     )
 
     return JSONResponse({"success": True, "message_id": str(msg_row["id"])})

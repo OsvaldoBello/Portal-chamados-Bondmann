@@ -280,10 +280,13 @@ async def atendimento(
     request: Request,
     chamado_id: str,
     origem: str = "",
+    excluir: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
-    return await _carregar_atendimento(request, chamado_id, ctx, repo, origem=origem)
+    return await _carregar_atendimento(
+        request, chamado_id, ctx, repo, origem=origem, confirmar_exclusao=bool(excluir)
+    )
 
 
 @router.get("/chamados/{chamado_id}/mensagens/fragmento")
@@ -481,6 +484,24 @@ async def encerrar(
             )
     await repo.alterar_status(ctx.user.claims, chamado_id, "RESOLVIDO")
     return _voltar(chamado_id, origem)
+
+
+@router.post("/chamados/{chamado_id}/excluir")
+async def excluir(
+    request: Request,
+    chamado_id: str,
+    origem: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Exclui um chamado aberto por engano. Escopo restrito pela RLS
+    (`chamados_delete_staff`): TI apaga qualquer um; RH/Marketing só do
+    próprio setor. Sem confirmação adicional aqui — a UI já exige duas
+    etapas antes de chamar esta rota."""
+    await repo.excluir(ctx.user.claims, chamado_id)
+    destino = "/workspace/kanban" if origem == "kanban" else "/workspace"
+    return RedirectResponse(destino, status_code=status.HTTP_303_SEE_OTHER)
 
 
 def register_workspace_routes(app) -> None:

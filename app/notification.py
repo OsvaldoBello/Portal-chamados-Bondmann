@@ -156,13 +156,15 @@ async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteu
     settings = get_settings()
     codigo = chamado.get("codigo", "")
     titulo = chamado.get("titulo", "")
-    
-    # Gerar a URL correta com base no destinatário
+    chamado_id = chamado.get("id")
+
+    # Gerar a URL correta com base no destinatário (rotas reais da app: o
+    # detalhe do chamado é resolvido por id/uuid, não pelo código BOND-...).
     site_url = settings.site_url.rstrip("/")
     if str(destinatario_id) == operador_id:
-        url = f"{site_url}/workspace/atendimento?codigo={codigo}"
+        url = f"{site_url}/workspace/chamados/{chamado_id}"
     else:
-        url = f"{site_url}/chamado/{codigo}"
+        url = f"{site_url}/portal/chamados/{chamado_id}"
 
     assunto = f"[Portal Bondmann] Nova mensagem no chamado {codigo}"
 

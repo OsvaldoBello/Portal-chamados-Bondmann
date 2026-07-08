@@ -100,6 +100,9 @@ class FakeRepo:
     async def responder_staff(self, claims, cid, *, conteudo, is_interna, anexos=None):
         self.acoes.append(("msg", cid, conteudo, is_interna, anexos)); return {"id": "m1", "created_at": NOW}
 
+    async def excluir(self, claims, cid):
+        self.acoes.append(("excluir", cid)); return True
+
 
 @contextmanager
 def ws_client(repo, user=_operador):
@@ -141,6 +144,8 @@ def test_kanban_renderiza_colunas():
     for label in ["Novo", "Em atendimento", "Aguardando", "Resolvido"]:
         assert label in r.text
     assert "kanban-col" in r.text
+    # Lixeira de exclusão rápida em cada cartão.
+    assert "kanban-delete-btn" in r.text
 
 
 def test_mudar_status_registra_e_redireciona():
@@ -201,6 +206,37 @@ def test_atribuir_operador():
         c.post("/workspace/chamados/c1/atribuir", data={"operador_id": OP},
                headers={"X-CSRF-Token": t}, follow_redirects=False)
     assert ("atribuir", "c1", OP) in repo.acoes
+
+
+def test_atendimento_mostra_botao_excluir_e_pede_confirmacao():
+    with ws_client(FakeRepo()) as c:
+        r = c.get("/workspace/chamados/c1")
+        assert "Excluir chamado" in r.text
+        assert "Confirmar exclusão" not in r.text  # etapa 1: só o link, sem o form ainda
+
+        r2 = c.get("/workspace/chamados/c1?excluir=1")
+        assert "Confirmar exclusão" in r2.text
+        assert 'action="/workspace/chamados/c1/excluir"' in r2.text
+
+
+def test_excluir_chamado_registra_e_redireciona_para_fila():
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/excluir", headers={"X-CSRF-Token": t},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/workspace"
+    assert ("excluir", "c1") in repo.acoes
+
+
+def test_excluir_chamado_com_origem_kanban_redireciona_para_kanban():
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/excluir?origem=kanban", headers={"X-CSRF-Token": t},
+                    follow_redirects=False)
+    assert r.headers["location"] == "/workspace/kanban"
 
 
 # --------------------------------------------------------------------------
