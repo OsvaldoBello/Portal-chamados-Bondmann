@@ -253,6 +253,41 @@ Enum de papéis (coerente com a spec): **`ADMIN`**, **`OPERADOR`**, **`CLIENTE`*
 >
 > Materializado na migration `0008_departamentos_roteamento` (+ `0009` de hardening). As linhas
 > abaixo marcadas com 🔁 refletem o novo modelo.
+>
+> ### 🔁 `[DECISÃO DE PRODUTO 2026-07-06]` `0020` — TI deixa de ter visibilidade/atendimento total
+>
+> A tabela/texto acima (e a matriz logo abaixo) refletem o modelo da `0010`. A migration
+> `0020_ti_escopo_departamento` **reverteu só o ramo de visibilidade/atendimento** de `auth_is_ti()`:
+> o staff de TI passa a **ver e atender apenas os chamados do próprio departamento (TI)**, como
+> qualquer outro setor — **não mais "acesso total"** de leitura/escrita. TI **mantém** os poderes de
+> administrador (gestão de catálogos/usuários/planos) e o **repasse** de chamados entre setores
+> (grava um `departamento_id` fora do setor atual via `WITH CHECK auth_is_ti()` — mas só em
+> chamados que **já estão** na fila do TI, o `USING` da policy de `UPDATE` não abre exceção). Este
+> MD nunca tinha sido atualizado para essa mudança; documentado agora porque a `0028` (abaixo)
+> constrói em cima dela — um bug corrigido nesta sessão (ver changelog 2026-07-08) veio exatamente
+> de assumir "TI = acesso total" na tela de atendimento, quando isso já não era mais verdade desde a `0020`.
+>
+> ### 🔁 `[DECISÃO DE PRODUTO 2026-07-08]` `0027`/`0028` — Setor unificado com Departamento + Líder de setor
+>
+> "Setor" (a área da empresa a que um usuário pertence — Comercial, Financeiro, Diretoria, etc.,
+> antes uma lista Python hardcoded) e "Departamento" (destino do chamado, já era a tabela
+> `departamentos`) passam a ser o **mesmo catálogo**. Nova coluna `departamentos.recebe_chamados`
+> (`boolean`, default `false`) marca quais setores têm fila de atendimento — hoje só `TI`/`RH`/
+> `Marketing` — e por isso podem ser **destino** de chamado; os demais (Comercial, Financeiro,
+> Controladoria, Diretoria, Dpto Químico, SIG, Brigadistas) só identificam **de onde** alguém é.
+> - **Todo usuário tem um `departamento_id`** agora (não só staff) — atribuído no cadastro
+>   (`/admin/usuarios`), inclusive **Funcionário/CLIENTE**. `OPERADOR` continua exigindo um setor
+>   com `recebe_chamados = true` (não há fila pra atender num setor sem staff).
+> - **Líder de setor** = `ADMIN` com `departamento_id`, mesmo num setor **sem fila** (ex.: um gestor
+>   do Comercial). RLS (`chamados_select`/`mensagens_select`/`historico_select`, migration `0028`)
+>   passa a deixar um `ADMIN` **ver** (só leitura) os chamados cujo **autor** pertence ao mesmo
+>   `departamento_id` — mesmo que o chamado seja destinado a outro setor. Quem **atende** (muda
+>   status, responde, atribui) continua sendo exclusivamente o staff do departamento de **destino**
+>   do chamado — TI incluído, por conta da `0020` acima; a UI (`workspace/atendimento.html`) esconde
+>   as ações quando `chamado.departamento_id != perfil.departamento_id`.
+> - **Guarda-corpo:** trigger `enforce_departamento_recebe_chamados` (só em `chamados.departamento_id`
+>   — o de `perfis.departamento_id` foi removido na `0028`, já que agora qualquer setor ativo é uma
+>   origem válida de usuário) impede que um chamado seja roteado para um setor sem fila.
 
 Matriz consolidada (das Seções 4.3 e 5 da spec, ajustada ao modelo interno):
 
@@ -272,6 +307,13 @@ Colunas por **tipo de usuário** (o eixo agora é o departamento, não o papel):
 | Cadastrar usuários | — (direto no Supabase) | — | via banco/painel Supabase |
 | Acesso a Storage de anexos | Dos próprios (path-scoped) | Do seu setor | Todos |
 
+> ⚠️ **Tabela desatualizada pela `0020`/`0028`** (mantida como registro histórico do modelo `0010`):
+> a coluna "Staff TI (acesso total)" só vale hoje para **gestão de catálogos/usuários**. Ver/atender
+> chamados, TI é **igual** a RH/Marketing — só o **próprio setor**. E "Staff RH/Marketing" ganhou uma
+> variante: um **ADMIN** (líder) de setor, mesmo sem `recebe_chamados`, agora **vê** (não atende) os
+> chamados abertos pela própria equipe, mesmo fora do seu setor. Detalhes na Seção 3.2 (blocos 🔁
+> `0020` e `0027`/`0028`) e 3.3 abaixo.
+
 ### 3.3 Políticas RLS por papel (a implementar como SQL nas migrations)
 
 RLS **habilitado nas 8 tabelas** (as 7 canônicas + `departamentos`). Princípio do menor privilégio. **🔁 A partir de `0008`, o isolamento de chamados é por DEPARTAMENTO/AUTOR (não mais por empresa):**
@@ -285,14 +327,17 @@ RLS **habilitado nas 8 tabelas** (as 7 canônicas + `departamentos`). Princípio
 - **OPERADOR / ADMIN departamental (staff com `departamento_id` = X)**
   - `SELECT/UPDATE chamados`: **apenas onde `departamento_id = auth_departamento_id()`**. `UPDATE` em `status`, `prioridade`, `operador_id`.
   - `SELECT/INSERT mensagens` (incl. `is_interna`) e `historico`: restritos ao mesmo escopo de departamento.
-- **`[REFINADO 0010]` ACESSO TOTAL = staff no departamento `TI`** (`auth_is_ti()`)
-  - `SELECT/UPDATE chamados`, `mensagens`, `historico` de **todos** os departamentos; gestão de `departamentos`/`categorias`/`planos_sla`.
+- **`[REFINADO 0010, RESTRINGIDO 0020]` Staff no departamento `TI`**
+  - `SELECT/UPDATE chamados`, `mensagens`, `historico`: **só do próprio setor (TI)**, igual a qualquer outro departamento — a `0020` revogou o "vê/atende tudo" da `0010` (mantido só para gestão de catálogos/usuários/planos, via `auth_is_ti()`, e para o **repasse**: `WITH CHECK auth_is_ti()` permite gravar um `departamento_id` diferente do atual, mas o `USING` da policy de `UPDATE` só libera linhas **já** no setor TI — TI não pode atender um chamado alheio sem antes repassá-lo pra si).
   - Substitui o "super-admin = ADMIN com `departamento_id` NULO" da `0008`.
 - **RH / Marketing (staff)**: além do seu setor, veem também os chamados **que abriram** (cláusula `cliente_id = auth.uid()` OR `departamento_id = auth_departamento_id()`).
+- **🔁 `[0027/0028]` Líder de setor** (`ADMIN` com `departamento_id`, **mesmo num setor sem fila** — `recebe_chamados = false`, ex.: Comercial)
+  - `SELECT` (só leitura) em `chamados`/`mensagens` (`is_interna = false`)/`historico` cujo **autor** (`chamados.cliente_id`) tem `perfis.departamento_id = auth_departamento_id()` — mesmo que o chamado seja destinado a **outro** setor. Não altera `UPDATE`/`INSERT` de forma alguma: quem atende continua sendo só o staff do departamento de **destino**.
+  - Setor de origem passou a ser obrigatório pro cadastro de **qualquer** usuário (`/admin/usuarios`), não só staff — é o que torna esse "time" identificável pro líder.
 
 Helpers para as policies (SECURITY DEFINER, evitam recursão de RLS ao ler `perfis`): `auth_role()`, `auth_empresa_id()`, `auth_departamento_id()` e **🔁 `auth_is_ti()`** (o perfil do `auth.uid()` está no departamento `TI`?).
 
-> **✅ Validação e2e (2026-07-01):** contra o Supabase live, simulando os claims JWT de cada usuário via `SET LOCAL ROLE authenticated` + `set_config('request.jwt.claims', …)` (mesmo mecanismo do app), confirmou-se: funcionário vê só o próprio; RH vê o setor RH + os que abriu (mesmo em Marketing) e **não** vê Marketing alheio; RH atualiza só o próprio setor; TI vê tudo; nota interna não chega ao funcionário autor. Dados de teste revertidos.
+> **✅ Validação e2e (2026-07-01):** contra o Supabase live, simulando os claims JWT de cada usuário via `SET LOCAL ROLE authenticated` + `set_config('request.jwt.claims', …)` (mesmo mecanismo do app), confirmou-se: funcionário vê só o próprio; RH vê o setor RH + os que abriu (mesmo em Marketing) e **não** vê Marketing alheio; RH atualiza só o próprio setor; TI vê tudo; nota interna não chega ao funcionário autor. Dados de teste revertidos. **⚠️ Parcialmente superado pela `0020`** (TI deixou de "ver tudo" pouco depois, 2026-07-06) — sem nova rodada de validação e2e registrada aqui até a `0028`, cuja checagem foi feita direto em produção (ver changelog 2026-07-08): consultas nos dados reais confirmaram que um líder de TI só enxergava chamados próprios + de colegas de TI (nunca de outros setores sem relação), e que o botão de atender um chamado fora do próprio setor (bug desta sessão) não alterava nenhuma linha no banco (RLS bloqueou a escrita mesmo com o botão exposto).
 
 ### 3.4 Sessão e Auth (server-rendered) — `[LACUNA]`, a spec não define
 
@@ -554,15 +599,25 @@ Adendo ao schema canônico para o modelo interno (Seção 3.2). **8ª tabela** e
 
 ```sql
 CREATE TABLE departamentos (
-  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  nome       text NOT NULL UNIQUE,          -- seed: TI, RH, Marketing (gerenciável)
-  ativo      boolean NOT NULL DEFAULT true,
-  created_at timestamptz NOT NULL DEFAULT now()
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome            text NOT NULL UNIQUE,          -- seed: TI, RH, Marketing (gerenciável)
+  ativo           boolean NOT NULL DEFAULT true,
+  -- 🔁 0027: true = tem fila/staff, pode ser DESTINO de chamado (TI/RH/Marketing).
+  -- false = setor só identifica quem abriu (Comercial, Financeiro, Diretoria, Dpto
+  -- Químico, Controladoria, SIG, Brigadistas — seed 0027).
+  recebe_chamados boolean NOT NULL DEFAULT false,
+  created_at      timestamptz NOT NULL DEFAULT now()
 );
 
--- Setor do STAFF (OPERADOR/ADMIN). NULL = super-admin (ADMIN) ou funcionário (CLIENTE).
+-- 🔁 0028: setor de ORIGEM de QUALQUER usuário (não só staff) — funcionário comum
+-- inclusive, pra o líder do setor saber quem é da equipe. Antes: NULL = super-admin
+-- (ADMIN) ou funcionário (CLIENTE); a coluna virou obrigatória na aplicação p/ todo
+-- papel (continua nullable no banco — o trigger handle_new_user cria o perfil sem
+-- setor, a promoção seguinte é quem preenche). Guarda-corpo que exigia
+-- recebe_chamados=true aqui foi REMOVIDO na 0028 (qualquer setor ativo é origem válida).
 ALTER TABLE perfis   ADD COLUMN departamento_id uuid REFERENCES departamentos(id) ON DELETE SET NULL;
--- Setor de DESTINO do chamado (obrigatório na abertura, via RLS/rota).
+-- Setor de DESTINO do chamado (obrigatório na abertura, via RLS/rota). 🔁 0027: trigger
+-- enforce_departamento_recebe_chamados barra destino num setor com recebe_chamados=false.
 ALTER TABLE chamados ADD COLUMN departamento_id uuid REFERENCES departamentos(id) ON DELETE RESTRICT;
 CREATE INDEX idx_chamados_departamento ON chamados(departamento_id);
 CREATE INDEX idx_chamados_depto_status ON chamados(departamento_id, status);
@@ -716,6 +771,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 
 | Data | Seção alterada | Resumo |
 |---|---|---|
+| 2026-07-08 | 3.2 / 3.3 / 5.1 / 6 (Fase 4/5) / Estado | **Setor unificado com Departamento + "líder de setor" (migrations `0027`/`0028`, aplicadas em `iurlzlhbnoemkzgexcfk`) + fix de um bug introduzido nesta mesma sessão.** (a) **`0027` — unificação:** "Setor" (afiliação de quem abre — antes lista Python hardcoded `SETORES` em `app/routes/portal.py`, duplicada da tabela `departamentos`) passa a ser a **mesma tabela** `departamentos`, com a nova coluna `recebe_chamados` (`false` por padrão) marcando quais setores têm fila/staff e por isso podem ser **destino** de chamado (hoje só TI/RH/Marketing); os demais 7 setores (Comercial, Financeiro, Controladoria, Diretoria, Dpto Químico, SIG, Brigadistas) só identificam quem abriu. Trigger `enforce_departamento_recebe_chamados` barra roteamento de chamado pra um setor sem fila. `ChamadosRepo.departamentos_ativos` passa a trazer `recebe_chamados`; novo `departamentos_destino_ativos` filtra só quem recebe (usado no dropdown de abertura e no repasse do Workspace). Admin `/admin/gestao` ganha toggle "recebe chamados" por setor. (b) **`0028` — líder de setor:** todo cadastro em `/admin/usuarios` passa a exigir um `departamento_id` — inclusive **Funcionário/CLIENTE** (antes só staff tinha; `OPERADOR` continua restrito a setor com fila, `_depto_perfil_valido`). Isso viabiliza o **líder**: um `ADMIN` com `departamento_id`, mesmo num setor **sem fila** (ex.: gestor do Comercial), agora **vê** (RLS `chamados_select`/`mensagens_select`/`historico_select`) todo chamado cujo **autor** pertence ao mesmo setor — mesmo que o destino seja outro departamento. É só leitura: quem **atende** continua sendo exclusivamente o staff do departamento de **destino**; `workspace/atendimento.html` esconde as ações (iniciar, encerrar, mudar status/prioridade, responder, excluir, marketing-meta) quando `chamado.departamento_id != perfil.departamento_id`, mostrando um aviso de "só acompanhando". Guarda-corpo antigo em `perfis.departamento_id` (exigia `recebe_chamados`) foi **removido** — não fazia mais sentido com todo usuário tendo setor. (c) **Bug introduzido e corrigido na mesma sessão:** a 1ª versão do gate de atendimento dava um bypass incondicional pro TI (`pode_atender = is_ti OR mesmo_departamento`) — mas a **`0020`** (nunca documentada neste MD até agora, ver bloco 🔁 na Seção 3.2) já tinha **revogado** o "TI vê/atende tudo" em 2026-07-06; TI hoje só atende o próprio setor, ganhando um chamado alheio só via **repasse**. Isso deixava o botão "Iniciar atendimento" visível pro TI em chamados de outros setores; verificado ao vivo que a RLS (`chamados_update_staff`, inalterada) bloqueou a escrita de fato (0 linhas afetadas, status seguiu `NOVO`) — sem corrupção de dado, só UX enganosa. Corrigido removendo o bypass (`pode_atender = mesmo_departamento`, TI incluído). Suíte local (venv throwaway, sem alterar o ambiente do usuário) **86 testes** verde (`test_portal`/`test_workspace`/`test_admin`; novos: OPERADOR barrado em setor sem fila, líder ADMIN liberado em setor sem fila, view-only na tela de atendimento). ⚠️ Kanban (`/workspace/kanban`) ainda permite tentar arrastar/excluir um cartão fora do próprio setor — a RLS bloqueia a escrita real, mas a UI não impede a tentativa (rough edge sinalizado ao usuário, não corrigido nesta sessão). |
 | 2026-07-08 | 5.1 / Estado | **Kanban: colunas sem corte de tela + data da solicitação no cartão; catálogo do TI reconstruído.** (a) **Colunas do Kanban sempre visíveis:** o container trocou `overflow-x-auto` + `min-w-[280px] shrink-0` por colunas `flex-1 min-w-0` — as 4-5 colunas (RH/TI ou Marketing) dividem a largura disponível e encolhem juntas em vez de forçar rolagem horizontal que cortava a última coluna (`Concluídos`/`Resolvido`) fora da tela. (b) **Data da solicitação no cartão:** badge "📅 Solicitado em dd/mm/aaaa" (mesmo padrão visual do chip de prazo `sla_chip`) acima da linha de prioridade/SLA restante — antes só aparecia no detalhe do chamado, não no Kanban. (c) **Catálogo de categorias do TI reconstruído** a partir do documento de referência `Categorias_Portal_Suporte.docx` (análise de 445 chamados reais): migration `0026_categorias_ti_docx` substitui as 15 categorias/37 subcategorias do seed `0018` por **12 categorias / 62 subcategorias** (o texto do documento resume "52", mas a lista enumerada tem 62 itens — a migration segue a lista). Aplicada em `iurlzlhbnoemkzgexcfk`; nenhum chamado referenciava o catálogo antigo do TI, então a troca foi direta (sem perda de histórico). |
 | 2026-07-08 | 3.2 / 3.9 / 5.1 / 6.3 / Estado | **Correções pontuais (validação local, sem push): exclusão de chamado, link de e-mail quebrado, CSV do relatório e anexo de imagem por e-mail.** (a) **Exclusão de chamado errado** (operador/admin): migration `0025_chamados_delete_staff` — policy `DELETE` na `chamados` no mesmo escopo de `chamados_update_staff` (TI qualquer um; RH/Marketing só o próprio setor; funcionário **nunca**); `mensagens`/`historico_chamados` somem via `ON DELETE CASCADE` já existente. `ChamadosRepo.excluir`, rota `POST /workspace/chamados/{id}/excluir`. UI: ícone de lixeira vermelha em cada cartão do Kanban (confirmação via `confirm()` em `workspace.js`, CSP-safe) e zona de exclusão com confirmação em duas etapas na tela de atendimento (mesmo padrão de `admin/usuarios.html`). (b) **Fix do botão "Visualizar e Responder" do e-mail de notificação (404):** `notification.py` montava a URL com `codigo` (`BOND-YYYY-NNNNN`) em rotas que não existem (`/chamado/{codigo}`, `/workspace/atendimento?codigo=`); as rotas reais resolvem por **`id` (uuid)** — `/portal/chamados/{id}` (funcionário) e `/workspace/chamados/{id}` (staff), que é o que `detalhe_chamado`/`obter` esperam (`WHERE c.id = $1::uuid`). (c) **Export CSV** (`GET /admin/export/csv`): sem BOM UTF-8 o Excel pt-BR exibia acentos como mojibake (`ApresentaÃ§Ã£o`); adicionado `﻿` no início do conteúdo, delimitador `;` (padrão do Excel pt-BR, evita colisão com o separador decimal `,`) e cabeçalho traduzido/legível (`Chamado`, `Título`, `Data de criação`, …) em vez das chaves internas do banco; datas formatadas em `dd/mm/aaaa HH:MM` (horário de Brasília, reaproveitando `fmt_dt`) em vez do ISO cru com offset. (d) **Anexo de imagem via resposta por e-mail:** o webhook `/api/inbound-email` sempre gravava `anexos: '[]'` — uma imagem anexada na resposta era descartada (só o texto, às vezes com um link/cid solto da assinatura, ia pro chat). Agora extrai `attachment-1..N`/`attachment-count` do payload do Mailgun, valida (mesmas regras de `app/security/uploads.py` — 10MB, allow-list, magic bytes) e envia ao Storage privado **com a `service_role` key** (única exceção ao padrão "token do usuário" da Seção 1.4/3.9: rota de webhook server-to-server, sem cookie de sessão; uso pontual e já gated pela verificação HMAC do token de resposta). Mensagem só-imagem (sem texto) deixa de ser rejeitada como "conteúdo vazio". Testes: `test_workspace.py` (lixeira no Kanban + fluxo de exclusão em 2 etapas + redirecionos por origem), `test_admin.py::test_export_csv` repontado p/ BOM+`;`+cabeçalho pt-BR, `test_inbound_email.py` com `empresa_id` no mock do chamado. ⚠️ Sessão de validação local — **sem commit/push**, a pedido do usuário. |
 | 2026-07-05 | 5.2 / 6 (Fase 5) / Estado | **Ajustes solicitados + SLA em horário comercial.** (a) **SLA comercial (migration `0017_sla_horario_comercial`, aplicada em `iurlzlhbnoemkzgexcfk`):** decisão do gestor — expediente **seg–sex 08:00–18:00 (America/Sao_Paulo)**, para em **feriados** (tabela `feriados`, RLS: leitura por autenticado, escrita só TI; seed nacional 2026–2028, editável) e o status **AGUARDANDO pausa** o relógio de resolução. Funções `sla_minutos_uteis_entre`/`sla_add_minutos_uteis` (SECURITY DEFINER, EXECUTE revogado), trigger `sla_pausa_aguardando` (BEFORE UPDATE OF status, coluna `chamados.aguardando_desde`) e `calcular_sla_chamado` recompilada para minutos úteis. **Substitui as horas corridas da decisão C1.** Verificado ao vivo (virada de dia/fim de semana/feriado + pausa 120min empurra o prazo; testes revertidos). ⚠️ `app/domain/sla_visual.py` (barra) segue em tempo de parede — a cor/atraso por prazo absoluto continua correta; barra de progresso é aproximação. (b) **Seletor de setor no `/admin`:** o chip "Indicadores de:" virou **dropdown** (TI escolhe RH/Marketing/TI ou "Todos os setores"); KPIs/gráficos/avaliações refiltram por `departamento_id`. (c) **Edição de Planos de SLA** (`/admin/gestao` → `POST /admin/planos/{id}`, só TI): tempos por prioridade+default editáveis. (d) **Gestão de contas** (`/admin/usuarios`, só TI): criar colaborador (GoTrue Admin API via service_role) já confirmado + definir setor/papel, e alterar papel/setor de existentes — **dual-write** perfis+`app_metadata.role`. `app/auth/supabase_client.py::ensure_admin_client`. (e) **Anexos nas conversas do workspace** (staff): `responder` aceita multipart, `responder_staff` persiste anexos, fragmentos assinam URLs (antes staff via "indisponível"); helpers de upload extraídos p/ `app/anexos.py` (compartilhado portal+workspace). (f) **Fix RH:** link "Abrir chamado" restaurado no shell do workspace. (g) **Contas admin de setor** criadas p/ teste: `admin.rh@`/`admin.marketing@` (ADMIN, senha provisória). Suíte **107 testes** verde. |
@@ -748,7 +804,9 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | Auth (login/logout/refresh) + cookies de sessão | ✅ Implementado + **validado e2e live** | 2 | Login/logout + cookies httpOnly+Secure+SameSite. **🔁 Signup público removido** — cadastro direto no Supabase (`supabase/registro_usuarios.sql`, dual-write perfis+`app_metadata`). **Refresh de sessão** (renova access via refresh + `SessionRefreshMiddleware`); 401 de navegação → `/login`. Login de TI/RH/CLIENTE validado ao vivo (JWT ES256/JWKS). |
 | Verificação JWT (JWKS/HS256) | ✅ Implementado | 2 | PyJWT, JWKS assimétrico + fallback HS256; testado (HS256). Confirmar modo do projeto live. |
 | RLS + policies por papel | ✅ Implementado | 2–3 | `0004`/`0005` (base) + **🔁 `0008`/`0009` (roteamento por departamento)**. 8 tabelas; helpers `auth_role`/`auth_empresa_id`/`auth_departamento_id`; `anon` sem acesso. |
-| **🔁 Roteamento por departamento + acesso TI-total** | ✅ Implementado + **validado e2e** | 3 | `0008` + **`0010` (TI = acesso total; RH/Mkt = setor + próprios; funcionário = próprios)**. Validado contra Supabase live (simulação de claims). Portal com seletor; helper `auth_is_ti()`. |
+| **🔁 Roteamento por departamento** | ✅ Implementado + **validado e2e** | 3 | `0008` + `0010` (RH/Mkt = setor + próprios; funcionário = próprios) + **`0020`** (TI deixa de ter acesso total de leitura/escrita — vira igual a RH/Mkt, restrito ao próprio setor; mantém gestão de catálogos e o repasse). Validado contra Supabase live (simulação de claims, 2026-07-01). Portal com seletor; helper `auth_is_ti()`. |
+| **🔁 Setor unificado com Departamento + `recebe_chamados`** | ✅ Implementado | 3/5 | Migration `0027`. `departamentos` vira catálogo único (antes "Setor" era lista Python hardcoded, duplicada da tabela). Coluna `recebe_chamados` marca quem tem fila (TI/RH/Marketing) e pode ser destino de chamado; os outros 7 setores só identificam quem abriu. Trigger de guarda-corpo no destino do chamado. Admin (`/admin/gestao`) ganha toggle por setor. Aplicada em produção; 78 testes verdes (`test_portal`/`test_workspace`/`test_admin`). |
+| **🔁 Líder de setor (acompanha chamados da equipe)** | ✅ Implementado | 3–5 | Migration `0028`. Todo cadastro (`/admin/usuarios`) passa a exigir setor de origem, inclusive Funcionário/CLIENTE. `ADMIN` com `departamento_id`, mesmo num setor sem fila (ex.: Comercial), **vê** (RLS, só leitura) chamados abertos pela própria equipe fora do seu setor de destino — via `/admin` (KPIs já escopados por RLS) e `/workspace` (fila/kanban/atendimento). Quem atende continua sendo só o staff do setor de **destino** do chamado (TI incluído — corrigido nesta sessão um bug que dava bypass incondicional ao TI, contradizendo a `0020`); `atendimento.html` esconde as ações fora desse escopo. Aplicada em produção; validado ao vivo com dados reais + 86 testes verdes. ⚠️ Kanban ainda permite tentar arrastar/excluir card fora do próprio setor (RLS bloqueia a escrita; UI não impede a tentativa). |
 | **🔁 Cadastro direto no Supabase (sem signup)** | ✅ Preparado | 2–3 | `handle_new_user` vincula à org interna; `supabase/registro_usuarios.sql` promove papel/departamento. `/cadastro` removido. |
 | CSRF + Security headers + CSP estrita | ✅ Implementado | 2 | Double-submit + middleware de headers/CSP. Testado. Alpine/HTMX self-hosted pendente (Fase 3). |
 | Camada de dados asyncpg + `SET LOCAL` (RLS sob pooling) | ✅ Implementado | 2 | `app/db.py`: transaction mode, `statement_cache_size=0`, claims por transação. |
