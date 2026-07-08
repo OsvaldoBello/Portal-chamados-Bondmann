@@ -37,10 +37,13 @@ class FakeRepo:
     def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None):
         self._chamado = chamado
         self._categorias = categorias or [{"id": "c1", "nome": "Logística / Entrega"}]
+        # Catálogo unificado (0027): setores que recebem chamado (têm fila) +
+        # setores que só abrem (ex.: Financeiro), como no seed real.
         self._departamentos = departamentos or [
-            {"id": "d1", "nome": "TI"},
-            {"id": "d2", "nome": "RH"},
-            {"id": "d3", "nome": "Marketing"},
+            {"id": "d1", "nome": "TI", "recebe_chamados": True},
+            {"id": "d2", "nome": "RH", "recebe_chamados": True},
+            {"id": "d3", "nome": "Marketing", "recebe_chamados": True},
+            {"id": "d4", "nome": "Financeiro", "recebe_chamados": False},
         ]
         # subcategorias por categoria_id
         self._subcategorias = subcategorias or {

@@ -48,8 +48,7 @@
         <select name="setor" required
           class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
           <option value="">Selecione seu setor…</option>
-          {% for s in setores or ["Brigadistas", "Comercial", "Controladoria", "Diretoria", "Dpto Químico",
-          "Financeiro", "Marketing", "RH", "SIG", "TI"] %}
+          {% for s in setores %}
           <option value="{{ s }}" {% if s==f.get('setor', '' ) %}selected{% endif %}>{{ s }}</option>
           {% endfor %}
         </select>

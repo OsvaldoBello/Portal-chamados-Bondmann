@@ -20,7 +20,7 @@
   {# ---------- Criar conta ---------- #}
   <section class="lg:col-span-1 bg-white rounded-xl shadow-card border border-line/60 p-5 h-fit">
     <h3 class="font-display font-bold text-navy mb-1">Nova conta</h3>
-    <p class="text-xs text-muted mb-4">Cria o colaborador já confirmado. Se escolher operador/admin, define o setor.</p>
+    <p class="text-xs text-muted mb-4">Cria o colaborador já confirmado, com o setor a que ele pertence.</p>
     <form method="post" action="/admin/usuarios" class="space-y-3">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div>
@@ -44,20 +44,24 @@
         <select name="papel"
                 class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
           <option value="CLIENTE">Funcionário (abre chamados)</option>
-          <option value="OPERADOR">Operador de setor (atende)</option>
-          <option value="ADMIN">Admin de setor (atende + relatórios)</option>
+          <option value="OPERADOR">Operador de setor (atende a fila)</option>
+          <option value="ADMIN">Admin/líder de setor (relatórios + fila, se houver)</option>
         </select>
       </div>
       <div>
         <label class="block text-[13px] font-semibold text-navy mb-1">Departamento</label>
-        <select name="departamento_id"
+        <select name="departamento_id" required
                 class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
-          <option value="">— (só para operador/admin) —</option>
+          <option value="" disabled selected>Selecione o setor…</option>
           {% for d in departamentos %}
-          <option value="{{ d.id }}">{{ d.nome }}</option>
+          <option value="{{ d.id }}">{{ d.nome }}{% if not d.recebe_chamados %} (sem fila){% endif %}</option>
           {% endfor %}
         </select>
-        <p class="text-[11px] text-muted mt-1">Admin no setor <strong>TI</strong> = acesso total ao sistema.</p>
+        <p class="text-[11px] text-muted mt-1">
+          Setor de origem da pessoa. Admin/líder de um setor <strong>sem fila</strong> não atende
+          chamados, só acompanha os que a própria equipe abriu. Admin no setor <strong>TI</strong> =
+          acesso total ao sistema. Operador só pode ir para um setor <strong>com fila</strong>.
+        </p>
       </div>
       <button class="w-full px-4 py-2.5 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">Criar conta</button>
     </form>
@@ -90,9 +94,9 @@
                     <option value="ADMIN" {% if u.role == 'ADMIN' %}selected{% endif %}>Admin</option>
                   </select>
                   <select name="departamento_id" class="px-2 py-1 rounded-lg ring-1 ring-line bg-white text-xs outline-none cursor-pointer">
-                    <option value="">— setor —</option>
+                    <option value="">— sem setor —</option>
                     {% for d in departamentos %}
-                    <option value="{{ d.id }}" {% if u.departamento_id|string == d.id|string %}selected{% endif %}>{{ d.nome }}</option>
+                    <option value="{{ d.id }}" {% if u.departamento_id|string == d.id|string %}selected{% endif %}>{{ d.nome }}{% if not d.recebe_chamados %} (sem fila){% endif %}</option>
                     {% endfor %}
                   </select>
                   <button class="px-2.5 py-1 rounded-lg bg-navy-900 text-white text-xs font-semibold hover:bg-navy-800">OK</button>

@@ -18,19 +18,6 @@ from zoneinfo import ZoneInfo
 _TZ_BR = ZoneInfo("America/Sao_Paulo")
 _ENTREGA_MIN_DIAS = 2
 
-SETORES = [
-    "Brigadistas",
-    "Comercial",
-    "Controladoria",
-    "Diretoria",
-    "Dpto Químico",
-    "Financeiro",
-    "Marketing",
-    "RH",
-    "SIG",
-    "TI",
-]
-
 
 def _data_entrega_min() -> date:
     """Menor data de entrega permitida (hoje + 48h, no fuso de Brasília)."""
@@ -150,7 +137,10 @@ async def _render_form(
     Preserva o que o usuário digitou em ``form`` e recarrega as subcategorias da
     categoria escolhida (para o select vir preenchido no erro)."""
     form = form or {}
-    departamentos = await repo.departamentos_ativos(ctx.user.claims)
+    # Catálogo unificado (0027): todo setor da empresa é um "departamento"; só os
+    # que RECEBEM chamado (têm fila/staff) entram no destino do roteamento.
+    setores_ativos = await repo.departamentos_ativos(ctx.user.claims)
+    departamentos = [d for d in setores_ativos if d.get("recebe_chamados")]
     # Categorias pertencem ao departamento (0019): só carregam após escolher o setor.
     dep_sel = form.get("departamento_id") or ""
     categorias = (
@@ -178,7 +168,7 @@ async def _render_form(
             "data_entrega_min": _data_entrega_min().isoformat(),
             "form": form,
             "erro": erro,
-            "setores": SETORES,
+            "setores": [d["nome"] for d in setores_ativos],
         },
         status_code=status_code,
     )
@@ -277,14 +267,14 @@ async def criar_chamado(
         return await _erro("Selecione o departamento de destino do chamado.")
     if not setor:
         return await _erro("Informe o setor para o qual a demanda está sendo pedida.")
-    if setor not in SETORES:
+    setores_ativos = await repo.departamentos_ativos(ctx.user.claims)
+    if setor not in {d["nome"] for d in setores_ativos}:
         return await _erro("Setor selecionado inválido.")
 
     # Marketing trabalha por DEMANDA: em vez de prioridade, exige uma DATA DE
     # ENTREGA com no mínimo 48h (2 dias). Para os demais setores, mantém a prioridade.
-    departamentos = await repo.departamentos_ativos(ctx.user.claims)
     marketing_id = next(
-        (str(d["id"]) for d in departamentos if (d.get("nome") or "").strip().lower() == "marketing"),
+        (str(d["id"]) for d in setores_ativos if (d.get("nome") or "").strip().lower() == "marketing"),
         "",
     )
     is_marketing = bool(marketing_id) and departamento_id == marketing_id

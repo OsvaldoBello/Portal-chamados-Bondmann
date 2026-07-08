@@ -40,15 +40,17 @@ def _chamado(**extra):
 
 
 class FakeRepo:
-    def __init__(self, *, is_ti=True, status="NOVO"):
+    def __init__(self, *, is_ti=True, status="NOVO", perfil_departamento_id="d1"):
         self.acoes = []
         self._is_ti = is_ti
         self._status = status
+        self._perfil_departamento_id = perfil_departamento_id
         self.operadores_dep = "__nao_chamado__"  # captura o filtro de departamento
 
     async def perfil(self, claims):
         return {"id": OP, "nome": "Op TI", "role": "OPERADOR", "empresa_id": "e1",
-                "departamento_id": "d1", "departamento": "TI", "is_ti": self._is_ti}
+                "departamento_id": self._perfil_departamento_id, "departamento": "TI",
+                "is_ti": self._is_ti}
 
     async def fila(self, claims, *, status=None, categoria_id=None,
                    prioridade=None, operador_id=None, limite=200):
@@ -78,7 +80,14 @@ class FakeRepo:
         return [{"id": OP, "nome": "Op TI", "departamento": "TI"}]
 
     async def departamentos_ativos(self, claims):
-        return [{"id": "d1", "nome": "TI"}, {"id": "d2", "nome": "RH"}, {"id": "d3", "nome": "Marketing"}]
+        return [
+            {"id": "d1", "nome": "TI", "recebe_chamados": True},
+            {"id": "d2", "nome": "RH", "recebe_chamados": True},
+            {"id": "d3", "nome": "Marketing", "recebe_chamados": True},
+        ]
+
+    async def departamentos_destino_ativos(self, claims):
+        return [d for d in await self.departamentos_ativos(claims) if d["recebe_chamados"]]
 
     async def alterar_status(self, claims, cid, novo):
         self.acoes.append(("status", cid, novo)); return {"id": cid, "status": novo}
@@ -255,6 +264,19 @@ def test_botao_iniciar_oculto_quando_em_atendimento():
         r = c.get("/workspace/chamados/c1")
     assert r.status_code == 200
     assert "Iniciar atendimento" not in r.text
+
+
+def test_lider_de_outro_setor_so_acompanha_sem_atender():
+    # Líder (ADMIN) de um setor diferente do destino do chamado (0028): vê o
+    # chamado (RLS já cobre isso), mas a UI não deve oferecer ações de atendimento.
+    repo = FakeRepo(is_ti=False, perfil_departamento_id="d-comercial")
+    with ws_client(repo) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert r.status_code == 200
+    assert "acompanhando" in r.text.lower()
+    assert "Iniciar atendimento" not in r.text
+    assert 'action="/workspace/chamados/c1/status"' not in r.text
+    assert 'action="/workspace/chamados/c1/mensagens' not in r.text
 
 
 def test_iniciar_atendimento_assume_como_responsavel():

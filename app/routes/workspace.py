@@ -253,9 +253,19 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
     operadores = await repo.operadores(
         ctx.user.claims, departamento_id=str(chamado.get("departamento_id") or "") or None
     )
+    # Líder de setor (0028) enxerga chamados abertos pela própria equipe mesmo
+    # fora da fila do seu departamento — mas só ACOMPANHA: quem atende (muda
+    # status, responde) é sempre o staff do MESMO departamento do chamado, TI
+    # incluído (0020 tirou o "acesso total" de atendimento do TI; o TI só ganha
+    # um chamado de outro setor via repasse, que o move pra fila da TI antes).
+    pode_atender = str(chamado.get("departamento_id") or "") == str(
+        ctx.perfil.get("departamento_id") or ""
+    ) and bool(ctx.perfil.get("departamento_id"))
     # Repasse de departamento é exclusivo do TI (RLS reforça); só então buscamos a lista.
+    # Só entram setores que RECEBEM chamado (têm fila) — repassar para um setor sem
+    # staff de atendimento não faz sentido (0027).
     departamentos = (
-        await repo.departamentos_ativos(ctx.user.claims) if ctx.perfil.get("is_ti") else []
+        await repo.departamentos_destino_ativos(ctx.user.claims) if ctx.perfil.get("is_ti") else []
     )
     settings = get_settings()
     ctx_render = {
@@ -264,6 +274,7 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         "mensagens": mensagens,
         "operadores": operadores,
         "departamentos": departamentos,
+        "pode_atender": pode_atender,
         "prioridades": PRIORIDADES,
         "status_validos": STATUS_VALIDOS,
         "supabase_url": settings.supabase_url or None,

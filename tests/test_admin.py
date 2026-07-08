@@ -68,7 +68,11 @@ class FakeAdmin:
                  "em": datetime(2026, 7, 1, tzinfo=timezone.utc)}]
 
     async def departamentos(self, claims):
-        return [{"id": "d1", "nome": "TI", "ativo": True}]
+        # d2 = setor que só ABRE chamado (sem fila) — testa o líder sem atendimento (0028).
+        return [
+            {"id": "d1", "nome": "TI", "ativo": True, "recebe_chamados": True},
+            {"id": "d2", "nome": "Comercial", "ativo": True, "recebe_chamados": False},
+        ]
 
     async def categorias(self, claims):
         return [{"id": "c1", "nome": "Suporte", "descricao": None, "ativo": True}]
@@ -99,11 +103,14 @@ class FakeAdmin:
     async def toggle_subcategoria(self, claims, sub_id):
         self.acoes.append(("sub_toggle", sub_id)); return "c1"
 
-    async def criar_departamento(self, claims, nome):
-        self.acoes.append(("dep", nome))
+    async def criar_departamento(self, claims, nome, *, recebe_chamados=False):
+        self.acoes.append(("dep", nome, recebe_chamados))
 
     async def toggle_departamento(self, claims, dep_id):
         self.acoes.append(("dep_toggle", dep_id))
+
+    async def toggle_recebe_departamento(self, claims, dep_id):
+        self.acoes.append(("dep_toggle_recebe", dep_id))
 
     async def criar_categoria(self, claims, nome, descricao):
         self.acoes.append(("cat", nome, descricao))
@@ -252,7 +259,7 @@ def test_criar_departamento():
         r = c.post("/admin/departamentos", data={"nome": "Financeiro"},
                    headers={"X-CSRF-Token": t}, follow_redirects=False)
     assert r.status_code == 303
-    assert ("dep", "Financeiro") in repo.acoes
+    assert ("dep", "Financeiro", False) in repo.acoes
 
 
 def test_gestao_edita_plano_sla():
@@ -299,6 +306,50 @@ def test_mudar_papel_grava_no_perfil():
                    headers={"X-CSRF-Token": t}, follow_redirects=False)
     assert r.status_code == 303
     assert ("papel", "u1", "ADMIN", "d1") in repo.acoes
+
+
+def test_mudar_papel_funcionario_exige_setor():
+    # Setor de origem virou obrigatório pra qualquer papel, inclusive Funcionário (0028).
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/usuarios/u1/papel", data={"papel": "CLIENTE", "departamento_id": ""},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert not any(a[0] == "papel" for a in repo.acoes)
+
+
+def test_mudar_papel_funcionario_setor_sem_fila_funciona():
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/usuarios/u1/papel", data={"papel": "CLIENTE", "departamento_id": "d2"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ("papel", "u1", "CLIENTE", "d2") in repo.acoes
+
+
+def test_mudar_papel_lider_em_setor_sem_fila_funciona():
+    # ADMIN de um setor que só abre chamado (Comercial) = líder que só acompanha,
+    # sem fila pra atender.
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/usuarios/u1/papel", data={"papel": "ADMIN", "departamento_id": "d2"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ("papel", "u1", "ADMIN", "d2") in repo.acoes
+
+
+def test_mudar_papel_operador_em_setor_sem_fila_da_erro():
+    # OPERADOR só faz sentido num setor com fila — não há o que atender em Comercial.
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/usuarios/u1/papel", data={"papel": "OPERADOR", "departamento_id": "d2"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert not any(a[0] == "papel" for a in repo.acoes)
 
 
 def test_criar_usuario_sem_service_role_avisa():
@@ -426,7 +477,7 @@ def test_criar_usuario_funcionario_mostra_rotulo_amigavel(monkeypatch):
         t = _csrf(c)
         r = c.post("/admin/usuarios",
                    data={"nome": "Gabriel", "email": "gabriel@bondmann.com.br",
-                         "senha": "12345678", "papel": "CLIENTE", "departamento_id": ""},
+                         "senha": "12345678", "papel": "CLIENTE", "departamento_id": "d2"},
                    headers={"X-CSRF-Token": t}, follow_redirects=False)
     assert r.status_code == 303
     from urllib.parse import unquote

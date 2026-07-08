@@ -163,17 +163,26 @@ class ChamadosRepo:
         return any(str(c["id"]) == str(categoria_id) for c in cats)
 
     async def departamentos_ativos(self, claims: dict) -> list[dict[str, Any]]:
-        """Departamentos de destino disponíveis para abertura (TI/RH/Marketing)."""
+        """Todos os setores ativos da empresa (catálogo unificado — 0027). Cada um
+        traz ``recebe_chamados``: só os que têm fila de atendimento (TI/RH/Marketing,
+        hoje) podem ser destino de chamado; os demais só identificam quem abriu."""
         cached = cache.get(CACHE_DEPARTAMENTOS)
         if cached is not None:
             return cached
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
-                "SELECT id, nome FROM departamentos WHERE ativo = true ORDER BY nome"
+                "SELECT id, nome, recebe_chamados FROM departamentos WHERE ativo = true ORDER BY nome"
             )
         resultado = [dict(r) for r in rows]
         cache.set(CACHE_DEPARTAMENTOS, resultado, CATALOGO_TTL)
         return resultado
+
+    async def departamentos_destino_ativos(self, claims: dict) -> list[dict[str, Any]]:
+        """Subconjunto de :meth:`departamentos_ativos` que pode ser destino de
+        chamado (``recebe_chamados``) — usado no dropdown "Departamento de destino"
+        e no repasse de setor (Workspace)."""
+        todos = await self.departamentos_ativos(claims)
+        return [d for d in todos if d.get("recebe_chamados")]
 
     async def subcategorias_ativas(
         self, claims: dict, categoria_id: str

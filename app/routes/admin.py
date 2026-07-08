@@ -115,7 +115,10 @@ async def dashboard(
     dep_id: str | None = None
     dep_nome: str | None = None
     if ctx.is_ti:
-        departamentos = [d for d in await repo.departamentos(claims) if d.get("ativo")]
+        departamentos = [
+            d for d in await repo.departamentos(claims)
+            if d.get("ativo") and d.get("recebe_chamados")
+        ]
         escolhido = departamento.strip()
         selecionado = next((d for d in departamentos if str(d["id"]) == escolhido), None)
         if selecionado:
@@ -189,6 +192,7 @@ async def gestao(
 async def criar_departamento(
     request: Request,
     nome: str = Form(...),
+    recebe_chamados: bool = Form(False),
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
     _: None = Depends(_csrf_guard),
@@ -196,7 +200,7 @@ async def criar_departamento(
     _require_ti(ctx)
     nome = nome.strip()
     if nome:
-        await repo.criar_departamento(ctx.user.claims, nome)
+        await repo.criar_departamento(ctx.user.claims, nome, recebe_chamados=recebe_chamados)
         cache.invalidate(CACHE_DEPARTAMENTOS)
     return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -211,6 +215,22 @@ async def toggle_departamento(
 ):
     _require_ti(ctx)
     await repo.toggle_departamento(ctx.user.claims, dep_id)
+    cache.invalidate(CACHE_DEPARTAMENTOS)
+    return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/departamentos/{dep_id}/toggle-recebe")
+async def toggle_recebe_departamento(
+    request: Request,
+    dep_id: str,
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Liga/desliga se o setor recebe chamado (tem fila de atendimento) — só o
+    catálogo de categorias e o roteamento de chamado usam esse flag."""
+    _require_ti(ctx)
+    await repo.toggle_recebe_departamento(ctx.user.claims, dep_id)
     cache.invalidate(CACHE_DEPARTAMENTOS)
     return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -354,13 +374,36 @@ async def _emails_por_id() -> dict[str, str]:
 
 
 async def _depto_valido(repo: AdminRepo, claims: dict, dep_id: str) -> str | None:
-    """Retorna o id do departamento se existir e estiver ativo; senão ``None``."""
+    """Retorna o id do departamento se existir, estiver ativo e RECEBER chamado
+    (tem fila/staff); senão ``None``. Usado só para vincular CATEGORIAS — uma
+    categoria só faz sentido num setor com fila de atendimento (0027)."""
     dep_id = (dep_id or "").strip()
     if not dep_id:
         return None
     for d in await repo.departamentos(claims):
-        if str(d["id"]) == dep_id and d.get("ativo"):
+        if str(d["id"]) == dep_id and d.get("ativo") and d.get("recebe_chamados"):
             return dep_id
+    return None
+
+
+async def _depto_perfil_valido(
+    repo: AdminRepo, claims: dict, dep_id: str, *, papel: str
+) -> str | None:
+    """Retorna o id do departamento se existir e estiver ativo; senão ``None``.
+
+    Toda conta tem um setor de origem (0028) — inclusive Funcionário/CLIENTE, que
+    é como o líder do setor sabe quem é da sua equipe. OPERADOR é a única exceção:
+    só faz sentido num setor que RECEBE chamado (é ele quem atende a fila) —
+    atribuí-lo a um setor sem fila deixaria a conta sem nada pra fazer."""
+    dep_id = (dep_id or "").strip()
+    if not dep_id:
+        return None
+    for d in await repo.departamentos(claims):
+        if str(d["id"]) != dep_id or not d.get("ativo"):
+            continue
+        if papel == "OPERADOR" and not d.get("recebe_chamados"):
+            return None
+        return dep_id
     return None
 
 
@@ -386,6 +429,8 @@ async def usuarios(
         {
             **_base_ctx(ctx),
             "usuarios": lista,
+            # Setor de origem (0028): todo usuário tem um, então TODOS os
+            # departamentos ativos entram aqui (não só os que recebem chamado).
             "departamentos": [d for d in await repo.departamentos(ctx.user.claims) if d.get("ativo")],
             "admin_disponivel": (await ensure_admin_client()) is not None,
             "ok": ok,
@@ -408,8 +453,9 @@ async def criar_usuario(
     repo: AdminRepo = Depends(get_admin_repo),
     _: None = Depends(_csrf_guard),
 ):
-    """Cria a conta (GoTrue Admin API) já confirmada e, se for staff, promove o
-    papel + setor. Dual-write: app_metadata.role (JWT) + perfis (RLS)."""
+    """Cria a conta (GoTrue Admin API) já confirmada e promove papel + setor
+    (todo usuário tem um setor de origem — 0028). Dual-write: app_metadata.role
+    (JWT) + perfis (RLS)."""
     _require_ti(ctx)
     from app.auth.supabase_client import ensure_admin_client
 
@@ -426,11 +472,11 @@ async def criar_usuario(
         papel = "CLIENTE"
     if len(senha) < _SENHA_MIN:
         return _volta(erro=f"A senha deve ter ao menos {_SENHA_MIN} caracteres.")
-    dep_id = await _depto_valido(repo, ctx.user.claims, departamento_id)
-    if papel in ("OPERADOR", "ADMIN") and dep_id is None:
-        return _volta(erro="Selecione um departamento para operador/admin de setor.")
-    if papel == "CLIENTE":
-        dep_id = None  # funcionário não tem setor
+    # Setor de origem obrigatório pra qualquer papel (0028) — inclusive
+    # Funcionário: é o que permite o líder do setor ver os chamados da equipe.
+    dep_id = await _depto_perfil_valido(repo, ctx.user.claims, departamento_id, papel=papel)
+    if dep_id is None:
+        return _volta(erro="Selecione o departamento do usuário.")
 
     client = await ensure_admin_client()
     if client is None:
@@ -453,9 +499,8 @@ async def criar_usuario(
     if novo is None:
         return _volta(erro="Conta não criada (resposta inesperada do Supabase).")
 
-    # O trigger criou o perfil CLIENTE; promovemos papel/setor se for staff.
-    if papel != "CLIENTE" or dep_id is not None:
-        await repo.atualizar_papel(ctx.user.claims, str(novo.id), role=papel, departamento_id=dep_id)
+    # O trigger criou o perfil CLIENTE sem setor; sempre promovemos papel+setor.
+    await repo.atualizar_papel(ctx.user.claims, str(novo.id), role=papel, departamento_id=dep_id)
 
     return _volta(ok=f"Conta {email} criada como {_PAPEL_LABEL[papel]}.")
 
@@ -484,11 +529,9 @@ async def mudar_papel(
     papel = papel.strip().upper()
     if papel not in _PAPEIS:
         return _volta(erro="Papel inválido.")
-    dep_id = await _depto_valido(repo, ctx.user.claims, departamento_id)
-    if papel in ("OPERADOR", "ADMIN") and dep_id is None:
-        return _volta(erro="Selecione um departamento para operador/admin de setor.")
-    if papel == "CLIENTE":
-        dep_id = None
+    dep_id = await _depto_perfil_valido(repo, ctx.user.claims, departamento_id, papel=papel)
+    if dep_id is None:
+        return _volta(erro="Selecione o departamento do usuário.")
 
     await repo.atualizar_papel(ctx.user.claims, user_id, role=papel, departamento_id=dep_id)
 

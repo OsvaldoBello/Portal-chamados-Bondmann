@@ -165,20 +165,34 @@ class AdminRepo:
     async def departamentos(self, claims: dict) -> list[dict[str, Any]]:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
-                "SELECT id, nome, ativo FROM departamentos ORDER BY nome"
+                "SELECT id, nome, ativo, recebe_chamados FROM departamentos ORDER BY nome"
             )
             return [dict(r) for r in rows]
 
-    async def criar_departamento(self, claims: dict, nome: str) -> None:
+    async def criar_departamento(
+        self, claims: dict, nome: str, *, recebe_chamados: bool = False
+    ) -> None:
         async with rls_connection(claims) as conn:
             await conn.execute(
-                "INSERT INTO departamentos (nome) VALUES ($1) ON CONFLICT (nome) DO NOTHING", nome
+                """INSERT INTO departamentos (nome, recebe_chamados) VALUES ($1, $2)
+                   ON CONFLICT (nome) DO NOTHING""",
+                nome, recebe_chamados,
             )
 
     async def toggle_departamento(self, claims: dict, dep_id: str) -> None:
         async with rls_connection(claims) as conn:
             await conn.execute(
                 "UPDATE departamentos SET ativo = NOT ativo WHERE id = $1::uuid", dep_id
+            )
+
+    async def toggle_recebe_departamento(self, claims: dict, dep_id: str) -> None:
+        """Liga/desliga se o setor tem fila de atendimento (pode ser destino de
+        chamado). Guarda-corpo contra staff apontar para setor sem fila é o trigger
+        ``enforce_departamento_recebe_chamados`` (0027)."""
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                "UPDATE departamentos SET recebe_chamados = NOT recebe_chamados WHERE id = $1::uuid",
+                dep_id,
             )
 
     async def categorias(self, claims: dict) -> list[dict[str, Any]]:

@@ -55,7 +55,12 @@
         {% include "portal/_mensagens.html" %}
       </div>
 
-      {% if chamado.status != 'RESOLVIDO' %}
+      {% if not pode_atender %}
+      <p class="mt-4 rounded-lg bg-navy-50 border border-navy-100 px-3.5 py-2.5 text-xs text-navy">
+        Você está <strong>acompanhando</strong> este chamado (aberto por alguém do seu setor) —
+        só quem atende a fila do departamento pode responder ou alterá-lo.
+      </p>
+      {% elif chamado.status != 'RESOLVIDO' %}
       {% if erro_composer %}
       <div class="mt-4 rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-sm text-red-700">{{ erro_composer }}</div>
       {% endif %}
@@ -88,6 +93,7 @@
 
   {# ---------- Coluna de ações ---------- #}
   <div class="space-y-4">
+    {% if pode_atender %}
     {% if chamado.status == 'NOVO' %}
     {# Iniciar atendimento: assume o chamado e move para "Em atendimento". #}
     <form method="post" action="/workspace/chamados/{{ chamado.id }}/iniciar{% if origem %}?origem={{ origem }}{% endif %}">
@@ -243,6 +249,7 @@
       </form>
     </div>
     {% endif %}
+    {% endif %}{# /pode_atender #}
 
     {% if chamado.avaliacao_nota %}
     <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">

@@ -5,30 +5,43 @@
 {% block subheading %}Departamentos, categorias e planos de SLA{% endblock %}
 {% block content %}
 
-{% macro toggle_btn(acao, ativo) %}
+{% macro toggle_btn(acao, ativo, label_on="Desativar", label_off="Ativar") %}
 <form method="post" action="{{ acao }}" class="inline">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <button class="text-xs font-semibold px-2 py-1 rounded {{ 'bg-sla-danger/10 text-sla-danger' if ativo else 'bg-sla-ok/10 text-sla-ok' }}">
-    {{ "Desativar" if ativo else "Ativar" }}
+    {{ label_on if ativo else label_off }}
   </button>
 </form>
 {% endmacro %}
 
 <div class="grid lg:grid-cols-2 gap-6">
-  {# Departamentos #}
+  {# Departamentos — catálogo unificado (0027): todo setor da empresa vive aqui;
+  "recebe chamados" marca os que têm fila de atendimento (destino de chamado) #}
   <section class="bg-white rounded-xl shadow-card border border-line/60 p-5">
-    <h3 class="font-display font-bold text-navy mb-3">Departamentos</h3>
-    <form method="post" action="/admin/departamentos" class="flex gap-2 mb-4">
+    <h3 class="font-display font-bold text-navy mb-3">Departamentos / Setores</h3>
+    <form id="novo-departamento-form" method="post" action="/admin/departamentos" class="flex gap-2 mb-2">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input name="nome" required placeholder="Novo departamento (ex.: Financeiro)"
+      <input name="nome" required placeholder="Novo setor (ex.: Financeiro)"
              class="flex-1 px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
       <button class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold">Adicionar</button>
     </form>
+    <label class="flex items-center gap-1.5 text-xs text-muted mb-4">
+      <input type="checkbox" name="recebe_chamados" value="true" form="novo-departamento-form">
+      Setor recebe chamado (tem fila de atendimento)
+    </label>
     <ul class="divide-y divide-line">
       {% for d in departamentos %}
-      <li class="flex items-center justify-between py-2">
-        <span class="text-sm {{ 'text-navy' if d.ativo else 'text-faint line-through' }}">{{ d.nome }}</span>
-        {{ toggle_btn("/admin/departamentos/" ~ d.id ~ "/toggle", d.ativo) }}
+      <li class="flex items-center justify-between py-2 gap-2">
+        <span class="text-sm {{ 'text-navy' if d.ativo else 'text-faint line-through' }}">
+          {{ d.nome }}
+          {% if d.recebe_chamados %}
+          <span class="ml-1 inline-flex rounded-full bg-navy-100 px-2 py-0.5 text-[11px] font-semibold text-navy align-middle">recebe chamado</span>
+          {% endif %}
+        </span>
+        <span class="flex gap-1.5 shrink-0">
+          {{ toggle_btn("/admin/departamentos/" ~ d.id ~ "/toggle-recebe", d.recebe_chamados, "Tirar da fila", "Pôr na fila") }}
+          {{ toggle_btn("/admin/departamentos/" ~ d.id ~ "/toggle", d.ativo) }}
+        </span>
       </li>
       {% endfor %}
     </ul>
@@ -46,7 +59,7 @@
         <select name="departamento_id" required
                 class="px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
           <option value="">Departamento…</option>
-          {% for d in departamentos %}{% if d.ativo %}
+          {% for d in departamentos %}{% if d.ativo and d.recebe_chamados %}
           <option value="{{ d.id }}">{{ d.nome }}</option>
           {% endif %}{% endfor %}
         </select>
