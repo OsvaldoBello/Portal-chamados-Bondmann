@@ -11,9 +11,9 @@
   <a href="/workspace" class="text-sm font-semibold text-navy hover:underline">Ver como Lista →</a>
 </div>
 
-<div id="kanban" class="flex flex-row overflow-x-auto gap-4 pb-4 items-start">
+<div id="kanban" class="flex flex-row gap-3 pb-4 items-start">
   {% for s in status_validos %}
-  <section class="flex-1 min-w-[280px] shrink-0 bg-surface2/60 rounded-xl border border-line/60 flex flex-col">
+  <section class="flex-1 min-w-0 bg-surface2/60 rounded-xl border border-line/60 flex flex-col">
     <header class="px-3 py-2.5 flex items-center justify-between">
       {% set label = STATUS_META[s].label %}
       {% if perfil.departamento == 'Marketing' %}
@@ -55,7 +55,12 @@
           </div>
 
           <div class="text-sm font-medium text-navy leading-snug mt-1.5">{{ c.titulo }}</div>
-          <div class="flex items-center justify-between mt-2">
+          <div class="mt-2">
+            <span class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-500">
+              📅 Solicitado em {{ fmt_dt(c.created_at, "%d/%m/%Y") }}
+            </span>
+          </div>
+          <div class="flex items-center justify-between mt-1">
             {{ prioridade_badge(c.prioridade) }}
             {{ sla_chip(c) }}
           </div>
