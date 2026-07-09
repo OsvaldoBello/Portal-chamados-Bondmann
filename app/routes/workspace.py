@@ -249,52 +249,6 @@ async def kanban(
 
 
 # --------------------------------------------------------------------------
-# Chamados do Departamento (Fase 1): chamados do meu setor abertos por OUTRO
-# colega do mesmo departamento (não eu, não "de fora") — ficam fora da fila
-# de atendimento (que é só para pedidos externos ao setor).
-# --------------------------------------------------------------------------
-@router.get("/departamento")
-async def chamados_departamento_lista(
-    request: Request,
-    status: str = "",
-    categoria: str = "",
-    prioridade: str = "",
-    ctx: StaffCtx = Depends(staff_context),
-    repo: ChamadosRepo = Depends(get_chamados_repo),
-):
-    f = _parse_filtros(status, categoria, prioridade, "", "")
-    dep_id = _dep_id(ctx)
-    chamados = await repo.chamados_departamento(
-        ctx.user.claims,
-        departamento_id=dep_id,
-        status=f["status"],
-        categoria_id=f["categoria_id"],
-        prioridade=f["prioridade"],
-    )
-    categorias, _ = await _opcoes_filtro(ctx, repo)
-    is_marketing = ctx.perfil.get("departamento") == "Marketing"
-    status_validos = (
-        ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
-        if is_marketing else
-        ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
-    )
-    return render(
-        request,
-        "workspace/departamento.html",
-        {
-            "perfil": ctx.perfil,
-            "chamados": chamados,
-            "categorias": categorias,
-            "prioridades": PRIORIDADES,
-            "status_validos": status_validos,
-            "filtro": f["status"],
-            "categoria_sel": f["categoria_id"] or "",
-            "prioridade_sel": f["prioridade"] or "",
-        },
-    )
-
-
-# --------------------------------------------------------------------------
 # Atendimento (tela individual)
 # --------------------------------------------------------------------------
 async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str = "", **extra):

@@ -87,4 +87,31 @@
   </div>
   {% endif %}
 </div>
+
+{% if chamados_colegas is not none %}
+<div class="mt-8">
+  <h2 class="font-display font-bold text-navy mb-1">Chamados do Departamento</h2>
+  <p class="text-sm text-muted mb-3">
+    Chamados do seu setor abertos por <strong>outros colegas de departamento</strong> — não os que você
+    mesmo abriu (isso fica em Meus chamados acima).
+  </p>
+  <div class="bg-white rounded-xl shadow-card border border-line/60 overflow-hidden">
+    <div class="overflow-x-auto">
+    <table class="w-full min-w-[760px]">
+      <thead class="bg-surface/70 text-left text-[11px] font-bold uppercase tracking-wider text-muted">
+        <tr>
+          <th class="px-4 py-3">Código</th><th class="px-4 py-3">Assunto</th>
+          <th class="px-4 py-3">Departamento</th><th class="px-4 py-3">Status</th>
+          <th class="px-4 py-3">Prioridade</th><th class="px-4 py-3">SLA</th>
+          <th class="px-4 py-3">Operador</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% with chamados=chamados_colegas %}{% include "workspace/_fila_linhas.html" %}{% endwith %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

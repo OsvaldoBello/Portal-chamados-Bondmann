@@ -117,6 +117,18 @@ async def dashboard(
 ):
     chamados = await repo.listar(ctx.user.claims)
     stats = _stats_de(chamados)
+    # Líder de setor (ADMIN com departamento_id — migration 0028) acompanha,
+    # nesta mesma página, os chamados abertos por colegas do seu setor (mesmo
+    # que destinados a outro departamento); a RLS já restringe quem realmente
+    # recebe essas linhas, então OPERADOR/CLIENTE não veem nada aqui mesmo que
+    # a query rode. Unifica o que antes era a aba separada "Chamados do
+    # Departamento" (`/workspace/departamento`, removida).
+    chamados_colegas = None
+    if ctx.perfil.get("role") == "ADMIN":
+        chamados_colegas = await repo.chamados_departamento(
+            ctx.user.claims,
+            departamento_id=str(ctx.perfil.get("departamento_id") or "") or None,
+        )
     return render(
         request,
         "portal/dashboard.html",
@@ -124,6 +136,7 @@ async def dashboard(
             "perfil": ctx.perfil,
             "chamados": chamados,
             "stats": stats,
+            "chamados_colegas": chamados_colegas,
             "base_template": portal_base_template(ctx.perfil),
         },
     )

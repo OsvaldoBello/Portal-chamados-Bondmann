@@ -31,11 +31,25 @@ def _cliente() -> CurrentUser:
     )
 
 
+def _admin() -> CurrentUser:
+    return CurrentUser(
+        id=UID,
+        email="lider@empresa.com",
+        role="ADMIN",
+        claims={"sub": UID, "app_metadata": {"role": "ADMIN"}},
+    )
+
+
 class FakeRepo:
     """Implementa a superfície usada pelas rotas do portal."""
 
-    def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None):
+    def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None,
+                 role="CLIENTE", departamento_id=None, chamados_colegas=None):
         self._chamado = chamado
+        self._role = role
+        self._departamento_id = departamento_id
+        self._chamados_colegas = chamados_colegas if chamados_colegas is not None else []
+        self.chamados_departamento_filtros = None
         self._categorias = categorias or [{"id": "c1", "nome": "Logística / Entrega"}]
         # Catálogo unificado (0027): setores que recebem chamado (têm fila) +
         # setores que só abrem (ex.: Financeiro), como no seed real.
@@ -57,7 +71,15 @@ class FakeRepo:
         self._observadores_por_chamado: dict[str, list[dict]] = {}
 
     async def perfil(self, claims):
-        return {"id": UID, "nome": "Cliente Teste", "role": "CLIENTE", "empresa_id": EMPRESA}
+        return {
+            "id": UID, "nome": "Cliente Teste", "role": self._role, "empresa_id": EMPRESA,
+            "departamento_id": self._departamento_id,
+        }
+
+    async def chamados_departamento(self, claims, *, departamento_id=None, status=None,
+                                     categoria_id=None, prioridade=None, limite=200):
+        self.chamados_departamento_filtros = {"departamento_id": departamento_id}
+        return self._chamados_colegas
 
     async def listar(self, claims, limite=100):
         return [
@@ -141,13 +163,13 @@ def _chamado(status="RESOLVIDO", cliente_id=UID, **extra):
 
 
 @contextmanager
-def portal_client(repo: FakeRepo):
+def portal_client(repo: FakeRepo, user=_cliente):
     """Cliente de teste com lifespan ativo (inicializa CSRF/JWT) e auth fake.
 
     Usa base_url https para que o cookie CSRF (``Secure``) seja reenviado pelo
     httpx — em http um cookie Secure não trafega, quebrando o double-submit.
     """
-    app.dependency_overrides[get_current_user] = _cliente
+    app.dependency_overrides[get_current_user] = user
     app.dependency_overrides[get_chamados_repo] = lambda: repo
     try:
         with TestClient(app, base_url="https://testserver") as client:
@@ -396,6 +418,39 @@ def test_dashboard_lista_chamados():
     assert resp.status_code == 200
     assert "BOND-2026-00001" in resp.text
     assert "Vazamento na linha 3" in resp.text
+
+
+# --------------------------------------------------------------------------
+# Unificação (2026-07-09): "Meus chamados" + "Chamados do Departamento" viram
+# uma única página — a seção de colegas só aparece pro líder de setor (ADMIN).
+# --------------------------------------------------------------------------
+def test_dashboard_mostra_chamados_do_departamento_para_lider_admin():
+    repo = FakeRepo(
+        role="ADMIN", departamento_id="d1",
+        chamados_colegas=[{
+            "id": "c9", "codigo": "BOND-2026-00009", "titulo": "Solicitação de férias",
+            "status": "NOVO", "prioridade": "MEDIA", "departamento": "RH",
+            "created_at": datetime(2026, 7, 9, 10, 0, tzinfo=timezone.utc),
+            "limite_resolucao": None, "respondido_em": None, "resolvido_em": None,
+            "cliente_nome": "Giordano Burtet", "cliente_avatar_path": None,
+            "cliente_avatar_atualizado_em": None, "operador_nome": None,
+        }],
+    )
+    with portal_client(repo, user=_admin) as client:
+        resp = client.get("/portal")
+    assert resp.status_code == 200
+    assert "Chamados do Departamento" in resp.text
+    assert "BOND-2026-00009" in resp.text
+    assert repo.chamados_departamento_filtros == {"departamento_id": "d1"}
+
+
+def test_dashboard_nao_mostra_chamados_do_departamento_para_funcionario():
+    repo = FakeRepo(role="CLIENTE")
+    with portal_client(repo) as client:
+        resp = client.get("/portal")
+    assert resp.status_code == 200
+    assert "Chamados do Departamento" not in resp.text
+    assert repo.chamados_departamento_filtros is None
 
 
 # --------------------------------------------------------------------------

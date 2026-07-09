@@ -345,8 +345,9 @@ class ChamadosRepo:
     #   - fila()/kanban (a atender): chamados do MEU setor abertos por quem
     #     NÃO é colega do mesmo departamento (nem eu mesmo) — pedido "de fora".
     #   - listar() ("Meus chamados"): os que EU mesmo abri, pra qualquer setor.
-    #   - chamados_departamento() (novo): chamados do MEU setor abertos por
-    #     OUTRO colega do mesmo departamento (staff colega, não eu).
+    #   - chamados_departamento() (novo): chamados abertos por OUTRO colega do
+    #     MEU setor de origem, para QUALQUER departamento de destino (mesmo
+    #     recorte de leitura da RLS de líder de setor, migration 0028).
     # ---------------------------------------------------------------------
     _FILA_COLUNAS = """
         SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade, c.setor,
@@ -416,17 +417,22 @@ class ChamadosRepo:
         prioridade: str | None = None,
         limite: int = 200,
     ) -> list[dict[str, Any]]:
-        """"Chamados do Departamento" (Fase 1): chamados do MEU setor abertos por
-        OUTRO colega do mesmo departamento (não eu) — claim/resposta seguem a
+        """"Chamados do Departamento" (Fase 1): chamados abertos por OUTRO colega
+        do MEU setor de origem (não eu) — independente do departamento de
+        DESTINO do chamado. O recorte é sobre o setor do AUTOR, não sobre para
+        onde o chamado foi roteado: um colega de TI que abre um chamado para o
+        RH (ex.: solicitação de férias) ainda aparece aqui para o líder/colega
+        de TI acompanhar — mesmo escopo de leitura que a RLS de "líder de
+        setor" (migration 0028) já concede; quem não tem esse privilégio
+        simplesmente não recebe essas linhas (RLS). Claim/resposta seguem a
         mesma trava de segregação de função da Fase 0 (autor nunca atende o
         próprio chamado, mesmo sendo colega de quem está vendo esta lista)."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 self._FILA_COLUNAS
                 + """
-                 WHERE ($5::uuid IS NULL OR c.departamento_id = $5::uuid)
+                 WHERE ($5::uuid IS NULL OR autor.departamento_id = $5::uuid)
                    AND c.cliente_id <> auth.uid()
-                   AND autor.departamento_id IS NOT DISTINCT FROM c.departamento_id
                    AND ($1::status_chamado IS NULL OR c.status = $1::status_chamado)
                    AND ($3::uuid IS NULL OR c.categoria_id = $3::uuid)
                    AND ($4::prioridade_chamado IS NULL OR c.prioridade = $4::prioridade_chamado)

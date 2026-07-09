@@ -66,15 +66,6 @@ class FakeRepo:
         cs = [_chamado(), _chamado(id="c2", codigo="BOND-2026-00002", status="EM_ATENDIMENTO")]
         return [c for c in cs if status is None or c["status"] == status]
 
-    async def chamados_departamento(self, claims, *, departamento_id=None, status=None,
-                                     categoria_id=None, prioridade=None, limite=200):
-        self.departamento_filtros = {
-            "departamento_id": departamento_id, "categoria_id": categoria_id, "prioridade": prioridade,
-        }
-        cs = [_chamado(id="c3", codigo="BOND-2026-00003", cliente_id="colega1",
-                       cliente_avatar_path="colega1/avatar.png")]
-        return [c for c in cs if status is None or c["status"] == status]
-
     async def fila_stats(self, claims, *, departamento_id=None):
         return {"total": 2, "NOVO": 1, "EM_ATENDIMENTO": 1, "AGUARDANDO": 0, "RESOLVIDO": 0}
 
@@ -414,34 +405,24 @@ def test_fila_e_kanban_passam_o_departamento_do_perfil():
     assert repo2.fila_filtros["departamento_id"] == "d1"
 
 
-def test_chamados_do_departamento_lista_chamados_de_colegas():
-    repo = FakeRepo()
-    with ws_client(repo) as c:
-        r = c.get("/workspace/departamento")
-    assert r.status_code == 200
-    assert "Chamados do Departamento" in r.text
-    assert "BOND-2026-00003" in r.text
-    assert repo.departamento_filtros["departamento_id"] == "d1"
-
-
-def test_nav_do_workspace_tem_meus_chamados_e_chamados_do_departamento():
+def test_nav_do_workspace_tem_meus_chamados_sem_aba_separada_de_departamento():
+    # Unificação (2026-07-09): "Chamados do Departamento" deixou de ser um item
+    # de menu à parte — vira uma seção dentro de "Meus chamados" (/portal),
+    # visível só pro líder de setor (ver tests/test_portal.py).
     with ws_client(FakeRepo()) as c:
         r = c.get("/workspace")
     assert 'href="/portal"' in r.text
     assert "Meus chamados" in r.text
-    assert 'href="/workspace/departamento"' in r.text
-    assert "Chamados do Departamento" in r.text
+    assert 'href="/workspace/departamento"' not in r.text
 
 
-# --------------------------------------------------------------------------
-# Fase 7 (2026-07-09): bolinha de avatar nos cards de quem abriu o chamado.
-# --------------------------------------------------------------------------
-def test_avatar_do_autor_aparece_em_chamados_do_departamento():
+def test_meu_perfil_sai_da_barra_lateral_e_vai_pro_menu_do_usuario():
+    # "Meu perfil" deixa de ser item da barra lateral e passa a viver no menu
+    # que abre ao clicar no avatar/nome do usuário, no topo à direita.
     with ws_client(FakeRepo()) as c:
-        r = c.get("/workspace/departamento")
-    assert r.status_code == 200
-    assert "colega1/avatar.png" in r.text
-    assert "<img" in r.text
+        r = c.get("/workspace")
+    assert 'data-menu="user"' in r.text
+    assert 'href="/perfil"' in r.text
 
 
 def test_sem_avatar_nao_quebra_a_fila():
