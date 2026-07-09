@@ -35,13 +35,6 @@
                 data-id="{{ c.id }}" data-codigo="{{ c.codigo }}" title="Excluir chamado" aria-label="Excluir chamado">
           <svg class="w-3.5 h-3.5 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 7h12M9 7V5.5A1.5 1.5 0 0110.5 4h3A1.5 1.5 0 0115 5.5V7m-6 4v6m4-6v6M5 7l1 12a2 2 0 002 2h8a2 2 0 002-2l1-12"/></svg>
         </button>
-        {# Foto de quem abriu o chamado (Fase 7) — bolinha no canto superior
-           direito do cartão, ao lado do botão de excluir. #}
-        {% set foto = avatar_url(c.cliente_avatar_path, c.cliente_avatar_atualizado_em) %}
-        {% if foto %}
-        <img src="{{ foto }}" alt="" title="{{ c.cliente_nome or '' }}"
-             class="absolute top-2 right-9 z-10 w-5 h-5 rounded-full object-cover ring-2 ring-white">
-        {% endif %}
         {# draggable=false: impede o drag nativo do link de sequestrar o Sortable. #}
         <a href="/workspace/chamados/{{ c.id }}?origem=kanban" class="block pr-5" draggable="false">
           <div class="font-mono text-[11px] text-brandgreen-700">{{ c.codigo }}</div>
@@ -61,7 +54,14 @@
             {% endif %}
           </div>
 
-          <div class="text-sm font-medium text-navy leading-snug mt-1.5">{{ c.titulo }}</div>
+          {% set foto = avatar_url(c.cliente_avatar_path, c.cliente_avatar_atualizado_em) %}
+          <div class="flex items-center gap-1.5 mt-1.5">
+            <div class="text-sm font-medium text-navy leading-snug">{{ c.titulo }}</div>
+            {% if foto %}
+            <img src="{{ foto }}" alt="" title="{{ c.cliente_nome or '' }}"
+                 class="w-5 h-5 rounded-full object-cover ring-1 ring-line shrink-0">
+            {% endif %}
+          </div>
           <div class="mt-2">
             <span class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-500">
               📅 Solicitado em {{ fmt_dt(c.created_at, "%d/%m/%Y") }}
