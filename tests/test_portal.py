@@ -52,6 +52,9 @@ class FakeRepo:
         self.avaliacoes: list[dict] = []
         self.criados: list[dict] = []
         self.mensagens_criadas: list[dict] = []
+        self.observadores_adicionados: list[tuple] = []
+        self.observadores_removidos: list[tuple] = []
+        self._observadores_por_chamado: dict[str, list[dict]] = {}
 
     async def perfil(self, claims):
         return {"id": UID, "nome": "Cliente Teste", "role": "CLIENTE", "empresa_id": EMPRESA}
@@ -109,6 +112,18 @@ class FakeRepo:
             {"chamado_id": chamado_id, "conteudo": conteudo, "anexos": anexos or []}
         )
         return {"id": "m1", "created_at": datetime.now(timezone.utc)}
+
+    async def usuarios_para_copia(self, claims, *, excluir_id=None):
+        return [{"id": "u9", "nome": "Zeca Financeiro", "departamento": "Financeiro"}]
+
+    async def observadores(self, claims, chamado_id):
+        return self._observadores_por_chamado.get(chamado_id, [])
+
+    async def adicionar_observador(self, claims, chamado_id, perfil_id):
+        self.observadores_adicionados.append((chamado_id, perfil_id))
+
+    async def remover_observador(self, claims, chamado_id, perfil_id):
+        self.observadores_removidos.append((chamado_id, perfil_id))
 
 
 def _chamado(status="RESOLVIDO", cliente_id=UID, **extra):
@@ -210,6 +225,30 @@ def _abertura_valida(**over):
     }
     base.update(over)
     return base
+
+
+def test_form_novo_chamado_tem_seletor_de_em_copia():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/novo")
+    assert resp.status_code == 200
+    assert 'name="observadores"' in resp.text
+    assert "Zeca Financeiro" in resp.text
+
+
+def test_criar_chamado_com_observadores_adiciona_em_copia():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data={**_abertura_valida(), "observadores": ["u9", "u10"]},
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert len(repo.criados) == 1
+    assert set(repo.observadores_adicionados) == {("novo-id", "u9"), ("novo-id", "u10")}
 
 
 def test_criar_com_todos_campos_redireciona_e_repassa_destino():
@@ -443,3 +482,54 @@ def test_post_avaliacao_nao_autor_e_bloqueada():
         )
     assert resp.status_code == 403
     assert repo.avaliacoes == []
+
+
+# --------------------------------------------------------------------------
+# Fase 8 (2026-07-09): "em cópia" (observadores multi-setoriais)
+# --------------------------------------------------------------------------
+def test_detalhe_mostra_observadores_e_seletor_para_adicionar():
+    repo = FakeRepo(chamado=_chamado())
+    repo._observadores_por_chamado["aaa"] = [
+        {"perfil_id": "u5", "nome": "Ana Comercial", "departamento": "Comercial"}
+    ]
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa")
+    assert resp.status_code == 200
+    assert "Em cópia" in resp.text
+    assert "Ana Comercial" in resp.text
+    assert 'action="/portal/chamados/aaa/observadores/u5/remover"' in resp.text
+    assert 'action="/portal/chamados/aaa/observadores"' in resp.text
+
+
+def test_detalhe_sem_observadores_mostra_mensagem_vazia():
+    repo = FakeRepo(chamado=_chamado())
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa")
+    assert "Ninguém em cópia" in resp.text
+
+
+def test_adicionar_observador():
+    repo = FakeRepo(chamado=_chamado())
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/observadores",
+            data={"perfil_id": "u9"},
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert repo.observadores_adicionados == [("aaa", "u9")]
+
+
+def test_remover_observador():
+    repo = FakeRepo(chamado=_chamado())
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/observadores/u9/remover",
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert repo.observadores_removidos == [("aaa", "u9")]

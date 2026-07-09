@@ -11,7 +11,7 @@ import logging
 
 from fastapi import Request, UploadFile
 
-from app.auth.session import ACCESS_COOKIE
+from app.auth.session import current_access_token
 from app.security.uploads import UploadInvalido, validar_anexo
 from app.storage import AnexosStorage, StorageError, ensure_storage
 
@@ -22,8 +22,8 @@ MAX_ANEXOS = 5
 
 
 def access_token(request: Request) -> str | None:
-    """JWT do usuário (cookie de sessão) — necessário para o Storage sob RLS."""
-    return request.cookies.get(ACCESS_COOKIE)
+    """JWT do usuário — necessário para o Storage sob RLS (ver ``current_access_token``)."""
+    return current_access_token(request)
 
 
 async def assinar_anexos(request: Request, mensagens: list[dict]) -> None:

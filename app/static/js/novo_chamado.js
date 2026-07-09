@@ -39,4 +39,25 @@
 
   if (depSelect) depSelect.addEventListener("change", aplicar);
   aplicar(); // estado inicial (ex.: re-render de erro com Marketing já selecionado)
+
+  // Categoria "Outros": ao trocar a categoria, o HTMX recarrega as <option>s de
+  // subcategoria (fetch em /portal/chamados/subcategorias). Quando a categoria
+  // escolhida é "Outros", o catálogo (migration 0030) garante que ela só tem UMA
+  // subcategoria, também "Outros" — em vez de deixar o usuário selecionar essa
+  // única opção manualmente, pré-seleciona ela assim que o swap termina.
+  document.body.addEventListener("htmx:afterSwap", function (evt) {
+    var alvo = evt.detail && evt.detail.target;
+    if (!alvo || alvo.id !== "subcategoria-select") return;
+    var catSelect = document.getElementById("categoria-select");
+    if (!catSelect) return;
+    var catOpt = catSelect.options[catSelect.selectedIndex];
+    var catNome = catOpt ? (catOpt.textContent || "").trim() : "";
+    if (catNome !== "Outros") return;
+    for (var i = 0; i < alvo.options.length; i++) {
+      if ((alvo.options[i].textContent || "").trim() === "Outros") {
+        alvo.value = alvo.options[i].value;
+        break;
+      }
+    }
+  });
 })();

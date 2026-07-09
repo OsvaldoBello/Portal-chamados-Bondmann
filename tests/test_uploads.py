@@ -18,6 +18,7 @@ PDF = b"%PDF-1.4\n%fake pdf bytes"
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 JPG = b"\xff\xd8\xff\xe0" + b"0" * 32
 ZIP = b"PK\x03\x04" + b"0" * 32
+MP4 = b"\x00\x00\x00\x18ftypmp42" + b"0" * 32
 
 
 def _magic(mime: str):
@@ -86,4 +87,11 @@ def test_sniff_signature_fallback():
     assert sniff_signature(PNG) == "image/png"
     assert sniff_signature(JPG) == "image/jpeg"
     assert sniff_signature(ZIP) == "application/zip"
+    assert sniff_signature(MP4) == "video/mp4"
     assert sniff_signature(b"xyz") == "application/octet-stream"
+
+
+def test_mp4_valido_via_sniffer():
+    a = validar_anexo("video.mp4", MP4, magic_impl=sniff_signature)
+    assert a.ext == "mp4"
+    assert a.mime == "video/mp4"

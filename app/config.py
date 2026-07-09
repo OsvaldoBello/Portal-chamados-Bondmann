@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # TTL da signed URL: 1 hora (C2). Regenerada a cada renderização; nunca cacheada.
     signed_url_ttl: int = Field(default=3600)
 
+    # --- Storage de avatares (Fase 7 — 2026-07-09) ---
+    # `[DECISÃO DE ENGENHARIA]` bucket PÚBLICO (diferente dos anexos): avatar não
+    # é dado sensível e é renderizado em muitas células de card ao mesmo tempo
+    # (fila/kanban) — URL direta e estável, sem custo de assinatura por render.
+    avatares_bucket: str = Field(default="avatares")
+    avatar_max_bytes: int = Field(default=2 * 1024 * 1024)  # 2MB — só imagem
+
     # --- Segredos de aplicação ---
     session_secret: str = Field(default="dev-insecure-session-secret-change-me")
     csrf_secret: str = Field(default="dev-insecure-csrf-secret-change-me")

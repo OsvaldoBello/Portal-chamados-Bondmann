@@ -28,6 +28,7 @@ from app.ratelimit import limiter
 from app.routes.health import router as health_router
 from app.routes.admin import register_admin_routes
 from app.routes.common import register_common_routes
+from app.routes.perfil import register_perfil_routes
 from app.routes.portal import register_portal_routes
 from app.routes.workspace import register_workspace_routes
 from app.security.csrf import init_csrf
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     register_workspace_routes(app)
     register_admin_routes(app)
     register_common_routes(app)
+    register_perfil_routes(app)
 
     # Tratamento de erro centralizado (Seção 6.3): sem vazar stack/segredos.
     # Registra na base do Starlette para também capturar o 404 de rota inexistente

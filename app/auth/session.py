@@ -56,6 +56,21 @@ def clear_session(response: Response) -> None:
     response.delete_cookie(REFRESH_COOKIE, path="/")
 
 
+def current_access_token(request: Request) -> str | None:
+    """JWT válido para chamadas ao Supabase (Storage/Realtime) nesta requisição.
+
+    Quando ``get_current_user`` renova a sessão (access token expirado + refresh
+    válido, Seção 3.4), o token novo só chega ao cookie no ``Set-Cookie`` da
+    resposta (``SessionRefreshMiddleware``) — ``request.cookies`` ainda reflete o
+    token velho/expirado durante toda a requisição corrente. Preferir o token
+    recém-renovado (``request.state.refreshed_session``) evita mandar um JWT
+    expirado ao Storage (ex.: upload de avatar/anexo logo após o refresh)."""
+    refreshed: SessionTokens | None = getattr(request.state, "refreshed_session", None)
+    if refreshed is not None:
+        return refreshed.access_token
+    return request.cookies.get(ACCESS_COOKIE)
+
+
 class SessionRefreshMiddleware(BaseHTTPMiddleware):
     """Persiste nos cookies uma sessão renovada por dependency (Seção 3.4).
 

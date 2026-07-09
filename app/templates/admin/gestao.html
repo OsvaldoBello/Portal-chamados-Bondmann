@@ -175,4 +175,116 @@
     {% endfor %}
   </div>
 </section>
+
+{# Mídia Regional do Marketing (Fase 6 — 2026-07-09): CRUD por mês. Antes só
+   existiam os 5 meses seedados por migration (`0024`); qualquer mês novo
+   (passado ou futuro) entra por aqui, sem precisar de migration. #}
+<section class="bg-white rounded-xl shadow-card border border-line/60 p-5 mt-6">
+  <h3 class="font-display font-bold text-navy mb-1">Mídia Regional do Marketing</h3>
+  <p class="text-xs text-muted mb-4">
+    Dado bruto usado no gráfico "Mídia Regional" do dashboard de Marketing. Cadastre ou atualize um mês —
+    salvar de novo o mesmo mês sobrescreve os números.
+  </p>
+  <form method="post" action="/admin/marketing-midia" class="flex flex-wrap items-end gap-3 mb-5">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="flex flex-col gap-1">
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Mês</span>
+      <input type="month" name="mes" required
+             class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+    </label>
+    <label class="flex flex-col gap-1">
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Investimento (R$)</span>
+      <input type="number" name="investimento" step="0.01" min="0" value="0" required
+             class="w-32 px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+    </label>
+    <label class="flex flex-col gap-1">
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Regiões</span>
+      <input type="number" name="regioes" min="0" value="0" required
+             class="w-24 px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+    </label>
+    <label class="flex flex-col gap-1">
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Descontinuidades</span>
+      <input type="number" name="descontinuidades" min="0" value="0" required
+             class="w-24 px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+    </label>
+    <label class="flex flex-col gap-1">
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Aderências</span>
+      <input type="number" name="aderencias" min="0" value="0" required
+             class="w-24 px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+    </label>
+    <button type="submit" class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+      Salvar mês
+    </button>
+  </form>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm min-w-[560px]">
+      <thead class="text-left text-[11px] font-bold uppercase tracking-wider text-muted">
+        <tr>
+          <th class="py-1.5 pr-4">Mês</th><th class="py-1.5 pr-4">Investimento</th>
+          <th class="py-1.5 pr-4">Regiões</th><th class="py-1.5 pr-4">Descontinuidades</th>
+          <th class="py-1.5 pr-4">Aderências</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in midia_regional %}
+        <tr class="border-t border-line/60">
+          <td class="py-1.5 pr-4 font-medium text-navy">{{ m.mes.strftime('%m/%Y') }}</td>
+          <td class="py-1.5 pr-4">R$ {{ "%.2f"|format(m.investimento) }}</td>
+          <td class="py-1.5 pr-4">{{ m.regioes }}</td>
+          <td class="py-1.5 pr-4">{{ m.descontinuidades }}</td>
+          <td class="py-1.5 pr-4">{{ m.aderencias }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="py-4 text-center text-muted">Nenhum mês cadastrado ainda.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{# Prioridade dinâmica do Marketing (Fase 4): recálculo diário automático via
+   pg_cron (se habilitado no projeto); este botão roda sob demanda / serve de
+   alvo para um scheduler externo quando pg_cron não está disponível. #}
+<section class="bg-white rounded-xl shadow-card border border-line/60 p-5 mt-6">
+  <h3 class="font-display font-bold text-navy mb-1">Prioridade dinâmica do Marketing</h3>
+  <p class="text-xs text-muted mb-4">
+    Chamados do Marketing com <strong>data de entrega</strong> têm a prioridade recalculada pelos dias
+    restantes: <strong>&gt;7d Baixa</strong> · <strong>4–7d Média</strong> · <strong>2–3d Alta</strong> ·
+    <strong>&le;1d (ou vencido) Urgente</strong>. Roda todo dia automaticamente; use o botão para forçar agora.
+  </p>
+  {% if prioridade_ok %}
+  <p class="mb-3 rounded-lg bg-brandgreen-600/10 px-3.5 py-2.5 text-sm text-brandgreen-700">
+    {{ prioridade_ok }} chamado(s) do Marketing tiveram a prioridade atualizada.
+  </p>
+  {% endif %}
+  <form method="post" action="/admin/jobs/recalcular-prioridade-marketing">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+      Recalcular agora
+    </button>
+  </form>
+</section>
+
+{# Feriados nacionais (Fase 5): sincroniza a partir da biblioteca `holidays`,
+   sem precisar editar a tabela `feriados` à mão a cada virada de ano. Nunca
+   apaga/sobrescreve um feriado local já cadastrado manualmente. #}
+<section class="bg-white rounded-xl shadow-card border border-line/60 p-5 mt-6">
+  <h3 class="font-display font-bold text-navy mb-1">Feriados</h3>
+  <p class="text-xs text-muted mb-4">
+    O prazo de SLA em horário comercial pula fins de semana e feriados (tabela <code>feriados</code>).
+    Sincronize com o calendário nacional (ano atual + 3 seguintes) em vez de cadastrar data por data —
+    feriados locais/pontos facultativos já cadastrados manualmente não são alterados.
+  </p>
+  {% if feriados_ok %}
+  <p class="mb-3 rounded-lg bg-brandgreen-600/10 px-3.5 py-2.5 text-sm text-brandgreen-700">
+    {{ feriados_ok }} feriado(s) novo(s) adicionado(s).
+  </p>
+  {% endif %}
+  <form method="post" action="/admin/jobs/sincronizar-feriados">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+      Sincronizar feriados
+    </button>
+  </form>
+</section>
 {% endblock %}

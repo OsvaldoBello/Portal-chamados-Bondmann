@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from fastapi.testclient import TestClient
 
@@ -86,6 +86,22 @@ class FakeAdmin:
     async def atualizar_plano(self, claims, plano_id, *, campos):
         self.acoes.append(("plano", plano_id, campos))
 
+    async def recalcular_prioridade_marketing(self, claims):
+        self.acoes.append(("recalcular_prioridade_marketing",))
+        return 3
+
+    async def sincronizar_feriados(self, claims, feriados):
+        self.acoes.append(("sincronizar_feriados", len(feriados)))
+        return 7
+
+    async def marketing_midia_regional(self, claims):
+        return [{"id": "mr1", "mes": date(2026, 1, 1), "investimento": 1000.0,
+                 "regioes": 10, "descontinuidades": 1, "aderencias": 1}]
+
+    async def upsert_marketing_midia_regional(self, claims, *, mes, investimento,
+                                                regioes, descontinuidades, aderencias):
+        self.acoes.append(("midia", mes, investimento, regioes, descontinuidades, aderencias))
+
     async def usuarios(self, claims):
         return [{"id": "u1", "nome": "Rita Nunes", "role": "OPERADOR", "ativo": True,
                  "departamento": "RH", "departamento_id": "d1"}]
@@ -154,8 +170,10 @@ class FakeAdmin:
         }
 
     async def exportar(self, claims):
-        return [{"codigo": "BOND-2026-00001", "titulo": "Impressora", "status": "RESOLVIDO",
-                 "prioridade": "ALTA", "departamento": "TI", "categoria": "Suporte",
+        return [{"codigo": "BOND-2026-00001", "titulo": "Impressora",
+                 "descricao": "A impressora do 2º andar não liga; luz vermelha piscando.",
+                 "status": "RESOLVIDO", "prioridade": "ALTA", "departamento": "TI",
+                 "categoria": "Suporte", "subcategoria": "Hardware",
                  "solicitante": "Ana", "operador": "Op TI",
                  "created_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
                  "limite_resolucao": None, "respondido_em": None, "resolvido_em": None,
@@ -216,23 +234,34 @@ def test_dashboard_mostra_kpis_e_dados_grafico():
     assert "/static/vendor/chart.umd.js" in r.text
 
 
-def test_ti_dashboard_tem_seletor_de_departamento():
-    # INDICADORES do TI: vê todos os setores, com seletor para focar um (o Workspace
-    # é que fica escopado ao setor TI — migration 0020). Restaurado a pedido.
+def test_ti_dashboard_nao_tem_seletor_e_mostra_so_o_proprio_setor():
+    # Decisão de produto 2026-07-09: TI deixou de ver "Todos os setores"/outros
+    # departamentos nos indicadores — é escopado ao próprio setor (TI), igual a
+    # qualquer Admin de departamento.
     with admin_client(FakeAdmin()) as c:
         r = c.get("/admin")
     assert r.status_code == 200
-    assert 'name="departamento"' in r.text
-    assert "Todos os setores" in r.text
-    assert 'value="d1"' in r.text
+    assert 'name="departamento"' not in r.text
+    assert "Todos os setores" not in r.text
+    assert "Indicadores de: <strong>TI</strong>" in r.text
 
 
-def test_ti_dashboard_filtra_por_departamento():
+def test_ti_dashboard_ignora_tentativa_de_filtrar_outro_departamento():
+    # Mesmo que alguém force a querystring antiga, não há mais seletor/filtro:
+    # o TI só vê o próprio setor.
     with admin_client(FakeAdmin()) as c:
-        r = c.get("/admin?departamento=d1")
+        r = c.get("/admin?departamento=d2")
     assert r.status_code == 200
-    # O setor escolhido fica selecionado no dropdown do topo.
-    assert 'value="d1" selected' in r.text
+    assert "Indicadores de: <strong>TI</strong>" in r.text
+
+
+def test_funcionario_do_ti_sem_papel_de_staff_recebe_403():
+    # perfil.is_ti é só "departamento = TI" (não olha papel) — um CLIENTE
+    # (funcionário comum) do setor TI não deve entrar no painel admin só por
+    # pertencer ao departamento.
+    perfil = FakePerfilRepo(is_ti=True, role="CLIENTE", departamento="TI")
+    with admin_client(FakeAdmin(), user=_user(role="CLIENTE"), perfil=perfil) as c:
+        assert c.get("/admin").status_code == 403
 
 
 def test_admin_de_setor_nao_tem_seletor():
@@ -242,6 +271,117 @@ def test_admin_de_setor_nao_tem_seletor():
         r = c.get("/admin")
     assert r.status_code == 200
     assert 'name="departamento"' not in r.text
+
+
+def test_recalcular_prioridade_marketing_so_ti():
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/jobs/recalcular-prioridade-marketing",
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/gestao?prioridade_ok=3"
+    assert ("recalcular_prioridade_marketing",) in repo.acoes
+
+
+def test_recalcular_prioridade_marketing_restrito_ao_ti():
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        t = _csrf(c)
+        r = c.post("/admin/jobs/recalcular-prioridade-marketing", headers={"X-CSRF-Token": t})
+    assert r.status_code == 403
+
+
+def test_gestao_mostra_botao_de_recalcular_prioridade():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin/gestao?prioridade_ok=5")
+    assert r.status_code == 200
+    assert 'action="/admin/jobs/recalcular-prioridade-marketing"' in r.text
+    assert "5 chamado(s)" in r.text
+
+
+def test_sincronizar_feriados_so_ti():
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/jobs/sincronizar-feriados",
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/admin/gestao?feriados_ok=7"
+    assert any(a[0] == "sincronizar_feriados" and a[1] > 0 for a in repo.acoes)
+
+
+def test_sincronizar_feriados_restrito_ao_ti():
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        t = _csrf(c)
+        r = c.post("/admin/jobs/sincronizar-feriados", headers={"X-CSRF-Token": t})
+    assert r.status_code == 403
+
+
+def test_gestao_mostra_botao_de_sincronizar_feriados():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin/gestao?feriados_ok=10")
+    assert r.status_code == 200
+    assert 'action="/admin/jobs/sincronizar-feriados"' in r.text
+    assert "10 feriado(s)" in r.text
+
+
+def test_dashboard_marketing_renderiza_mkt_data():
+    # Admin do Marketing (ou TI cujo próprio setor é Marketing) cai no template
+    # dedicado (dashboard_marketing.html), que serializa mkt_dashboard_data() —
+    # cobre o caminho de views/CRUD reescrito na Fase 6.
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Marketing")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert 'id="mkt-data"' in r.text
+    assert "JAN/26" in r.text
+
+
+def test_gestao_mostra_crud_de_midia_regional():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin/gestao")
+    assert r.status_code == 200
+    assert 'action="/admin/marketing-midia"' in r.text
+    assert 'name="mes"' in r.text
+    assert "01/2026" in r.text  # linha existente formatada mm/yyyy
+
+
+def test_salvar_marketing_midia_cria_mes_novo():
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/marketing-midia",
+                   data={"mes": "2026-06", "investimento": "1234.50", "regioes": "12",
+                         "descontinuidades": "2", "aderencias": "3"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    acao = next(a for a in repo.acoes if a[0] == "midia")
+    assert acao[1] == date(2026, 6, 1)
+    assert acao[2] == 1234.5
+    assert acao[3] == 12 and acao[4] == 2 and acao[5] == 3
+
+
+def test_salvar_marketing_midia_restrito_ao_ti():
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        t = _csrf(c)
+        r = c.post("/admin/marketing-midia",
+                   data={"mes": "2026-06", "investimento": "1", "regioes": "1",
+                         "descontinuidades": "0", "aderencias": "0"},
+                   headers={"X-CSRF-Token": t})
+    assert r.status_code == 403
+
+
+def test_salvar_marketing_midia_mes_invalido_nao_quebra():
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/marketing-midia", data={"mes": "lixo"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert not any(a[0] == "midia" for a in repo.acoes)
 
 
 def test_gestao_lista_catalogos():
@@ -506,7 +646,9 @@ def test_export_csv():
     # BOM UTF-8 (Excel pt-BR lê acentos sem virar mojibake) + ";" como
     # delimitador (padrão de planilha usado pela empresa — ver plano mestre).
     assert r.text.startswith("﻿")
-    assert "Chamado;Título;Status" in r.text
+    assert "Chamado;Título;Descrição;Status" in r.text
     assert "Comentário da avaliação" in r.text        # feedback no relatório do TI
     assert "Resolveu rápido, obrigado" in r.text
     assert "BOND-2026-00001" in r.text
+    assert "A impressora do 2º andar não liga" in r.text   # descrição do chamado
+    assert "Hardware" in r.text                             # subcategoria

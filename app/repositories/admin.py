@@ -324,193 +324,197 @@ class AdminRepo:
                 departamento_id,
             )
 
-    async def mkt_dashboard_data(self, claims: dict) -> dict[str, Any]:
-        """Calcula de forma agregada a série histórica e estatísticas para o
-        Dashboard de Marketing dinâmico."""
-        from collections import defaultdict
-        import datetime
-
+    async def atualizar_avatar(self, claims: dict, user_id: str, *, avatar_path: str) -> None:
+        """Grava o ``avatar_path`` de OUTRO usuário — só o TI pode (o trigger
+        ``enforce_perfil_self_so_avatar``, migration 0033, libera qualquer coluna
+        para quem é TI; para os demais, só a própria linha). Usado na criação de
+        conta pela tela de admin (Fase 7), quando o TI já envia a foto junto."""
         async with rls_connection(claims) as conn:
-            # 1. Fetch all marketing tickets
-            tickets_rows = await conn.fetch(
+            await conn.execute(
+                "UPDATE perfis SET avatar_path = $2 WHERE id = $1::uuid",
+                user_id,
+                avatar_path,
+            )
+
+    _MESES_MAP = {1: "JAN", 2: "FEV", 3: "MAR", 4: "ABR", 5: "MAI", 6: "JUN",
+                  7: "JUL", 8: "AGO", 9: "SET", 10: "OUT", 11: "NOV", 12: "DEZ"}
+
+    @classmethod
+    def _mes_label(cls, d) -> str:
+        """"JAN/26" a partir de um `date`/`datetime` (dia 1 do mês)."""
+        return f"{cls._MESES_MAP[d.month]}/{d.year % 100:02d}"
+
+    async def mkt_dashboard_data(self, claims: dict) -> dict[str, Any]:
+        """Série histórica e estatísticas do Dashboard de Marketing — 🔁 Fase 6
+        (2026-07-09): o banco guarda só o dado bruto (`chamados`,
+        `marketing_midia_regional`); as agregações mensais vêm de VIEWS
+        (`vw_marketing_volume_mensal`/`vw_marketing_setor_mensal`,
+        `supabase/migrations/0032_marketing_dinamico_views.sql`) em vez de puxar
+        TODOS os chamados do Marketing já abertos para agregar em Python — só a
+        lista de atrasos (que precisa de título/causa por chamado) é buscada
+        linha a linha, e só as linhas realmente atrasadas."""
+        async with rls_connection(claims) as conn:
+            volume_rows = await conn.fetch(
+                """SELECT mes, total, concluidas, abertas, em_andamento, volume,
+                          mkt_orig, sol_orig, atrasos, tempo_medio
+                     FROM vw_marketing_volume_mensal ORDER BY mes"""
+            )
+            setor_rows = await conn.fetch(
+                "SELECT mes, setor, total FROM vw_marketing_setor_mensal ORDER BY mes"
+            )
+            atraso_rows = await conn.fetch(
                 """
-                SELECT c.id, c.codigo, c.titulo, c.status, c.created_at, c.resolvido_em,
-                       c.volume, c.origem_demanda, c.causa_atraso, c.setor
+                SELECT c.titulo,
+                       date_trunc('month', c.created_at AT TIME ZONE 'America/Sao_Paulo')::date AS mes,
+                       EXTRACT(EPOCH FROM (COALESCE(c.resolvido_em, now()) - c.created_at)) / 86400.0 AS dias,
+                       c.causa_atraso
                   FROM chamados c
-                  JOIN departamentos dep ON dep.id = c.departamento_id
-                 WHERE dep.nome = 'Marketing'
+                  JOIN departamentos d ON d.id = c.departamento_id
+                 WHERE d.nome = 'Marketing'
+                   AND (COALESCE(c.resolvido_em, now()) - c.created_at) > interval '5 days'
                  ORDER BY c.created_at ASC
                 """
             )
-            # 2. Fetch all regional media records
             midia_rows = await conn.fetch(
-                """
-                SELECT mes, investimento, regioes, descontinuidades, aderencias
-                  FROM marketing_midia_regional
-                 ORDER BY created_at ASC
-                """
+                """SELECT mes, investimento, regioes, descontinuidades, aderencias
+                     FROM marketing_midia_regional ORDER BY mes ASC"""
             )
 
-        tickets = [dict(r) for r in tickets_rows]
+        volume_por_mes = {r["mes"]: dict(r) for r in volume_rows}
         midia_list = [dict(r) for r in midia_rows]
 
-        MESES_MAP = {1: "JAN", 2: "FEV", 3: "MAR", 4: "ABR", 5: "MAI", 6: "JUN", 7: "JUL", 8: "AGO", 9: "SET", 10: "OUT", 11: "NOV", 12: "DEZ"}
-        
-        def get_mes_label(dt):
-            if not dt:
-                return ""
-            return f"{MESES_MAP[dt.month]}/{dt.year % 100:02d}"
-
-        # Initialize monthly structures
-        monthly_data = {}
-        dept_by_month = defaultdict(dict)
-        atrasos_data = []
-
-        all_months = []
-        for m in midia_list:
-            if m["mes"] not in all_months:
-                all_months.append(m["mes"])
-
-        for t in tickets:
-            mes = get_mes_label(t["created_at"])
-            if mes and mes not in all_months:
-                all_months.append(mes)
-
-        for mes in all_months:
-            monthly_data[mes] = {
-                "label": mes,
-                "total": 0,
-                "concluidas": 0,
-                "em_andamento": 0,
-                "abertas": 0,
-                "volume": 0,
-                "mkt_orig": 0,
-                "sol_orig": 0,
-                "tempo_soma": 0.0,
-                "tempo_qtd": 0,
-                "tempo_medio": 0.0,
-                "atrasos": 0,
-                "pct_conc": 0.0,
-                "pct_mkt": 0.0
-            }
-
-        for t in tickets:
-            mes = get_mes_label(t["created_at"])
-            if not mes:
-                continue
-
-            md = monthly_data[mes]
-            md["total"] += 1
-
-            status_upper = (t["status"] or "").upper()
-            if status_upper == "RESOLVIDO":
-                md["concluidas"] += 1
-            elif status_upper == "NOVO":
-                md["abertas"] += 1
-            else: # A_FAZER, EM_ATENDIMENTO, AGUARDANDO
-                md["em_andamento"] += 1
-
-            vol = t["volume"] if t["volume"] is not None else 1
-            md["volume"] += vol
-
-            orig = (t["origem_demanda"] or "").strip().lower()
-            if orig == "marketing":
-                md["mkt_orig"] += 1
-            else:
-                md["sol_orig"] += 1
-
-            created = t["created_at"]
-            resolved = t["resolvido_em"]
-            
-            if resolved:
-                duration_days = (resolved - created).total_seconds() / 86400.0
-            else:
-                duration_days = (datetime.datetime.now(datetime.timezone.utc) - created).total_seconds() / 86400.0
-
-            duration_days = round(max(0.0, duration_days), 1)
-
-            if resolved:
-                md["tempo_soma"] += duration_days
-                md["tempo_qtd"] += 1
-
-            if duration_days > 5.0:
-                md["atrasos"] += 1
-                atrasos_data.append({
-                    "nome": t["titulo"] or "Sem assunto",
-                    "mes": mes,
-                    "dias": int(duration_days),
-                    "causa": t["causa_atraso"] or "Sem causa registrada"
-                })
-
-            sec = t["setor"] or "Outros"
-            dept_by_month[mes][sec] = dept_by_month[mes].get(sec, 0) + 1
+        # Todo mês com chamado OU com registro de mídia regional entra na série
+        # (mesmo sem chamado nenhum — mês futuro cadastrado com antecedência, etc.).
+        todos_meses = sorted(set(volume_por_mes) | {m["mes"] for m in midia_list})
 
         monthly_list = []
-        def month_sort_key(m_label):
-            try:
-                m_str, y_str = m_label.split("/")
-                m_num = list(MESES_MAP.values()).index(m_str) + 1
-                y_num = int(y_str)
-                return (y_num, m_num)
-            except Exception:
-                return (99, 99)
+        dept_by_month: dict[str, dict[str, int]] = {}
+        for mes in todos_meses:
+            label = self._mes_label(mes)
+            v = volume_por_mes.get(mes)
+            total = v["total"] if v else 0
+            concluidas = v["concluidas"] if v else 0
+            mkt_orig = v["mkt_orig"] if v else 0
+            monthly_list.append({
+                "label": label,
+                "total": total,
+                "concluidas": concluidas,
+                "em_andamento": v["em_andamento"] if v else 0,
+                "abertas": v["abertas"] if v else 0,
+                "volume": v["volume"] if v else 0,
+                "mkt_orig": mkt_orig,
+                "sol_orig": v["sol_orig"] if v else 0,
+                "tempo_medio": float(v["tempo_medio"]) if v and v["tempo_medio"] is not None else 0.0,
+                "atrasos": v["atrasos"] if v else 0,
+                "pct_conc": round(100.0 * concluidas / total, 1) if total else 0.0,
+                "pct_mkt": round(100.0 * mkt_orig / total, 1) if total else 0.0,
+            })
+            dept_by_month[label] = {
+                r["setor"]: r["total"] for r in setor_rows if r["mes"] == mes
+            }
 
-        all_months_sorted = sorted(all_months, key=month_sort_key)
-
-        for mes in all_months_sorted:
-            md = monthly_data[mes]
-            tot = md["total"]
-            conc = md["concluidas"]
-            
-            if tot > 0:
-                md["pct_conc"] = round((conc / tot) * 100, 1)
-                md["pct_mkt"] = round((md["mkt_orig"] / tot) * 100, 1)
-            
-            if md["tempo_qtd"] > 0:
-                md["tempo_medio"] = round(md["tempo_soma"] / md["tempo_qtd"], 1)
-            else:
-                md["tempo_medio"] = 0.0
-
-            monthly_list.append(md)
+        atrasos_data = [
+            {
+                "nome": r["titulo"] or "Sem assunto",
+                "mes": self._mes_label(r["mes"]),
+                "dias": int(round(max(0.0, r["dias"]))),
+                "causa": r["causa_atraso"] or "Sem causa registrada",
+            }
+            for r in atraso_rows
+        ]
 
         midia_final = {
-            "meses": [],
-            "investimento": [],
-            "regioes": [],
-            "descontinuidades": [],
-            "aderencias": []
+            "meses": [self._MESES_MAP[m["mes"].month].capitalize() for m in midia_list],
+            "investimento": [float(m["investimento"]) for m in midia_list],
+            "regioes": [int(m["regioes"]) for m in midia_list],
+            "descontinuidades": [int(m["descontinuidades"]) for m in midia_list],
+            "aderencias": [int(m["aderencias"]) for m in midia_list],
         }
-        for m in midia_list:
-            try:
-                m_part = m["mes"].split("/")[0].capitalize()
-            except Exception:
-                m_part = m["mes"]
-            midia_final["meses"].append(m_part)
-            midia_final["investimento"].append(float(m["investimento"]))
-            midia_final["regioes"].append(int(m["regioes"]))
-            midia_final["descontinuidades"].append(int(m["descontinuidades"]))
-            midia_final["aderencias"].append(int(m["aderencias"]))
 
         return {
             "monthly": monthly_list,
-            "deptByMonth": dict(dept_by_month),
+            "deptByMonth": dept_by_month,
             "atrasosData": atrasos_data,
-            "midia": midia_final
+            "midia": midia_final,
         }
+
+    # ---- Mídia Regional do Marketing (CRUD — Fase 6) ---------------------
+    async def marketing_midia_regional(self, claims: dict) -> list[dict[str, Any]]:
+        """Lista os registros de mídia regional (para o CRUD em `/admin/gestao`)."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """SELECT id, mes, investimento, regioes, descontinuidades, aderencias
+                     FROM marketing_midia_regional ORDER BY mes DESC"""
+            )
+            return [dict(r) for r in rows]
+
+    async def upsert_marketing_midia_regional(
+        self, claims: dict, *, mes, investimento: float, regioes: int,
+        descontinuidades: int, aderencias: int,
+    ) -> None:
+        """Cria ou atualiza o registro de um mês (`mes` = 1º dia do mês, `date`).
+        Sem seed hardcoded: qualquer mês novo entra por aqui, não por migration —
+        é o que tira o "engessamento" da tabela (Fase 6)."""
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                """
+                INSERT INTO marketing_midia_regional (mes, investimento, regioes, descontinuidades, aderencias)
+                VALUES ($1::date, $2, $3, $4, $5)
+                ON CONFLICT (mes) DO UPDATE
+                   SET investimento = EXCLUDED.investimento,
+                       regioes = EXCLUDED.regioes,
+                       descontinuidades = EXCLUDED.descontinuidades,
+                       aderencias = EXCLUDED.aderencias
+                """,
+                mes, investimento, regioes, descontinuidades, aderencias,
+            )
+
+    # ---- Feriados dinâmicos via biblioteca `holidays` (Fase 5) -----------
+    async def sincronizar_feriados(self, claims: dict, feriados: list[tuple]) -> int:
+        """Upsert dos feriados nacionais (`app/domain/feriados.py`). Nunca
+        sobrescreve o que já existe (`ON CONFLICT DO NOTHING`) — preserva
+        feriados locais/pontos facultativos cadastrados manualmente. Devolve
+        quantos foram efetivamente inseridos (novos)."""
+        if not feriados:
+            return 0
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                INSERT INTO feriados (data, descricao)
+                SELECT * FROM unnest($1::date[], $2::text[])
+                ON CONFLICT (data) DO NOTHING
+                RETURNING data
+                """,
+                [d for d, _ in feriados],
+                [n for _, n in feriados],
+            )
+            return len(rows)
+
+    # ---- Prioridade dinâmica do Marketing (Fase 4) -----------------------
+    async def recalcular_prioridade_marketing(self, claims: dict) -> int:
+        """Roda sob demanda o recálculo de prioridade do Marketing (função SQL
+        `recalcular_prioridade_marketing`, migration 0031). O caminho automático
+        diário é o `pg_cron`, quando disponível no projeto — esta chamada existe
+        para o botão manual do TI e para um scheduler externo de fallback.
+        `admin_connection` porque a função atualiza chamados de QUALQUER autor do
+        Marketing, fora do escopo de RLS de um único usuário."""
+        async with admin_connection() as conn:
+            return await conn.fetchval("SELECT recalcular_prioridade_marketing()")
 
     # ---- Export CSV -----------------------------------------------------
     async def exportar(self, claims: dict) -> list[dict[str, Any]]:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
-                SELECT c.codigo, c.titulo, c.status, c.prioridade,
-                       dep.nome AS departamento, cat.nome AS categoria,
+                SELECT c.codigo, c.titulo, c.descricao, c.status, c.prioridade,
+                       dep.nome AS departamento, cat.nome AS categoria, sub.nome AS subcategoria,
                        autor.nome AS solicitante, op.nome AS operador,
                        c.created_at, c.limite_resolucao, c.respondido_em, c.resolvido_em,
                        c.avaliacao_nota, c.avaliacao_em, c.avaliacao_comentario
                   FROM chamados c
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
+                  LEFT JOIN subcategorias sub ON sub.id = c.subcategoria_id
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                   LEFT JOIN perfis op ON op.id = c.operador_id
                  ORDER BY c.created_at DESC

@@ -16,9 +16,13 @@ dependencies = [
   "slowapi==0.1.9",
   "python-multipart==0.0.20",
   "python-magic==0.4.27",
+  "python-magic-bin==0.4.14 ; sys_platform == 'win32'",
   "itsdangerous==2.2.0",
   "httpx==0.27.2",
   "pyjwt[crypto]==2.10.1",
+  "tzdata==2024.2",
+  "holidays==0.100",
+  "Pillow==12.3.0",
 ]
 
 # Deploy na Vercel (framework FastAPI): expõe a app ASGI `app.main:app`.

@@ -10,6 +10,11 @@ asyncpg==0.30.0
 slowapi==0.1.9
 python-multipart==0.0.20
 python-magic==0.4.27
+# libmagic real vem do apt (Dockerfile) em prod (Linux); no Windows local não há
+# libmagic no sistema e o python-magic puro pode carregar uma DLL incompatível
+# via ctypes e derrubar o processo inteiro (access violation, não uma exceção
+# Python catável). python-magic-bin empacota a DLL certa — só para dev Windows.
+python-magic-bin==0.4.14 ; sys_platform == "win32"
 itsdangerous==2.2.0
 httpx==0.27.2
 # Verificação de JWT local (JWKS RS256/ES256 + fallback HS256) — Seção 3.6.
@@ -21,3 +26,9 @@ pyjwt[crypto]==2.10.1
 # no Windows/imagens slim, onde o SO não traz o tz database — sem isto o import
 # de app.templating quebra (ZoneInfoNotFoundError) e o servidor não sobe.
 tzdata==2024.2
+# Feriados nacionais calculados (Fase 5, 2026-07-09) — substitui a tabela
+# `feriados` hardcoded/editada à mão a cada virada de ano (app/domain/feriados.py).
+holidays==0.100
+# Recorte automático da foto de perfil em quadrado (Fase 7 — app/avatar_storage.py):
+# qualquer proporção enviada vira um PNG quadrado centralizado antes do upload.
+Pillow==12.3.0

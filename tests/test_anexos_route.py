@@ -50,6 +50,12 @@ class FakeRepo:
     async def mensagens(self, claims, chamado_id):
         return list(self._msgs)
 
+    async def observadores(self, claims, chamado_id):
+        return []
+
+    async def usuarios_para_copia(self, claims, *, excluir_id=None):
+        return []
+
     async def adicionar_mensagem(self, claims, chamado_id, *, remetente_id, conteudo, anexos=None):
         self._msgs.append(
             {

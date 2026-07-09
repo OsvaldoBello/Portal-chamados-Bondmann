@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 
 from app.anexos import MAX_ANEXOS
 from app.auth.dependencies import CurrentUser, get_current_user
-from app.auth.session import ACCESS_COOKIE
+from app.auth.session import current_access_token
 from app.config import get_settings
 from app.repositories.chamados import ChamadosRepo, get_chamados_repo
 from app.security.uploads import UploadInvalido, validar_anexo
@@ -57,7 +57,7 @@ async def realtime_config(
     o cliente degrada para o sino por clique / polling. O token é o do próprio
     usuário (cookie httpOnly, lido no servidor); a RLS aplica na entrega."""
     settings = get_settings()
-    token = request.cookies.get(ACCESS_COOKIE)
+    token = current_access_token(request)
     if not (settings.supabase_url and settings.supabase_anon_key and token):
         return JSONResponse({})
     return JSONResponse(

@@ -45,7 +45,7 @@ from app.anexos import (
 )
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
-from app.templating import render
+from app.templating import portal_base_template, render
 
 log = logging.getLogger("app.portal")
 
@@ -120,7 +120,12 @@ async def dashboard(
     return render(
         request,
         "portal/dashboard.html",
-        {"perfil": ctx.perfil, "chamados": chamados, "stats": stats},
+        {
+            "perfil": ctx.perfil,
+            "chamados": chamados,
+            "stats": stats,
+            "base_template": portal_base_template(ctx.perfil),
+        },
     )
 
 
@@ -155,6 +160,7 @@ async def _render_form(
         (str(d["id"]) for d in departamentos if (d.get("nome") or "").strip().lower() == "marketing"),
         "",
     )
+    usuarios_copia = await repo.usuarios_para_copia(ctx.user.claims, excluir_id=ctx.user.id)
     return render(
         request,
         "portal/novo_chamado.html",
@@ -169,6 +175,8 @@ async def _render_form(
             "form": form,
             "erro": erro,
             "setores": [d["nome"] for d in setores_ativos],
+            "usuarios_copia": usuarios_copia,
+            "base_template": portal_base_template(ctx.perfil),
         },
         status_code=status_code,
     )
@@ -358,6 +366,11 @@ async def criar_chamado(
         origem_demanda=origem_demanda_val,
     )
 
+    # "Em cópia" (Fase 8): observadores escolhidos já na abertura — multi-setorial,
+    # qualquer pessoa da organização (não só do departamento de destino).
+    for observador_id in {v.strip() for v in form_data.getlist("observadores") if v.strip()}:
+        await repo.adicionar_observador(ctx.user.claims, str(novo["id"]), observador_id)
+
     # Anexos da abertura viram a primeira mensagem (pública) do autor.
     if validados:
         try:
@@ -392,6 +405,14 @@ async def detalhe_chamado(
     mensagens = await repo.mensagens(ctx.user.claims, chamado_id)
     await _assinar_anexos(request, mensagens)
     settings = get_settings()
+    # "Em cópia" (Fase 8): lista de observadores + seletor pra adicionar mais um
+    # (RLS já restringe: só quem enxerga o chamado consegue ver/editar a lista).
+    observadores = await repo.observadores(ctx.user.claims, chamado_id)
+    ja_observadores = {str(o["perfil_id"]) for o in observadores}
+    usuarios_copia = [
+        u for u in await repo.usuarios_para_copia(ctx.user.claims, excluir_id=ctx.user.id)
+        if str(u["id"]) not in ja_observadores
+    ]
     return render(
         request,
         "portal/chamado_detalhe.html",
@@ -400,11 +421,46 @@ async def detalhe_chamado(
             "chamado": chamado,
             "mensagens": mensagens,
             "pode_avaliar": pode_avaliar(chamado, ctx.user.id),
+            "observadores": observadores,
+            "usuarios_copia": usuarios_copia,
             # Config do Realtime no browser (Seção 6.1): anon key + JWT do usuário.
             "supabase_url": settings.supabase_url or None,
             "anon_key": settings.supabase_anon_key or None,
             "access_token": _access_token(request),
+            "base_template": portal_base_template(ctx.perfil),
         },
+    )
+
+
+@router.post("/chamados/{chamado_id}/observadores")
+async def adicionar_observador(
+    request: Request,
+    chamado_id: str,
+    perfil_id: str = Form(""),
+    ctx: PortalCtx = Depends(portal_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    perfil_id = perfil_id.strip()
+    if perfil_id:
+        await repo.adicionar_observador(ctx.user.claims, chamado_id, perfil_id)
+    return RedirectResponse(
+        f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@router.post("/chamados/{chamado_id}/observadores/{perfil_id}/remover")
+async def remover_observador(
+    request: Request,
+    chamado_id: str,
+    perfil_id: str,
+    ctx: PortalCtx = Depends(portal_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    await repo.remover_observador(ctx.user.claims, chamado_id, perfil_id)
+    return RedirectResponse(
+        f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER
     )
 
 

@@ -39,15 +39,8 @@
         </button>
       </div>
       <nav class="flex-1 p-3 space-y-1 text-sm overflow-y-auto">
-        {# Staff (Operador/Admin/TI) abre chamados pelo Portal, mas precisa voltar
-           ao Workspace de atendimento — sem este link ficaria preso aqui. #}
-        {% if perfil is defined and perfil and perfil.role in ('OPERADOR', 'ADMIN') %}
-        <a href="/workspace"
-           class="relative flex items-center gap-3 px-3.5 py-2.5 mb-1 rounded-lg font-semibold text-brandgreen bg-brandgreen/10 hover:bg-brandgreen/15 transition">
-          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/></svg>
-          <span>Voltar ao Workspace</span>
-        </a>
-        {% endif %}
+        {# Este shell é só do Funcionário (CLIENTE): staff (OPERADOR/ADMIN) usa o
+           shell do Workspace nestas mesmas páginas (`portal_base_template`). #}
         <a href="/portal"
            class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg font-medium transition
                   {% if active == 'dashboard' %}bg-white/10 text-white{% else %}text-white/70 hover:text-white hover:bg-white/5{% endif %}">
@@ -61,6 +54,14 @@
           {% if active == 'novo' %}<span class="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-brandgreen"></span>{% endif %}
           <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
           <span>Abrir chamado</span>
+        </a>
+        {# Foto de perfil (Fase 7) — acessível a qualquer usuário autenticado. #}
+        <a href="/perfil"
+           class="relative flex items-center gap-3 px-3.5 py-2.5 rounded-lg font-medium transition
+                  {% if active == 'perfil' %}bg-white/10 text-white{% else %}text-white/70 hover:text-white hover:bg-white/5{% endif %}">
+          {% if active == 'perfil' %}<span class="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r bg-brandgreen"></span>{% endif %}
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17.982 18.725A7.488 7.488 0 0012 15.75a7.488 7.488 0 00-5.982 2.975m11.963 0a9 9 0 10-11.963 0m11.963 0A8.966 8.966 0 0112 21a8.966 8.966 0 01-5.982-2.275M15 9.75a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          <span>Meu perfil</span>
         </a>
       </nav>
       <form method="post" action="/logout" class="p-3 border-t border-white/10">
@@ -91,7 +92,12 @@
               <span class="block text-sm font-semibold text-navy">{{ nome_usuario }}</span>
               <span class="block text-[11px] text-muted">Funcionário</span>
             </span>
+            {% set foto = avatar_url(perfil.avatar_path, perfil.avatar_atualizado_em) if perfil is defined and perfil else None %}
+            {% if foto %}
+            <img src="{{ foto }}" alt="" class="w-9 h-9 rounded-full object-cover bg-brandgreen-600">
+            {% else %}
             <span class="w-9 h-9 rounded-full grid place-items-center text-white text-sm font-bold bg-brandgreen-600">{{ nome_usuario[:1] | upper }}</span>
+            {% endif %}
           </button>
           <div data-menu="user" class="hidden absolute right-0 mt-2 w-52 bg-white rounded-xl shadow-card border border-line overflow-hidden z-30 py-1">
             <div class="px-4 py-2 border-b border-line mb-1">

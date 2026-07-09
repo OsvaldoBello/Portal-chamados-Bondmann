@@ -16,13 +16,20 @@ from app.config import Settings
 
 def build_csp(settings: Settings) -> str:
     connect = "'self'"
+    # Avatares vêm do bucket público do Storage via <img src> direto (Fase 7) —
+    # diferente dos anexos (link/signed URL, não embutidos como imagem), este é
+    # o 1º caso de carregar imagem de fora de 'self'; sem o host aqui o
+    # navegador bloqueia o <img> por CSP (broken image, sem erro visível pro
+    # usuário além do ícone quebrado).
+    img = "'self' data:"
     if settings.supabase_url:
         connect = f"'self' {settings.supabase_url} {settings.supabase_ws_url}"
+        img = f"'self' data: {settings.supabase_url}"
     directives = [
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self'",
-        "img-src 'self' data:",
+        f"img-src {img}",
         f"connect-src {connect}",
         "font-src 'self'",
         "frame-ancestors 'none'",

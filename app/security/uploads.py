@@ -15,6 +15,7 @@ A lógica é pura/injetável para permitir unit tests sem I/O de rede.
 from __future__ import annotations
 
 import re
+import threading
 import uuid
 from dataclasses import dataclass
 
@@ -83,10 +84,53 @@ def sanitizar_nome_exibicao(nome: str) -> str:
 def sniff_signature(head: bytes) -> str:
     """Sniffer mínimo por assinatura para os tipos da allow-list (fallback sem
     libmagic). Mantém os testes herméticos e cobre o caso de ausência do libmagic."""
+    # MP4 (ISO base media): box "ftyp" começa no byte 4, não no 0 — não cabe no
+    # loop de prefixo abaixo.
+    if head[4:8] == b"ftyp":
+        return "video/mp4"
     for assinatura, mime in _SIGNATURES:
         if head.startswith(assinatura):
             return mime
     return "application/octet-stream"
+
+
+_MAGIC_PROBE_TIMEOUT = 2.0  # segundos
+_magic_disponivel: bool | None = None
+_magic_probe_lock = threading.Lock()
+
+
+def _magic_disponivel_probe() -> bool:
+    """Verifica, uma única vez por processo, se ``import magic`` funciona.
+
+    Em alguns ambientes Windows o pacote ``python-magic-bin`` (usado só em dev,
+    ver ``requirements.txt``) carrega uma base de assinaturas incompatível e a
+    chamada ``mime_magic.load()`` do próprio import **trava indefinidamente**
+    (não levanta exceção — um ``try/except`` sozinho não protege contra isso).
+    Rodamos a 1ª tentativa numa thread daemon com timeout: se não voltar a
+    tempo, tratamos ``magic`` como indisponível pelo resto do processo e
+    caímos no :func:`sniff_signature` — sem travar o request nem tentar de
+    novo a cada upload."""
+    global _magic_disponivel
+    if _magic_disponivel is not None:
+        return _magic_disponivel
+    with _magic_probe_lock:
+        if _magic_disponivel is not None:
+            return _magic_disponivel
+        resultado: list[bool] = []
+
+        def _tentar() -> None:
+            try:
+                import magic  # type: ignore  # noqa: F401
+
+                resultado.append(True)
+            except Exception:  # noqa: BLE001 — qualquer falha = indisponível
+                resultado.append(False)
+
+        thread = threading.Thread(target=_tentar, daemon=True)
+        thread.start()
+        thread.join(timeout=_MAGIC_PROBE_TIMEOUT)
+        _magic_disponivel = bool(resultado) and resultado[0]
+        return _magic_disponivel
 
 
 def detectar_mime(head: bytes, *, magic_impl=None) -> str:
@@ -97,6 +141,8 @@ def detectar_mime(head: bytes, *, magic_impl=None) -> str:
     """
     if magic_impl is not None:
         return magic_impl(head)
+    if not _magic_disponivel_probe():
+        return sniff_signature(head)
     try:
         import magic  # type: ignore
 

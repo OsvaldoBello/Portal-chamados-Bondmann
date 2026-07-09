@@ -55,9 +55,9 @@ async def _csrf_guard(request: Request) -> None:
 
 
 def _access_token(request: Request) -> str | None:
-    from app.auth.session import ACCESS_COOKIE
+    from app.auth.session import current_access_token
 
-    return request.cookies.get(ACCESS_COOKIE)
+    return current_access_token(request)
 
 
 # Filtros de SLA da fila → estado calculado por app.domain.sla_visual.estado_sla.
@@ -116,9 +116,14 @@ async def _opcoes_filtro(ctx: StaffCtx, repo: ChamadosRepo) -> tuple[list[dict],
     return categorias, operadores
 
 
-async def _buscar_fila(repo: ChamadosRepo, claims: dict, f: dict) -> list[dict]:
+def _dep_id(ctx: StaffCtx) -> str | None:
+    return str(ctx.perfil.get("departamento_id") or "") or None
+
+
+async def _buscar_fila(repo: ChamadosRepo, claims: dict, dep_id: str | None, f: dict) -> list[dict]:
     chamados = await repo.fila(
         claims,
+        departamento_id=dep_id,
         status=f["status"],
         categoria_id=f["categoria_id"],
         prioridade=f["prioridade"],
@@ -142,8 +147,9 @@ async def fila_lista(
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
     f = _parse_filtros(status, categoria, prioridade, operador, sla)
-    chamados = await _buscar_fila(repo, ctx.user.claims, f)
-    stats = await repo.fila_stats(ctx.user.claims)
+    dep_id = _dep_id(ctx)
+    chamados = await _buscar_fila(repo, ctx.user.claims, dep_id, f)
+    stats = await repo.fila_stats(ctx.user.claims, departamento_id=dep_id)
     categorias, operadores = await _opcoes_filtro(ctx, repo)
 
     is_marketing = ctx.perfil.get("departamento") == "Marketing"
@@ -199,14 +205,15 @@ async def fila_fragmento(
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
     f = _parse_filtros(status, categoria, prioridade, operador, sla)
+    dep_id = _dep_id(ctx)
     # ETag/304 (Seção 2.2): consulta leve de assinatura; se nada mudou desde o
     # último poll, responde 304 sem buscar todas as linhas nem re-renderizar. Os
     # filtros entram na chave do ETag (via querystring) para não colidir entre si.
-    n, mx = await repo.fila_assinatura(ctx.user.claims, status=f["status"])
+    n, mx = await repo.fila_assinatura(ctx.user.claims, departamento_id=dep_id, status=f["status"])
     etag = 'W/"%s"' % sha256(f"{_filtros_qs(f)}:{n}:{mx}".encode()).hexdigest()[:16]
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304)  # 304 Not Modified
-    chamados = await _buscar_fila(repo, ctx.user.claims, f)
+    chamados = await _buscar_fila(repo, ctx.user.claims, dep_id, f)
     resp = render(request, "workspace/_fila_linhas.html", {"chamados": chamados})
     resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = "no-cache"
@@ -225,9 +232,10 @@ async def kanban(
     else:
         status_list = ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
 
-    chamados = await repo.fila(ctx.user.claims)
+    dep_id = _dep_id(ctx)
+    chamados = await repo.fila(ctx.user.claims, departamento_id=dep_id)
     colunas = {s: [c for c in chamados if c["status"] == s] for s in status_list}
-    stats = await repo.fila_stats(ctx.user.claims)
+    stats = await repo.fila_stats(ctx.user.claims, departamento_id=dep_id)
     return render(
         request,
         "workspace/kanban.html",
@@ -241,6 +249,52 @@ async def kanban(
 
 
 # --------------------------------------------------------------------------
+# Chamados do Departamento (Fase 1): chamados do meu setor abertos por OUTRO
+# colega do mesmo departamento (não eu, não "de fora") — ficam fora da fila
+# de atendimento (que é só para pedidos externos ao setor).
+# --------------------------------------------------------------------------
+@router.get("/departamento")
+async def chamados_departamento_lista(
+    request: Request,
+    status: str = "",
+    categoria: str = "",
+    prioridade: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+):
+    f = _parse_filtros(status, categoria, prioridade, "", "")
+    dep_id = _dep_id(ctx)
+    chamados = await repo.chamados_departamento(
+        ctx.user.claims,
+        departamento_id=dep_id,
+        status=f["status"],
+        categoria_id=f["categoria_id"],
+        prioridade=f["prioridade"],
+    )
+    categorias, _ = await _opcoes_filtro(ctx, repo)
+    is_marketing = ctx.perfil.get("departamento") == "Marketing"
+    status_validos = (
+        ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
+        if is_marketing else
+        ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
+    )
+    return render(
+        request,
+        "workspace/departamento.html",
+        {
+            "perfil": ctx.perfil,
+            "chamados": chamados,
+            "categorias": categorias,
+            "prioridades": PRIORIDADES,
+            "status_validos": status_validos,
+            "filtro": f["status"],
+            "categoria_sel": f["categoria_id"] or "",
+            "prioridade_sel": f["prioridade"] or "",
+        },
+    )
+
+
+# --------------------------------------------------------------------------
 # Atendimento (tela individual)
 # --------------------------------------------------------------------------
 async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str = "", **extra):
@@ -249,18 +303,35 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
     mensagens = await repo.mensagens(ctx.user.claims, chamado_id)
     await assinar_anexos(request, mensagens)
-    # Responsáveis atribuíveis = staff do departamento do chamado (mesmo setor).
+    # "Em cópia" (Fase 8) — só leitura aqui; gerenciar (adicionar/remover) é no
+    # Portal (/portal/chamados/{id}), acessível a qualquer staff que veja o chamado.
+    observadores = await repo.observadores(ctx.user.claims, chamado_id)
+    eh_autor = str(chamado.get("cliente_id") or "") == str(ctx.user.id)
+    # Responsáveis atribuíveis = staff do departamento do chamado (mesmo setor),
+    # exceto o próprio autor (autor nunca é o responsável pelo próprio chamado).
     operadores = await repo.operadores(
-        ctx.user.claims, departamento_id=str(chamado.get("departamento_id") or "") or None
+        ctx.user.claims,
+        departamento_id=str(chamado.get("departamento_id") or "") or None,
+        excluir_id=str(chamado.get("cliente_id") or "") or None,
     )
     # Líder de setor (0028) enxerga chamados abertos pela própria equipe mesmo
     # fora da fila do seu departamento — mas só ACOMPANHA: quem atende (muda
     # status, responde) é sempre o staff do MESMO departamento do chamado, TI
     # incluído (0020 tirou o "acesso total" de atendimento do TI; o TI só ganha
     # um chamado de outro setor via repasse, que o move pra fila da TI antes).
-    pode_atender = str(chamado.get("departamento_id") or "") == str(
+    #
+    # Regra de segregação de função (validada 2026-07-09): o chamado fica só
+    # leitura para TODO mundo — inclusive para o próprio setor de destino — até
+    # alguém que NÃO seja o autor "Iniciar atendimento". A partir daí, qualquer
+    # pessoa do setor (exceto o autor) pode responder/alterar. O autor NUNCA
+    # responde/assume como staff o próprio chamado, mesmo sendo do mesmo setor —
+    # ele acompanha e responde como solicitante em "Meus chamados" (Fase 1).
+    dept_bate = str(chamado.get("departamento_id") or "") == str(
         ctx.perfil.get("departamento_id") or ""
     ) and bool(ctx.perfil.get("departamento_id"))
+    ja_assumido = chamado.get("operador_id") is not None
+    pode_reivindicar = dept_bate and not eh_autor and not ja_assumido
+    pode_atender = dept_bate and not eh_autor and ja_assumido
     # Repasse de departamento é exclusivo do TI (RLS reforça); só então buscamos a lista.
     # Só entram setores que RECEBEM chamado (têm fila) — repassar para um setor sem
     # staff de atendimento não faz sentido (0027).
@@ -274,6 +345,9 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         "mensagens": mensagens,
         "operadores": operadores,
         "departamentos": departamentos,
+        "observadores": observadores,
+        "eh_autor": eh_autor,
+        "pode_reivindicar": pode_reivindicar,
         "pode_atender": pode_atender,
         "prioridades": PRIORIDADES,
         "status_validos": STATUS_VALIDOS,

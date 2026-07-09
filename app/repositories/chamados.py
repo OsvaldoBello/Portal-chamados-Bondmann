@@ -36,6 +36,7 @@ class ChamadosRepo:
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """SELECT p.id, p.nome, p.role, p.empresa_id, p.departamento_id,
+                          p.avatar_path, p.updated_at AS avatar_atualizado_em,
                           d.nome AS departamento,
                           COALESCE(d.nome = 'TI', false) AS is_ti
                      FROM perfis p
@@ -44,6 +45,20 @@ class ChamadosRepo:
                 claims["sub"],
             )
             return dict(row) if row else None
+
+    async def atualizar_avatar(self, claims: dict, *, avatar_path: str | None) -> None:
+        """Grava o path do avatar do PRÓPRIO usuário (Fase 7). RLS nova
+        (`perfis_update_self`, migration 0033) só deixa autenticado atualizar o
+        próprio perfil, e o trigger `enforce_perfil_self_so_avatar` restringe essa
+        escrita à coluna `avatar_path` — o path em si é sempre
+        `{auth.uid()}/avatar.<ext>` (`app/avatar_storage.py`), então não há como
+        um usuário apontar para o avatar de outro."""
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                "UPDATE perfis SET avatar_path = $2 WHERE id = $1::uuid",
+                claims["sub"],
+                avatar_path,
+            )
 
     async def listar(self, claims: dict, *, limite: int = 100) -> list[dict[str, Any]]:
         """"Meus chamados": os que o usuário ABRIU (portal do solicitante).
@@ -96,7 +111,9 @@ class ChamadosRepo:
                        c.volume, c.origem_demanda, c.causa_atraso,
                        cat.nome AS categoria, sub.nome AS subcategoria,
                        dep.nome AS departamento,
-                       autor.nome AS cliente_nome, op.nome AS operador_nome
+                       autor.nome AS cliente_nome, autor.avatar_path AS cliente_avatar_path,
+                       autor.updated_at AS cliente_avatar_atualizado_em,
+                       op.nome AS operador_nome
                   FROM chamados c
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
                   LEFT JOIN subcategorias sub ON sub.id = c.subcategoria_id
@@ -322,19 +339,44 @@ class ChamadosRepo:
 
     # ---------------------------------------------------------------------
     # Workspace do operador (Fase 4) — escopo por departamento via RLS.
+    #
+    # 🔁 Fase 1 (2026-07-09): a fila/kanban do setor deixou de misturar três
+    # coisas diferentes. Três recortes explícitos, sem depender só da RLS:
+    #   - fila()/kanban (a atender): chamados do MEU setor abertos por quem
+    #     NÃO é colega do mesmo departamento (nem eu mesmo) — pedido "de fora".
+    #   - listar() ("Meus chamados"): os que EU mesmo abri, pra qualquer setor.
+    #   - chamados_departamento() (novo): chamados do MEU setor abertos por
+    #     OUTRO colega do mesmo departamento (staff colega, não eu).
     # ---------------------------------------------------------------------
+    _FILA_COLUNAS = """
+        SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade, c.setor,
+               c.created_at, c.limite_resolucao, c.respondido_em, c.resolvido_em,
+               cat.nome AS categoria, dep.nome AS departamento,
+               autor.nome AS cliente_nome, autor.avatar_path AS cliente_avatar_path,
+               autor.updated_at AS cliente_avatar_atualizado_em,
+               op.nome AS operador_nome
+          FROM chamados c
+          LEFT JOIN categorias cat ON cat.id = c.categoria_id
+          LEFT JOIN departamentos dep ON dep.id = c.departamento_id
+          LEFT JOIN perfis autor ON autor.id = c.cliente_id
+          LEFT JOIN perfis op ON op.id = c.operador_id
+    """
+
     async def fila(
         self,
         claims: dict,
         *,
+        departamento_id: str | None,
         status: str | None = None,
         categoria_id: str | None = None,
         prioridade: str | None = None,
         operador_id: str | None = None,
         limite: int = 200,
     ) -> list[dict[str, Any]]:
-        """Fila de atendimento no escopo do staff (RLS: cada setor vê o seu; o TI
-        vê o setor TI — migration 0020).
+        """Fila/Kanban (a atender): chamados do MEU setor abertos por alguém que
+        NÃO é colega do mesmo departamento nem eu mesmo — pedidos "de fora" do
+        setor (o público que a fila existe para atender). Chamados abertos por um
+        colega ficam em :meth:`chamados_departamento`; os meus, em :meth:`listar`.
 
         Filtros opcionais: ``status``, ``categoria_id``, ``prioridade`` e
         ``operador_id`` (o filtro de SLA é aplicado na camada de rota, pois depende
@@ -343,17 +385,12 @@ class ChamadosRepo:
         """
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
-                """
-                SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade, c.setor,
-                       c.created_at, c.limite_resolucao, c.respondido_em, c.resolvido_em,
-                       cat.nome AS categoria, dep.nome AS departamento,
-                       autor.nome AS cliente_nome, op.nome AS operador_nome
-                  FROM chamados c
-                  LEFT JOIN categorias cat ON cat.id = c.categoria_id
-                  LEFT JOIN departamentos dep ON dep.id = c.departamento_id
-                  LEFT JOIN perfis autor ON autor.id = c.cliente_id
-                  LEFT JOIN perfis op ON op.id = c.operador_id
-                 WHERE ($1::status_chamado IS NULL OR c.status = $1::status_chamado)
+                self._FILA_COLUNAS
+                + """
+                 WHERE ($6::uuid IS NULL OR c.departamento_id = $6::uuid)
+                   AND c.cliente_id <> auth.uid()
+                   AND autor.departamento_id IS DISTINCT FROM c.departamento_id
+                   AND ($1::status_chamado IS NULL OR c.status = $1::status_chamado)
                    AND ($3::uuid IS NULL OR c.categoria_id = $3::uuid)
                    AND ($4::prioridade_chamado IS NULL OR c.prioridade = $4::prioridade_chamado)
                    AND ($5::uuid IS NULL OR c.operador_id = $5::uuid)
@@ -365,28 +402,81 @@ class ChamadosRepo:
                 categoria_id,
                 prioridade,
                 operador_id,
+                departamento_id,
             )
             return [dict(r) for r in rows]
 
-    async def fila_assinatura(self, claims: dict, *, status: str | None = None):
+    async def chamados_departamento(
+        self,
+        claims: dict,
+        *,
+        departamento_id: str | None,
+        status: str | None = None,
+        categoria_id: str | None = None,
+        prioridade: str | None = None,
+        limite: int = 200,
+    ) -> list[dict[str, Any]]:
+        """"Chamados do Departamento" (Fase 1): chamados do MEU setor abertos por
+        OUTRO colega do mesmo departamento (não eu) — claim/resposta seguem a
+        mesma trava de segregação de função da Fase 0 (autor nunca atende o
+        próprio chamado, mesmo sendo colega de quem está vendo esta lista)."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                self._FILA_COLUNAS
+                + """
+                 WHERE ($5::uuid IS NULL OR c.departamento_id = $5::uuid)
+                   AND c.cliente_id <> auth.uid()
+                   AND autor.departamento_id IS NOT DISTINCT FROM c.departamento_id
+                   AND ($1::status_chamado IS NULL OR c.status = $1::status_chamado)
+                   AND ($3::uuid IS NULL OR c.categoria_id = $3::uuid)
+                   AND ($4::prioridade_chamado IS NULL OR c.prioridade = $4::prioridade_chamado)
+                 ORDER BY c.created_at DESC
+                 LIMIT $2
+                """,
+                status,
+                limite,
+                categoria_id,
+                prioridade,
+                departamento_id,
+            )
+            return [dict(r) for r in rows]
+
+    async def fila_assinatura(
+        self, claims: dict, *, departamento_id: str | None, status: str | None = None
+    ):
         """Assinatura leve da fila (count + max ``updated_at``) no escopo do staff.
 
         Usada para ETag/304 no polling: se nada mudou, evita buscar todas as linhas
-        e re-renderizar o fragmento (Seção 2.2). O escopo vem da RLS; os demais
-        filtros entram no cálculo do ETag pela rota (via querystring)."""
+        e re-renderizar o fragmento (Seção 2.2). Escopo alinhado ao de :meth:`fila`
+        (chamados "de fora" do setor); os demais filtros entram no ETag pela rota."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
-                """SELECT count(*)::int AS n, max(updated_at) AS mx
+                """SELECT count(*)::int AS n, max(c.updated_at) AS mx
                      FROM chamados c
-                    WHERE ($1::status_chamado IS NULL OR c.status = $1::status_chamado)""",
+                     LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                    WHERE ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
+                      AND c.cliente_id <> auth.uid()
+                      AND autor.departamento_id IS DISTINCT FROM c.departamento_id
+                      AND ($1::status_chamado IS NULL OR c.status = $1::status_chamado)""",
                 status,
+                departamento_id,
             )
             return (row["n"], row["mx"])
 
-    async def fila_stats(self, claims: dict) -> dict[str, int]:
-        """Contagem por status no escopo do staff (cabeçalhos do Kanban/fila)."""
+    async def fila_stats(self, claims: dict, *, departamento_id: str | None = None) -> dict[str, int]:
+        """Contagem por status no escopo da fila/kanban (cabeçalhos), mesmo
+        recorte de :meth:`fila` — não conta chamados próprios nem de colegas."""
         async with rls_connection(claims) as conn:
-            rows = await conn.fetch("SELECT status, count(*) AS n FROM chamados GROUP BY status")
+            rows = await conn.fetch(
+                """SELECT c.status, count(*) AS n
+                     FROM chamados c
+                     LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                    WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                      AND c.cliente_id <> auth.uid()
+                      AND autor.departamento_id IS DISTINCT FROM c.departamento_id
+                    GROUP BY c.status""",
+                departamento_id,
+            )
         por = {r["status"]: r["n"] for r in rows}
         return {
             "total": sum(por.values()),
@@ -397,14 +487,16 @@ class ChamadosRepo:
         }
 
     async def operadores(
-        self, claims: dict, *, departamento_id: str | None = None
+        self, claims: dict, *, departamento_id: str | None = None, excluir_id: str | None = None
     ) -> list[dict[str, Any]]:
         """Staff disponível para atribuição (role OPERADOR/ADMIN).
 
         Quando ``departamento_id`` é informado, retorna **apenas** o staff daquele
         setor — a atribuição de responsável é sempre dentro do departamento do
         chamado (RH atribui RH; TI, ao atender um chamado de RH, atribui RH).
-        A troca de setor é uma ação separada (só TI — ver :meth:`transferir`)."""
+        A troca de setor é uma ação separada (só TI — ver :meth:`transferir`).
+        ``excluir_id`` tira um usuário específico da lista — usado para excluir o
+        autor do chamado (autor nunca é o próprio responsável)."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
@@ -412,9 +504,11 @@ class ChamadosRepo:
                   FROM perfis p LEFT JOIN departamentos d ON d.id = p.departamento_id
                  WHERE p.role IN ('OPERADOR','ADMIN') AND p.ativo
                    AND ($1::uuid IS NULL OR p.departamento_id = $1::uuid)
+                   AND ($2::uuid IS NULL OR p.id <> $2::uuid)
                  ORDER BY p.nome
                 """,
                 departamento_id,
+                excluir_id,
             )
             return [dict(r) for r in rows]
 
@@ -424,12 +518,16 @@ class ChamadosRepo:
         """Inicia o atendimento: move NOVO→EM_ATENDIMENTO e assume como responsável.
 
         Idempotente: só age quando o chamado está em ``NOVO`` (senão devolve None).
-        Registra ``ATENDIMENTO_INICIADO`` no histórico. Escopo por RLS (staff)."""
+        Segregação de função: o autor do chamado nunca pode assumir o próprio
+        chamado, mesmo sendo staff do setor de destino (devolve None). Registra
+        ``ATENDIMENTO_INICIADO`` no histórico. Escopo por RLS (staff)."""
         async with rls_connection(claims) as conn:
-            atual = await conn.fetchval(
-                "SELECT status FROM chamados WHERE id = $1::uuid", chamado_id
+            atual = await conn.fetchrow(
+                "SELECT status, cliente_id FROM chamados WHERE id = $1::uuid", chamado_id
             )
-            if atual != "NOVO":
+            if atual is None or atual["status"] != "NOVO":
+                return None
+            if str(atual["cliente_id"]) == str(operador_id):
                 return None
             row = await conn.fetchrow(
                 """
@@ -437,6 +535,7 @@ class ChamadosRepo:
                    SET status = 'EM_ATENDIMENTO'::status_chamado,
                        operador_id = $2::uuid
                  WHERE id = $1::uuid AND status = 'NOVO'::status_chamado
+                   AND cliente_id <> $2::uuid
              RETURNING id, status, operador_id
                 """,
                 chamado_id,
@@ -553,10 +652,16 @@ class ChamadosRepo:
     async def atribuir(
         self, claims: dict, chamado_id: str, operador_id: str | None
     ) -> dict[str, Any] | None:
-        """Atribui (ou remove) o operador responsável + histórico."""
+        """Atribui (ou remove) o operador responsável + histórico.
+
+        Segregação de função: não deixa atribuir o autor do chamado como o
+        próprio responsável (devolve None nesse caso — a UI já não lista o
+        autor entre os operadores, isto é defesa em profundidade)."""
         async with rls_connection(claims) as conn:
-            existe = await conn.fetchval("SELECT 1 FROM chamados WHERE id = $1::uuid", chamado_id)
-            if existe is None:
+            atual = await conn.fetchrow("SELECT cliente_id FROM chamados WHERE id = $1::uuid", chamado_id)
+            if atual is None:
+                return None
+            if operador_id and str(atual["cliente_id"]) == str(operador_id):
                 return None
             row = await conn.fetchrow(
                 "UPDATE chamados SET operador_id = $2::uuid WHERE id = $1::uuid RETURNING id, operador_id",
@@ -662,6 +767,71 @@ class ChamadosRepo:
                     {"volume": volume, "origem_demanda": origem_demanda, "causa_atraso": causa_atraso},
                 )
             return dict(row) if row else None
+
+    # ---------------------------------------------------------------------
+    # "Em cópia" — observadores multi-setoriais (Fase 8, 2026-07-09).
+    # ---------------------------------------------------------------------
+    async def usuarios_para_copia(
+        self, claims: dict, *, excluir_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Usuários ativos de QUALQUER setor, para o seletor "Adicionar em
+        cópia" — diferente de :meth:`operadores` (só staff do setor do
+        chamado), aqui é qualquer pessoa da organização (multi-setorial)."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT p.id, p.nome, d.nome AS departamento
+                  FROM perfis p LEFT JOIN departamentos d ON d.id = p.departamento_id
+                 WHERE p.ativo AND ($1::uuid IS NULL OR p.id <> $1::uuid)
+                 ORDER BY p.nome
+                """,
+                excluir_id,
+            )
+            return [dict(r) for r in rows]
+
+    async def observadores(self, claims: dict, chamado_id: str) -> list[dict[str, Any]]:
+        """Quem está "em cópia" no chamado (RLS: só quem já enxerga o chamado
+        vê a lista — mesma regra de quem pode adicionar/remover)."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT o.perfil_id, p.nome, d.nome AS departamento
+                  FROM chamados_observadores o
+                  JOIN perfis p ON p.id = o.perfil_id
+                  LEFT JOIN departamentos d ON d.id = p.departamento_id
+                 WHERE o.chamado_id = $1::uuid
+                 ORDER BY p.nome
+                """,
+                chamado_id,
+            )
+            return [dict(r) for r in rows]
+
+    async def adicionar_observador(
+        self, claims: dict, chamado_id: str, perfil_id: str
+    ) -> None:
+        """Adiciona um observador (RLS restringe a quem já enxerga o chamado).
+        Idempotente: reenviar o mesmo par não duplica nem falha."""
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                """
+                INSERT INTO chamados_observadores (chamado_id, perfil_id, criado_por)
+                VALUES ($1::uuid, $2::uuid, $3::uuid)
+                ON CONFLICT (chamado_id, perfil_id) DO NOTHING
+                """,
+                chamado_id,
+                perfil_id,
+                claims["sub"],
+            )
+
+    async def remover_observador(
+        self, claims: dict, chamado_id: str, perfil_id: str
+    ) -> None:
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                "DELETE FROM chamados_observadores WHERE chamado_id = $1::uuid AND perfil_id = $2::uuid",
+                chamado_id,
+                perfil_id,
+            )
 
 
 _repo = ChamadosRepo()

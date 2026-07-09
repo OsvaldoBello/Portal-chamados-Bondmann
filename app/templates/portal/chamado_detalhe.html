@@ -1,4 +1,4 @@
-{% extends "portal/app_base.html" %}
+{% extends base_template %}
 {% from "portal/_macros.html" import status_badge, prioridade_badge %}
 {% set active = "dashboard" %}
 {% block title %}{{ chamado.codigo }} — Portal Bondmann{% endblock %}
@@ -28,6 +28,47 @@
     </div>
   </div>
   <p class="mt-4 text-sm text-ink whitespace-pre-line">{{ chamado.descricao }}</p>
+</div>
+
+{# Em cópia (Fase 8) — observadores multi-setoriais: leitura + notificação,
+   sem poder responder/alterar o chamado. Quem já vê o chamado pode gerenciar. #}
+<div class="bg-white rounded-xl shadow-card border border-line/60 p-6 mb-5">
+  <h3 class="font-display font-bold text-navy mb-3">Em cópia</h3>
+  {% if observadores %}
+  <ul class="flex flex-wrap gap-2 mb-4">
+    {% for o in observadores %}
+    <li class="inline-flex items-center gap-1.5 rounded-full bg-navy-100 pl-3 pr-1.5 py-1 text-xs font-semibold text-navy">
+      {{ o.nome }}{% if o.departamento %} <span class="text-navy/60 font-normal">· {{ o.departamento }}</span>{% endif %}
+      <form method="post" action="/portal/chamados/{{ chamado.id }}/observadores/{{ o.perfil_id }}/remover" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="w-4 h-4 grid place-items-center rounded-full hover:bg-navy-200" title="Remover" aria-label="Remover">&times;</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-sm text-muted mb-4">Ninguém em cópia neste chamado.</p>
+  {% endif %}
+  {% if usuarios_copia %}
+  <form method="post" action="/portal/chamados/{{ chamado.id }}/observadores" class="flex flex-wrap items-end gap-2"
+        data-pessoas-picker data-pessoas-submit="#btn-add-observador">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="flex flex-col gap-1 relative">
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Adicionar em cópia</span>
+      <input type="text" data-pessoas-input autocomplete="off" placeholder="Digite o nome…"
+             class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 min-w-[220px]">
+      <ul data-pessoas-lista
+          class="hidden absolute left-0 top-full z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-lg bg-white ring-1 ring-line shadow-card text-sm"></ul>
+      <select name="perfil_id" data-pessoas-select class="hidden">
+        {% for u in usuarios_copia %}
+        <option value="{{ u.id }}">{{ u.nome }}{% if u.departamento %} — {{ u.departamento }}{% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" id="btn-add-observador" disabled
+            class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 disabled:opacity-40 disabled:cursor-not-allowed">Adicionar</button>
+  </form>
+  {% endif %}
 </div>
 
 {# Conversa — chat com atualização em tempo real (Realtime) + fallback polling #}
@@ -79,6 +120,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/js/pessoas_picker.js"></script>
 {% if supabase_url and anon_key and access_token %}
 {# chat.js liga o Realtime da conversa; supabase-js já é carregado pelo app_base. #}
 <script src="/static/js/chat.js"></script>

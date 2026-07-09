@@ -39,6 +39,19 @@
       {% if chamado.status != 'RESOLVIDO' %}
       <div class="mt-5">{{ sla_barra(chamado) }}</div>
       {% endif %}
+      {% if observadores %}
+      <div class="mt-4 pt-4 border-t border-line/60">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Em cópia</span>
+        <div class="flex flex-wrap gap-1.5 mt-1.5">
+          {% for o in observadores %}
+          <span class="inline-flex items-center rounded-full bg-navy-100 px-2.5 py-0.5 text-xs font-semibold text-navy">
+            {{ o.nome }}{% if o.departamento %} <span class="text-navy/60 font-normal">· {{ o.departamento }}</span>{% endif %}
+          </span>
+          {% endfor %}
+        </div>
+        <a href="/portal/chamados/{{ chamado.id }}" class="text-xs text-navy hover:underline mt-1.5 inline-block">Gerenciar em cópia →</a>
+      </div>
+      {% endif %}
     </div>
 
     {# ---------- Conversa (Realtime + polling) ---------- #}
@@ -55,7 +68,17 @@
         {% include "portal/_mensagens.html" %}
       </div>
 
-      {% if not pode_atender %}
+      {% if eh_autor %}
+      <p class="mt-4 rounded-lg bg-navy-50 border border-navy-100 px-3.5 py-2.5 text-xs text-navy">
+        Você abriu este chamado — para responder ou acompanhar como solicitante, acesse
+        <a href="/portal/chamados/{{ chamado.id }}" class="font-semibold underline">Meus chamados</a>.
+      </p>
+      {% elif pode_reivindicar %}
+      <p class="mt-4 rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-xs text-amber-800">
+        Este chamado do seu setor ainda não foi assumido por ninguém — clique em
+        <strong>Iniciar atendimento</strong> para liberar a resposta.
+      </p>
+      {% elif not pode_atender %}
       <p class="mt-4 rounded-lg bg-navy-50 border border-navy-100 px-3.5 py-2.5 text-xs text-navy">
         Você está <strong>acompanhando</strong> este chamado (aberto por alguém do seu setor) —
         só quem atende a fila do departamento pode responder ou alterá-lo.
@@ -93,9 +116,9 @@
 
   {# ---------- Coluna de ações ---------- #}
   <div class="space-y-4">
-    {% if pode_atender %}
-    {% if chamado.status == 'NOVO' %}
-    {# Iniciar atendimento: assume o chamado e move para "Em atendimento". #}
+    {% if pode_reivindicar %}
+    {# Iniciar atendimento: assume o chamado e move para "Em atendimento". Só
+       aparece pra quem NÃO é o autor — o próprio autor nunca assume o chamado. #}
     <form method="post" action="/workspace/chamados/{{ chamado.id }}/iniciar{% if origem %}?origem={{ origem }}{% endif %}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit"
@@ -106,6 +129,7 @@
     </form>
     {% endif %}
 
+    {% if pode_atender %}
     {% if chamado.status != 'RESOLVIDO' %}
     {# Encerramento em destaque (didático): a nota de solução vai ao solicitante. #}
     <div class="bg-brandgreen-600/5 rounded-xl shadow-card border-2 border-brandgreen-600/40 p-5">
@@ -191,9 +215,12 @@
       </form>
       {% endif %}
     </div>
+    {% endif %}{# /pode_atender #}
 
-    {# Zona de exclusão: chamado aberto por engano. Confirmação em duas etapas
-       (mesmo padrão de admin/usuarios.html) — evita apagar por clique acidental. #}
+    {# Zona de exclusão: chamado aberto por engano. Não exige que o chamado já
+       tenha sido assumido (dept_bate/não-autor basta) — confirmação em duas
+       etapas (mesmo padrão de admin/usuarios.html) evita apagar sem querer. #}
+    {% if pode_atender or pode_reivindicar %}
     <div class="bg-white rounded-xl shadow-card border border-sla-danger/30 p-5 space-y-2">
       {% if confirmar_exclusao %}
       <p class="text-[13px] text-sla-danger font-semibold">Excluir o chamado <span class="break-all">{{ chamado.codigo }}</span>? Esta ação é permanente e apaga toda a conversa.</p>
@@ -212,8 +239,9 @@
       </a>
       {% endif %}
     </div>
+    {% endif %}
 
-    {% if chamado.departamento == 'Marketing' %}
+    {% if pode_atender and chamado.departamento == 'Marketing' %}
     <div class="bg-white rounded-xl shadow-card border border-line/60 p-5 space-y-4">
       <h3 class="font-display font-bold text-navy">Informações do Dashboard</h3>
       <form method="post" action="/workspace/chamados/{{ chamado.id }}/marketing-meta{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-3">
@@ -248,8 +276,7 @@
         </button>
       </form>
     </div>
-    {% endif %}
-    {% endif %}{# /pode_atender #}
+    {% endif %}{# /pode_atender + Marketing #}
 
     {% if chamado.avaliacao_nota %}
     <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">

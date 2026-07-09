@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
+from app.avatar_storage import avatar_public_url
 from app.domain.sla_visual import barra_sla, estado_sla
 from app.security.csrf import CSRF_HEADER, get_csrf
 
@@ -92,7 +93,20 @@ templates.env.globals.update(
     fmt_dt=fmt_dt,
     estado_sla=estado_sla,   # indicador visual de SLA (Fase 4)
     barra_sla=barra_sla,     # barra de progresso de SLA (Fase 3 do usuário)
+    avatar_url=avatar_public_url,  # bolinha de avatar nos cards (Fase 7)
 )
+
+
+def portal_base_template(perfil: dict | None) -> str:
+    """Shell a estender pelas páginas do Portal (dashboard/abertura/detalhe/perfil).
+
+    Staff (OPERADOR/ADMIN) nunca troca de shell: em vez de navegar para o shell
+    do Portal (barra lateral com só 3 itens), continua no shell do Workspace —
+    o item de menu correspondente só fica destacado (ver workspace_base.html).
+    """
+    if perfil and perfil.get("role") in ("OPERADOR", "ADMIN"):
+        return "workspace/workspace_base.html"
+    return "portal/app_base.html"
 
 
 def render(request: Request, name: str, context: dict | None = None, status_code: int = 200):

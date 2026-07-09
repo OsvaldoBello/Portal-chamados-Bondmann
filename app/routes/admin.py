@@ -3,9 +3,12 @@
 KPIs (TMA, conformidade de SLA, CSAT, produtividade), gestão de catálogos
 (departamentos/categorias/planos) e export CSV.
 
-**Acesso (Fase 4 — papéis por departamento):**
-- **TI** (`auth_is_ti()`): acesso total — vê os indicadores de **todos** os
-  departamentos e pode **gerir** catálogos.
+**Acesso (decisão de produto 2026-07-09 — indicadores só do próprio setor):**
+- **TI** (`auth_is_ti()` + role OPERADOR/ADMIN): vê os indicadores **apenas do
+  próprio setor (TI)**, igual a qualquer outro departamento — não tem mais
+  acesso a "Todos os setores" nem aos números de RH/Marketing. Continua sendo
+  o único que **gere** catálogos/usuários/planos (isso é administração do
+  sistema, não "indicador de outro setor").
 - **ADMIN de departamento** (role ``ADMIN`` com ``departamento_id``, ex.: um
   gestor do RH): vê os indicadores **apenas do seu setor** (CSAT, SLA, rapidez,
   avaliações) — a RLS já escopa as queries ao departamento. **Não** gere
@@ -64,7 +67,12 @@ async def admin_context(
     (perfil, KPIs, catálogos, export) — performance (Seção 2.1)."""
     async with rls_request_scope(user.claims):
         perfil = await repo.perfil(user.claims)
-        is_ti = bool(perfil and perfil.get("is_ti"))
+        # is_ti aqui exige TAMBÉM ser staff (OPERADOR/ADMIN) — um CLIENTE do setor
+        # TI (funcionário comum) não deve entrar no painel admin só por pertencer
+        # ao departamento (perfil.is_ti é só "departamento = TI", sem olhar papel).
+        is_ti = bool(
+            perfil and perfil.get("is_ti") and perfil.get("role") in ("OPERADOR", "ADMIN")
+        )
         is_admin_dep = bool(
             perfil and perfil.get("role") == "ADMIN" and perfil.get("departamento")
         )
@@ -73,9 +81,10 @@ async def admin_context(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Área restrita a gestores (Admin do setor) e ao TI.",
             )
-        # Nos INDICADORES o TI vê todos os setores (com seletor); o Admin de setor é
-        # escopado pela RLS. (No Workspace o TI é escopado ao próprio setor — 0020.)
-        escopo = "Todos os setores" if is_ti else (perfil.get("departamento") or "—")
+        # Indicadores só do PRÓPRIO setor (decisão 2026-07-09) — TI passa a ser
+        # escopado igual a qualquer Admin de departamento; "Todos os setores"
+        # deixou de existir. TI segue sendo o único que GERE catálogos (_require_ti).
+        escopo = perfil.get("departamento") or "—"
         yield AdminCtx(user=user, perfil=perfil, is_ti=is_ti, escopo=escopo)
 
 
@@ -100,42 +109,26 @@ def _base_ctx(ctx: AdminCtx) -> dict:
 @router.get("")
 async def dashboard(
     request: Request,
-    departamento: str = "",
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
 ):
     claims = ctx.user.claims
 
-    # INDICADORES: o TI vê TODOS os setores (com seletor para focar um). Diferente
-    # do Workspace, onde a RLS 0020 escopa o TI ao próprio setor: aqui os KPIs usam
-    # `todos_setores=True` (agregação cross-setor via admin_connection, uso de leitura
-    # controlado). O Admin de setor continua escopado pela RLS ao seu departamento.
-    todos = ctx.is_ti
-    departamentos: list[dict] = []
-    dep_id: str | None = None
-    dep_nome: str | None = None
-    if ctx.is_ti:
-        departamentos = [
-            d for d in await repo.departamentos(claims)
-            if d.get("ativo") and d.get("recebe_chamados")
-        ]
-        escolhido = departamento.strip()
-        selecionado = next((d for d in departamentos if str(d["id"]) == escolhido), None)
-        if selecionado:
-            dep_id = str(selecionado["id"])
-            dep_nome = selecionado["nome"]
+    # INDICADORES escopados ao PRÓPRIO setor sempre (2026-07-09) — TI incluído.
+    # Nada de seletor "Todos os setores"/outro departamento: a RLS (rls_connection,
+    # nunca admin_connection) já limita as queries ao departamento do usuário.
+    dep_id = str(ctx.perfil.get("departamento_id") or "") or None
+    escopo = ctx.escopo
 
-    kpis = await repo.kpis(claims, departamento_id=dep_id, todos_setores=todos)
+    kpis = await repo.kpis(claims, departamento_id=dep_id, todos_setores=False)
     graficos = {
-        "por_status": await repo.por_status(claims, departamento_id=dep_id, todos_setores=todos),
-        "csat": await repo.csat_distribuicao(claims, departamento_id=dep_id, todos_setores=todos),
-        "por_departamento": await repo.por_departamento(claims, departamento_id=dep_id, todos_setores=todos),
-        "por_setor": await repo.por_setor(claims, departamento_id=dep_id, todos_setores=todos),
-        "produtividade": await repo.produtividade(claims, departamento_id=dep_id, todos_setores=todos),
+        "por_status": await repo.por_status(claims, departamento_id=dep_id, todos_setores=False),
+        "csat": await repo.csat_distribuicao(claims, departamento_id=dep_id, todos_setores=False),
+        "por_departamento": await repo.por_departamento(claims, departamento_id=dep_id, todos_setores=False),
+        "por_setor": await repo.por_setor(claims, departamento_id=dep_id, todos_setores=False),
+        "produtividade": await repo.produtividade(claims, departamento_id=dep_id, todos_setores=False),
     }
-    avaliacoes = await repo.avaliacoes_recentes(claims, departamento_id=dep_id, todos_setores=todos)
-    # Rótulo do escopo: setor escolhido, ou "Todos os setores" p/ TI, ou o setor do gestor.
-    escopo = dep_nome or ("Todos os setores" if ctx.is_ti else ctx.escopo)
+    avaliacoes = await repo.avaliacoes_recentes(claims, departamento_id=dep_id, todos_setores=False)
 
     if escopo == "Marketing":
         mkt_data = await repo.mkt_dashboard_data(claims)
@@ -145,8 +138,8 @@ async def dashboard(
             {
                 **_base_ctx(ctx),
                 "escopo": escopo,
-                "departamentos": departamentos,
-                "departamento_sel": dep_id or "",
+                "departamentos": [],
+                "departamento_sel": "",
                 "mkt_data": mkt_data,
             },
         )
@@ -160,8 +153,8 @@ async def dashboard(
             "kpis": kpis,
             "graficos": graficos,
             "avaliacoes": avaliacoes,
-            "departamentos": departamentos,
-            "departamento_sel": dep_id or "",
+            "departamentos": [],
+            "departamento_sel": "",
         },
     )
 
@@ -169,6 +162,8 @@ async def dashboard(
 @router.get("/gestao")
 async def gestao(
     request: Request,
+    prioridade_ok: str = "",
+    feriados_ok: str = "",
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
 ):
@@ -184,8 +179,95 @@ async def gestao(
             "categorias_ativas": [c for c in categorias if c.get("ativo")],
             "subcategorias": await repo.subcategorias(ctx.user.claims),
             "planos": await repo.planos(ctx.user.claims),
+            "prioridade_ok": prioridade_ok,
+            "feriados_ok": feriados_ok,
+            "midia_regional": await repo.marketing_midia_regional(ctx.user.claims),
         },
     )
+
+
+@router.post("/marketing-midia")
+async def salvar_marketing_midia(
+    request: Request,
+    mes: str = Form(...),               # "YYYY-MM" (input type="month")
+    investimento: str = Form("0"),
+    regioes: str = Form("0"),
+    descontinuidades: str = Form("0"),
+    aderencias: str = Form("0"),
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Cria/atualiza um mês de Mídia Regional do Marketing (Fase 6 — 2026-07-09):
+    qualquer mês agora entra por aqui, sem precisar de migration — é o que torna
+    `marketing_midia_regional` dinâmica em vez de engessada nos 5 meses do seed
+    original."""
+    _require_ti(ctx)
+    from datetime import date as _date
+
+    mes = mes.strip()
+    try:
+        ano_s, mes_s = mes.split("-", 1)
+        mes_data = _date(int(ano_s), int(mes_s), 1)
+    except (ValueError, TypeError):
+        return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
+
+    def _num(bruto: str, cast):
+        try:
+            return cast((bruto or "0").strip().replace(",", "."))
+        except (ValueError, TypeError):
+            return cast(0)
+
+    await repo.upsert_marketing_midia_regional(
+        ctx.user.claims,
+        mes=mes_data,
+        investimento=_num(investimento, float),
+        regioes=_num(regioes, int),
+        descontinuidades=_num(descontinuidades, int),
+        aderencias=_num(aderencias, int),
+    )
+    return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/jobs/sincronizar-feriados")
+async def job_sincronizar_feriados(
+    request: Request,
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Sincroniza `feriados` com o calendário nacional calculado pela biblioteca
+    `holidays` (Fase 5 — 2026-07-09), no lugar de editar a tabela à mão a cada
+    virada de ano. `ON CONFLICT DO NOTHING`: nunca apaga/sobrescreve feriados
+    locais já cadastrados manualmente. Só TI (mesmo escopo de `feriados_admin`
+    na RLS)."""
+    _require_ti(ctx)
+    from datetime import datetime
+
+    from app.domain.feriados import feriados_nacionais, proximos_anos
+
+    anos = proximos_anos(datetime.now().year)
+    novos = await repo.sincronizar_feriados(ctx.user.claims, feriados_nacionais(anos))
+    return RedirectResponse(f"/admin/gestao?feriados_ok={novos}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/jobs/recalcular-prioridade-marketing")
+async def job_recalcular_prioridade_marketing(
+    request: Request,
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Recalcula a PRIORIDADE dos chamados do Marketing pelos dias restantes até
+    `data_entrega` (Fase 4 — 2026-07-09): >7d Baixa, 4-7d Média, 2-3d Alta, <=1d
+    (inclusive vencido) Urgente. Caminho automático diário é o `pg_cron`
+    (`supabase/migrations/0031_prioridade_dinamica_marketing.sql`, mesma função
+    SQL); este botão/rota serve para rodar sob demanda ou como alvo de um
+    scheduler externo, caso `pg_cron` não esteja habilitado no projeto. Só TI
+    (rotina de manutenção do sistema, não é indicador de setor)."""
+    _require_ti(ctx)
+    n = await repo.recalcular_prioridade_marketing(ctx.user.claims)
+    return RedirectResponse(f"/admin/gestao?prioridade_ok={n}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/departamentos")
@@ -502,7 +584,36 @@ async def criar_usuario(
     # O trigger criou o perfil CLIENTE sem setor; sempre promovemos papel+setor.
     await repo.atualizar_papel(ctx.user.claims, str(novo.id), role=papel, departamento_id=dep_id)
 
-    return _volta(ok=f"Conta {email} criada como {_PAPEL_LABEL[papel]}.")
+    # Foto de perfil (opcional, Fase 7): o TI já pode enviá-la na criação da
+    # conta. O upload usa a service_role key (não o JWT do TI) porque a policy
+    # de Storage só libera cada um escrever no PRÓPRIO path — aqui o alvo é o
+    # path do usuário recém-criado, então é preciso bypassar a RLS.
+    form_data = await request.form()
+    avatar = form_data.get("avatar")
+    aviso_avatar = ""
+    if avatar is not None and getattr(avatar, "filename", ""):
+        from app.avatar_storage import (
+            AvatarStorageError,
+            avatar_path as _avatar_path,
+            enviar_avatar,
+            preparar_avatar,
+        )
+        from app.config import get_settings
+        from app.security.uploads import UploadInvalido
+
+        settings = get_settings()
+        conteudo = await avatar.read(settings.avatar_max_bytes + 1)
+        try:
+            processada = preparar_avatar(avatar.filename, conteudo, max_bytes=settings.avatar_max_bytes)
+            path = _avatar_path(str(novo.id), "png")
+            await enviar_avatar(
+                settings.supabase_service_role_key, path, processada, "image/png"
+            )
+            await repo.atualizar_avatar(ctx.user.claims, str(novo.id), avatar_path=path)
+        except (UploadInvalido, AvatarStorageError) as exc:
+            aviso_avatar = f" (a foto não foi salva: {exc})"
+
+    return _volta(ok=f"Conta {email} criada como {_PAPEL_LABEL[papel]}.{aviso_avatar}")
 
 
 @router.post("/usuarios/{user_id}/papel")
@@ -583,10 +694,10 @@ async def excluir_usuario(
 
 
 _CSV_COLS = [
-    "codigo", "titulo", "status", "prioridade", "departamento", "categoria",
-    "solicitante", "operador", "created_at", "limite_resolucao",
-    "respondido_em", "resolvido_em", "avaliacao_nota", "avaliacao_em",
-    "avaliacao_comentario",
+    "codigo", "titulo", "descricao", "status", "prioridade", "departamento",
+    "categoria", "subcategoria", "solicitante", "operador", "created_at",
+    "limite_resolucao", "respondido_em", "resolvido_em", "avaliacao_nota",
+    "avaliacao_em", "avaliacao_comentario",
 ]
 
 # Cabeçalho legível (pt-BR) — mesmo padrão de planilha de relatório usado pela
@@ -594,10 +705,12 @@ _CSV_COLS = [
 _CSV_HEADERS = {
     "codigo": "Chamado",
     "titulo": "Título",
+    "descricao": "Descrição",
     "status": "Status",
     "prioridade": "Prioridade",
     "departamento": "Departamento",
     "categoria": "Categoria",
+    "subcategoria": "Subcategoria",
     "solicitante": "Solicitante",
     "operador": "Operador",
     "created_at": "Data de criação",

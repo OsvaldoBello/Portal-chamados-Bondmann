@@ -1,4 +1,4 @@
-{% extends "portal/app_base.html" %}
+{% extends base_template %}
 {% set active = "novo" %}
 {% block title %}Abrir chamado — Portal Bondmann{% endblock %}
 {% block heading %}Abrir chamado{% endblock %}
@@ -139,6 +139,27 @@
           class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint resize-none">{{ f.get('descricao', '') }}</textarea>
       </label>
 
+      {# Em cópia (Fase 8) — outras pessoas (de qualquer setor) que acompanham
+      o chamado desde a abertura: leitura + notificação, sem poder responder. #}
+      <div class="block" data-pessoas-picker data-pessoas-multi="1">
+        <span class="block text-[13px] font-semibold text-navy mb-1.5">Adicionar em cópia <span
+            class="text-faint font-normal">(opcional)</span></span>
+        <div data-pessoas-chips class="flex flex-wrap gap-1.5 mb-1.5"></div>
+        <div class="relative">
+          <input type="text" data-pessoas-input autocomplete="off" placeholder="Digite o nome da pessoa…"
+            class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+          <ul data-pessoas-lista
+            class="hidden absolute left-0 right-0 z-20 mt-1 max-h-56 overflow-y-auto rounded-lg bg-white ring-1 ring-line shadow-card text-sm"></ul>
+        </div>
+        <select name="observadores" multiple data-pessoas-select class="hidden">
+          {% for u in usuarios_copia %}
+          <option value="{{ u.id }}">{{ u.nome }}{% if u.departamento %} — {{ u.departamento }}{% endif %}</option>
+          {% endfor %}
+        </select>
+        <span class="block text-xs text-muted mt-1">Digite para buscar. Quem estiver em cópia acompanha o chamado
+          (mesmo de outro setor), mas não responde por ele.</span>
+      </div>
+
       {# Anexos (opcionais) — imagens/documentos na abertura #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Anexos <span
@@ -192,4 +213,5 @@
 
 {% block scripts %}
 <script src="/static/js/novo_chamado.js"></script>
+<script src="/static/js/pessoas_picker.js"></script>
 {% endblock %}
