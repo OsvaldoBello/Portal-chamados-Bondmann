@@ -235,6 +235,11 @@ async def kanban(
     dep_id = _dep_id(ctx)
     chamados = await repo.fila(ctx.user.claims, departamento_id=dep_id)
     colunas = {s: [c for c in chamados if c["status"] == s] for s in status_list}
+    if is_marketing:
+        # Coluna "Concluídos" foge da ordenação padrão da fila (por data de
+        # entrega): aqui o que importa é destacar quem terminou por último, não
+        # o prazo (já cumprido). Mais recente concluído primeiro.
+        colunas["RESOLVIDO"].sort(key=lambda c: c["resolvido_em"] or c["created_at"], reverse=True)
     stats = await repo.fila_stats(ctx.user.claims, departamento_id=dep_id)
     return render(
         request,
