@@ -105,6 +105,7 @@ class ChamadosRepo:
                 """
                 SELECT c.id, c.codigo, c.titulo, c.descricao, c.status, c.prioridade,
                        c.cliente_id, c.operador_id, c.departamento_id, c.data_entrega,
+                       c.sem_prazo,
                        c.created_at, c.limite_resposta, c.limite_resolucao,
                        c.respondido_em, c.resolvido_em,
                        c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
@@ -249,20 +250,24 @@ class ChamadosRepo:
         data_entrega: "date | None" = None,
         volume: int = 1,
         origem_demanda: str = "Solicitação",
+        sem_prazo: bool = False,
     ) -> dict[str, Any]:
         """Cria um chamado endereçado a um departamento. Código/SLA via triggers.
 
         ``data_entrega`` (fluxo por demanda do Marketing) define o prazo de SLA
         diretamente — o trigger ``calcular_sla_chamado`` usa a data em vez da
-        prioridade quando ela é informada (migration 0022)."""
+        prioridade quando ela é informada (migration 0022). ``sem_prazo`` (0040)
+        é o oposto: demanda sem urgência nem prazo, o trigger não calcula SLA
+        nenhum (tem prioridade sobre ``data_entrega``)."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO chamados
                     (empresa_id, cliente_id, categoria_id, subcategoria_id, departamento_id,
-                     titulo, descricao, prioridade, data_entrega, setor, volume, origem_demanda)
+                     titulo, descricao, prioridade, data_entrega, setor, volume, origem_demanda,
+                     sem_prazo)
                 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7,
-                        $8::prioridade_chamado, $9::date, $10, $11::integer, $12)
+                        $8::prioridade_chamado, $9::date, $10, $11::integer, $12, $13::boolean)
                 RETURNING id, codigo
                 """,
                 empresa_id,
@@ -277,6 +282,7 @@ class ChamadosRepo:
                 setor,
                 volume,
                 origem_demanda,
+                sem_prazo,
             )
             return dict(row)
 
@@ -353,7 +359,8 @@ class ChamadosRepo:
     # ---------------------------------------------------------------------
     _FILA_COLUNAS = """
         SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade, c.setor,
-               c.created_at, c.limite_resolucao, c.respondido_em, c.resolvido_em,
+               c.created_at, c.data_entrega, c.sem_prazo,
+               c.limite_resolucao, c.respondido_em, c.resolvido_em,
                cat.nome AS categoria, dep.nome AS departamento,
                autor.nome AS cliente_nome, autor.avatar_path AS cliente_avatar_path,
                autor.updated_at AS cliente_avatar_atualizado_em,
@@ -390,8 +397,9 @@ class ChamadosRepo:
 
         Filtros opcionais: ``status``, ``categoria_id``, ``prioridade`` e
         ``operador_id`` (o filtro de SLA é aplicado na camada de rota, pois depende
-        do cálculo de estado do domínio). **Ordenação padrão: data de abertura
-        (mais recentes primeiro).**
+        do cálculo de estado do domínio). **Ordenação padrão: data de entrega
+        (mais próxima primeiro); sem data de entrega fica por último, por data
+        de abertura (mais recentes primeiro).**
         """
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
@@ -406,7 +414,7 @@ class ChamadosRepo:
                    AND ($3::uuid IS NULL OR c.categoria_id = $3::uuid)
                    AND ($4::prioridade_chamado IS NULL OR c.prioridade = $4::prioridade_chamado)
                    AND ($5::uuid IS NULL OR c.operador_id = $5::uuid)
-                 ORDER BY c.created_at DESC
+                 ORDER BY c.data_entrega ASC NULLS LAST, c.created_at DESC
                  LIMIT $2
                 """,
                 status,

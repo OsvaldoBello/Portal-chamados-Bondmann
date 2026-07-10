@@ -16,6 +16,8 @@
   var campoPrioridade = document.getElementById("campo-prioridade");
   var campoData = document.getElementById("campo-data-entrega");
   var campoVolume = document.getElementById("campo-volume");
+  var semPrazoCheckbox = document.getElementById("sem-prazo-checkbox");
+  var dataEntregaInput = document.getElementById("data-entrega-input");
 
   function ehMarketing() {
     return marketingId !== "" && depSelect && depSelect.value === marketingId;
@@ -37,8 +39,19 @@
     if (campoVolume) campoVolume.style.display = marketing ? "block" : "none";
   }
 
+  // "Sem data limite": desabilita (e limpa) o campo de data enquanto marcado,
+  // pra não submeter um valor de data junto com a demanda sem prazo (0040).
+  function aplicarSemPrazo() {
+    if (!semPrazoCheckbox || !dataEntregaInput) return;
+    var semPrazo = semPrazoCheckbox.checked;
+    dataEntregaInput.disabled = semPrazo;
+    if (semPrazo) dataEntregaInput.value = "";
+  }
+
   if (depSelect) depSelect.addEventListener("change", aplicar);
+  if (semPrazoCheckbox) semPrazoCheckbox.addEventListener("change", aplicarSemPrazo);
   aplicar(); // estado inicial (ex.: re-render de erro com Marketing já selecionado)
+  aplicarSemPrazo();
 
   // Categoria "Outros": ao trocar a categoria, o HTMX recarrega as <option>s de
   // subcategoria (fetch em /portal/chamados/subcategorias). Quando a categoria

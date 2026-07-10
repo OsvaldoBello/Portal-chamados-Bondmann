@@ -36,6 +36,8 @@
             <div>Aberto {{ fmt_dt(chamado.created_at) }}</div>
             {% if chamado.data_entrega %}
             <div class="text-amber-700 font-semibold">Entrega: {{ chamado.data_entrega.strftime('%d/%m/%Y') }}</div>
+            {% elif chamado.sem_prazo %}
+            <div class="text-slate-400">Sem prazo definido</div>
             {% else %}
             <div>Prazo {{ fmt_dt(chamado.limite_resolucao) }}</div>
             {% endif %}

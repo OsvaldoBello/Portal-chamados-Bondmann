@@ -110,10 +110,16 @@
       <label class="hidden" id="campo-data-entrega">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Data de entrega desejada</span>
         <input type="date" name="data_entrega" id="data-entrega-input" min="{{ data_entrega_min }}"
-          value="{{ f.get('data_entrega', '') }}"
+          value="{{ f.get('data_entrega', '') }}" {% if f.get('sem_prazo') %}disabled{% endif %}
           class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
         <span class="block text-xs text-muted mt-1">O Marketing trabalha por demanda: prazo mínimo de
           <strong>48h</strong> (2 dias) para início do desenvolvimento.</span>
+        <label class="flex items-center gap-2 mt-2 cursor-pointer">
+          <input type="checkbox" name="sem_prazo" id="sem-prazo-checkbox" value="on"
+            {% if f.get('sem_prazo') %}checked{% endif %}
+            class="rounded ring-1 ring-line text-navy-700 focus:ring-navy-500">
+          <span class="text-xs text-muted">Sem data limite — sem urgência, faremos quando sobrar tempo</span>
+        </label>
       </label>
 
       {# Volume (Marketing) #}

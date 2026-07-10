@@ -254,6 +254,7 @@ async def criar_chamado(
     prioridade: str = Form("MEDIA"),
     setor: str = Form(""),             # setor demandante
     data_entrega: str = Form(""),      # fluxo por demanda (Marketing)
+    sem_prazo: str = Form(""),         # Marketing: demanda sem urgência/prazo (0040)
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
@@ -265,6 +266,7 @@ async def criar_chamado(
     subcategoria_id = subcategoria_id.strip()
     setor = setor.strip()
     data_entrega = data_entrega.strip()
+    sem_prazo_marcado = sem_prazo.strip().lower() in {"on", "1", "true"}
     prioridade = prioridade.upper()
     if prioridade not in PRIORIDADES:
         prioridade = "MEDIA"
@@ -278,6 +280,7 @@ async def criar_chamado(
         "prioridade": prioridade,
         "setor": setor,
         "data_entrega": data_entrega,
+        "sem_prazo": sem_prazo_marcado,
     }
 
     async def _erro(msg: str, code: int = status.HTTP_400_BAD_REQUEST):
@@ -300,21 +303,32 @@ async def criar_chamado(
     )
     is_marketing = bool(marketing_id) and departamento_id == marketing_id
     data_entrega_val: date | None = None
+    sem_prazo_val = False
     if is_marketing:
         prioridade = "MEDIA"  # não usada no fluxo por demanda
-        if not data_entrega:
-            return await _erro("Informe a data de entrega desejada (mínimo de 48h).")
-        try:
-            escolhida = date.fromisoformat(data_entrega)
-        except ValueError:
-            return await _erro("Data de entrega inválida.")
-        minimo = _data_entrega_min()
-        if escolhida < minimo:
-            return await _erro(
-                "A data de entrega deve ser a partir de "
-                f"{minimo.strftime('%d/%m/%Y')} — mínimo de 48h para início do desenvolvimento."
-            )
-        data_entrega_val = escolhida
+        if sem_prazo_marcado:
+            # Demanda sem urgência nem prazo determinado — feita quando sobrar
+            # tempo (0040). Prioridade BAIXA: não entra na escalada automática
+            # de prioridade do Marketing (0031), que só olha data_entrega.
+            sem_prazo_val = True
+            prioridade = "BAIXA"
+        else:
+            if not data_entrega:
+                return await _erro(
+                    "Informe a data de entrega desejada (mínimo de 48h) ou marque "
+                    "\"Sem data limite\"."
+                )
+            try:
+                escolhida = date.fromisoformat(data_entrega)
+            except ValueError:
+                return await _erro("Data de entrega inválida.")
+            minimo = _data_entrega_min()
+            if escolhida < minimo:
+                return await _erro(
+                    "A data de entrega deve ser a partir de "
+                    f"{minimo.strftime('%d/%m/%Y')} — mínimo de 48h para início do desenvolvimento."
+                )
+            data_entrega_val = escolhida
     if not categoria_id:
         return await _erro("Selecione a categoria do chamado.")
     # A categoria precisa pertencer ao departamento escolhido (0019 — defesa em
@@ -377,6 +391,7 @@ async def criar_chamado(
         data_entrega=data_entrega_val,
         volume=volume_val,
         origem_demanda=origem_demanda_val,
+        sem_prazo=sem_prazo_val,
     )
 
     # "Em cópia" (Fase 8): observadores escolhidos já na abertura — multi-setorial,
