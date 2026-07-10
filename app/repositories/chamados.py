@@ -131,7 +131,9 @@ class ChamadosRepo:
             rows = await conn.fetch(
                 """
                 SELECT m.id, m.conteudo, m.is_interna, m.created_at, m.anexos,
-                       p.nome AS remetente_nome, p.role AS remetente_role
+                       p.nome AS remetente_nome, p.role AS remetente_role,
+                       p.avatar_path AS remetente_avatar_path,
+                       p.updated_at AS remetente_avatar_atualizado_em
                   FROM mensagens m
                   LEFT JOIN perfis p ON p.id = m.remetente_id
                  WHERE m.chamado_id = $1::uuid
@@ -379,6 +381,13 @@ class ChamadosRepo:
         setor (o público que a fila existe para atender). Chamados abertos por um
         colega ficam em :meth:`chamados_departamento`; os meus, em :meth:`listar`.
 
+        **Exceção Marketing:** o setor não funciona como suporte (alguém de fora
+        abre, alguém do setor atende) — é um quadro estilo Trello onde o próprio
+        time cria e gerencia as demandas. Por isso, pra chamados destinados ao
+        Marketing, o recorte "de fora do setor" não se aplica: toda demanda do
+        departamento aparece aqui (kanban/fila), inclusive as próprias e as de
+        colega, além de continuar em :meth:`listar` ("Meus chamados").
+
         Filtros opcionais: ``status``, ``categoria_id``, ``prioridade`` e
         ``operador_id`` (o filtro de SLA é aplicado na camada de rota, pois depende
         do cálculo de estado do domínio). **Ordenação padrão: data de abertura
@@ -389,8 +398,10 @@ class ChamadosRepo:
                 self._FILA_COLUNAS
                 + """
                  WHERE ($6::uuid IS NULL OR c.departamento_id = $6::uuid)
-                   AND c.cliente_id <> auth.uid()
-                   AND autor.departamento_id IS DISTINCT FROM c.departamento_id
+                   AND (
+                     dep.nome = 'Marketing'
+                     OR (c.cliente_id <> auth.uid() AND autor.departamento_id IS DISTINCT FROM c.departamento_id)
+                   )
                    AND ($1::status_chamado IS NULL OR c.status = $1::status_chamado)
                    AND ($3::uuid IS NULL OR c.categoria_id = $3::uuid)
                    AND ($4::prioridade_chamado IS NULL OR c.prioridade = $4::prioridade_chamado)
@@ -454,15 +465,19 @@ class ChamadosRepo:
 
         Usada para ETag/304 no polling: se nada mudou, evita buscar todas as linhas
         e re-renderizar o fragmento (Seção 2.2). Escopo alinhado ao de :meth:`fila`
-        (chamados "de fora" do setor); os demais filtros entram no ETag pela rota."""
+        (chamados "de fora" do setor, exceto Marketing — ver docstring de `fila`);
+        os demais filtros entram no ETag pela rota."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """SELECT count(*)::int AS n, max(c.updated_at) AS mx
                      FROM chamados c
                      LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                     LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                     WHERE ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
-                      AND c.cliente_id <> auth.uid()
-                      AND autor.departamento_id IS DISTINCT FROM c.departamento_id
+                      AND (
+                        dep.nome = 'Marketing'
+                        OR (c.cliente_id <> auth.uid() AND autor.departamento_id IS DISTINCT FROM c.departamento_id)
+                      )
                       AND ($1::status_chamado IS NULL OR c.status = $1::status_chamado)""",
                 status,
                 departamento_id,
@@ -471,15 +486,19 @@ class ChamadosRepo:
 
     async def fila_stats(self, claims: dict, *, departamento_id: str | None = None) -> dict[str, int]:
         """Contagem por status no escopo da fila/kanban (cabeçalhos), mesmo
-        recorte de :meth:`fila` — não conta chamados próprios nem de colegas."""
+        recorte de :meth:`fila` — não conta chamados próprios nem de colegas,
+        exceto no Marketing (quadro Trello: toda demanda do setor conta)."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """SELECT c.status, count(*) AS n
                      FROM chamados c
                      LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                     LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                     WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
-                      AND c.cliente_id <> auth.uid()
-                      AND autor.departamento_id IS DISTINCT FROM c.departamento_id
+                      AND (
+                        dep.nome = 'Marketing'
+                        OR (c.cliente_id <> auth.uid() AND autor.departamento_id IS DISTINCT FROM c.departamento_id)
+                      )
                     GROUP BY c.status""",
                 departamento_id,
             )
@@ -525,15 +544,24 @@ class ChamadosRepo:
 
         Idempotente: só age quando o chamado está em ``NOVO`` (senão devolve None).
         Segregação de função: o autor do chamado nunca pode assumir o próprio
-        chamado, mesmo sendo staff do setor de destino (devolve None). Registra
+        chamado, mesmo sendo staff do setor de destino (devolve None) — **exceto
+        no Marketing**, onde o próprio setor cria e gerencia as demandas (quadro
+        estilo Trello, sem a lógica de suporte de TI/RH). Registra
         ``ATENDIMENTO_INICIADO`` no histórico. Escopo por RLS (staff)."""
         async with rls_connection(claims) as conn:
             atual = await conn.fetchrow(
-                "SELECT status, cliente_id FROM chamados WHERE id = $1::uuid", chamado_id
+                """
+                SELECT c.status, c.cliente_id, dep.nome AS departamento
+                  FROM chamados c
+                  LEFT JOIN departamentos dep ON dep.id = c.departamento_id
+                 WHERE c.id = $1::uuid
+                """,
+                chamado_id,
             )
             if atual is None or atual["status"] != "NOVO":
                 return None
-            if str(atual["cliente_id"]) == str(operador_id):
+            eh_marketing = atual["departamento"] == "Marketing"
+            if not eh_marketing and str(atual["cliente_id"]) == str(operador_id):
                 return None
             row = await conn.fetchrow(
                 """
@@ -541,11 +569,12 @@ class ChamadosRepo:
                    SET status = 'EM_ATENDIMENTO'::status_chamado,
                        operador_id = $2::uuid
                  WHERE id = $1::uuid AND status = 'NOVO'::status_chamado
-                   AND cliente_id <> $2::uuid
+                   AND ($3::boolean OR cliente_id <> $2::uuid)
              RETURNING id, status, operador_id
                 """,
                 chamado_id,
                 operador_id,
+                eh_marketing,
             )
             if row is None:
                 return None
@@ -662,12 +691,22 @@ class ChamadosRepo:
 
         Segregação de função: não deixa atribuir o autor do chamado como o
         próprio responsável (devolve None nesse caso — a UI já não lista o
-        autor entre os operadores, isto é defesa em profundidade)."""
+        autor entre os operadores, isto é defesa em profundidade) — **exceto no
+        Marketing**, onde o autor É o dono da própria demanda no quadro."""
         async with rls_connection(claims) as conn:
-            atual = await conn.fetchrow("SELECT cliente_id FROM chamados WHERE id = $1::uuid", chamado_id)
+            atual = await conn.fetchrow(
+                """
+                SELECT c.cliente_id, dep.nome AS departamento
+                  FROM chamados c
+                  LEFT JOIN departamentos dep ON dep.id = c.departamento_id
+                 WHERE c.id = $1::uuid
+                """,
+                chamado_id,
+            )
             if atual is None:
                 return None
-            if operador_id and str(atual["cliente_id"]) == str(operador_id):
+            eh_marketing = atual["departamento"] == "Marketing"
+            if operador_id and not eh_marketing and str(atual["cliente_id"]) == str(operador_id):
                 return None
             row = await conn.fetchrow(
                 "UPDATE chamados SET operador_id = $2::uuid WHERE id = $1::uuid RETURNING id, operador_id",

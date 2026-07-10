@@ -261,12 +261,18 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
     # Portal (/portal/chamados/{id}), acessível a qualquer staff que veja o chamado.
     observadores = await repo.observadores(ctx.user.claims, chamado_id)
     eh_autor = str(chamado.get("cliente_id") or "") == str(ctx.user.id)
+    # Marketing é a exceção da segregação de função (0029): o setor não é
+    # suporte (alguém de fora abre, o setor atende) — é o próprio time que cria
+    # e gerencia as demandas, quadro estilo Trello. Lá o autor PODE ser o
+    # responsável pela própria demanda; nos demais setores, nunca.
+    eh_marketing = str(chamado.get("departamento") or "") == "Marketing"
     # Responsáveis atribuíveis = staff do departamento do chamado (mesmo setor),
-    # exceto o próprio autor (autor nunca é o responsável pelo próprio chamado).
+    # exceto o próprio autor (autor nunca é o responsável pelo próprio chamado) —
+    # exceto no Marketing, onde o autor entra na lista normalmente.
     operadores = await repo.operadores(
         ctx.user.claims,
         departamento_id=str(chamado.get("departamento_id") or "") or None,
-        excluir_id=str(chamado.get("cliente_id") or "") or None,
+        excluir_id=None if eh_marketing else (str(chamado.get("cliente_id") or "") or None),
     )
     # Líder de setor (0028) enxerga chamados abertos pela própria equipe mesmo
     # fora da fila do seu departamento — mas só ACOMPANHA: quem atende (muda
@@ -284,8 +290,9 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         ctx.perfil.get("departamento_id") or ""
     ) and bool(ctx.perfil.get("departamento_id"))
     ja_assumido = chamado.get("operador_id") is not None
-    pode_reivindicar = dept_bate and not eh_autor and not ja_assumido
-    pode_atender = dept_bate and not eh_autor and ja_assumido
+    bloqueado_por_autoria = eh_autor and not eh_marketing
+    pode_reivindicar = dept_bate and not bloqueado_por_autoria and not ja_assumido
+    pode_atender = dept_bate and not bloqueado_por_autoria and ja_assumido
     # Repasse de departamento é exclusivo do TI (RLS reforça); só então buscamos a lista.
     # Só entram setores que RECEBEM chamado (têm fila) — repassar para um setor sem
     # staff de atendimento não faz sentido (0027).
