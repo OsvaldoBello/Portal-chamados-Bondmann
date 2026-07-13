@@ -27,6 +27,8 @@ STATUS_META = {
                        "bg": "bg-st_atend/10",  "icon": "M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"},
     "AGUARDANDO":     {"label": "Aguardando",     "dot": "bg-st_aguard", "text": "text-st_aguard",
                        "bg": "bg-st_aguard/10", "icon": "M15.75 5.25v13.5m-7.5-13.5v13.5"},
+    "AGUARDANDO_TERCEIROS": {"label": "Aguardando terceiros", "dot": "bg-st_terceiros", "text": "text-st_terceiros",
+                       "bg": "bg-st_terceiros/10", "icon": "M15.75 5.25v13.5m-7.5-13.5v13.5"},
     "RESOLVIDO":      {"label": "Resolvido",      "dot": "bg-st_resolv", "text": "text-st_resolv",
                        "bg": "bg-st_resolv/10", "icon": "M4.5 12.75l6 6 9-13.5"},
 }

@@ -27,7 +27,7 @@ from app.templating import render
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
-STATUS_VALIDOS = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
+STATUS_VALIDOS = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO")
 
 
 @dataclass(frozen=True)
@@ -159,6 +159,7 @@ async def fila_lista(
             ("NOVO", "Novos"),
             ("A_FAZER", "A fazer"),
             ("EM_ATENDIMENTO", "Em andamento"),
+            ("AGUARDANDO_TERCEIROS", "Aguardando terceiros"),
             ("AGUARDANDO", "Aguardando Validação"),
             ("RESOLVIDO", "Concluídos"),
         ]
@@ -228,7 +229,7 @@ async def kanban(
 ):
     is_marketing = ctx.perfil.get("departamento") == "Marketing"
     if is_marketing:
-        status_list = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
+        status_list = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO")
     else:
         status_list = ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
 
@@ -380,18 +381,20 @@ async def mudar_status(
 ):
     """Troca de status (form da tela de detalhe e drag do Kanban).
 
-    Indo para ``EM_ATENDIMENTO`` a partir de um chamado ainda não assumido, isso
-    é o "iniciar atendimento" — atribui o operador (com a mesma segregação de
+    Saindo de ``NOVO``/``A_FAZER`` pra QUALQUER outro status, isso é o "iniciar
+    atendimento" — atribui o operador (com a mesma segregação de
     função/exceção do Marketing) em vez de só mudar o rótulo da coluna; sem essa
     atribuição o chamado "andava" no Kanban mas ninguém ficava responsável por
-    ele. Se o chamado já tinha operador (só mudando de coluna, ex.: devolvido de
-    "Aguardando"), cai no fallback de troca simples de status.
+    ele (bug real: arrastar direto de "A Fazer" pra "Aguardando", pulando "Em
+    andamento", deixava passar — BOND-2026-00035/00038). Se o chamado já tinha
+    operador (só mudando de coluna, ex.: devolvido de "Aguardando"),
+    ``iniciar_atendimento`` é um no-op e cai no fallback de troca simples.
     """
     resultado: dict | None = None
     if novo_status in STATUS_VALIDOS:
-        if novo_status == "EM_ATENDIMENTO":
+        if novo_status not in ("NOVO", "A_FAZER"):
             resultado = await repo.iniciar_atendimento(
-                ctx.user.claims, chamado_id, operador_id=ctx.user.id
+                ctx.user.claims, chamado_id, operador_id=ctx.user.id, novo_status=novo_status
             )
         if resultado is None:
             resultado = await repo.alterar_status(ctx.user.claims, chamado_id, novo_status)

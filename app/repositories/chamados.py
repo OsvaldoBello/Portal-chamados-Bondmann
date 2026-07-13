@@ -518,6 +518,7 @@ class ChamadosRepo:
             "total": sum(por.values()),
             "NOVO": por.get("NOVO", 0),
             "EM_ATENDIMENTO": por.get("EM_ATENDIMENTO", 0),
+            "AGUARDANDO_TERCEIROS": por.get("AGUARDANDO_TERCEIROS", 0),
             "AGUARDANDO": por.get("AGUARDANDO", 0),
             "RESOLVIDO": por.get("RESOLVIDO", 0),
         }
@@ -549,9 +550,17 @@ class ChamadosRepo:
             return [dict(r) for r in rows]
 
     async def iniciar_atendimento(
-        self, claims: dict, chamado_id: str, *, operador_id: str
+        self, claims: dict, chamado_id: str, *, operador_id: str, novo_status: str = "EM_ATENDIMENTO"
     ) -> dict[str, Any] | None:
-        """Inicia o atendimento: move NOVO/A_FAZER→EM_ATENDIMENTO e assume como responsável.
+        """Inicia o atendimento: move NOVO/A_FAZER→``novo_status`` e assume como responsável.
+
+        ``novo_status`` normalmente é ``EM_ATENDIMENTO`` (botão "Iniciar
+        atendimento"), mas o Kanban também chama isto para QUALQUER destino de
+        drag a partir de ``NOVO``/``A_FAZER`` (ex.: arrastar direto pra
+        "Aguardando", pulando "Em andamento") — sem isso, esse arraste só
+        trocava o status e o chamado ficava andando no quadro sem responsável
+        (bug real: BOND-2026-00035/00038, ambos foram parar em RESOLVIDO/
+        AGUARDANDO com ``operador_id`` nulo).
 
         Idempotente: só age quando o chamado ainda não foi assumido (``NOVO`` ou
         ``A_FAZER`` — o Kanban do Marketing tem essa coluna intermediária antes de
@@ -580,7 +589,7 @@ class ChamadosRepo:
             row = await conn.fetchrow(
                 """
                 UPDATE chamados
-                   SET status = 'EM_ATENDIMENTO'::status_chamado,
+                   SET status = $4::status_chamado,
                        operador_id = $2::uuid
                  WHERE id = $1::uuid
                    AND status IN ('NOVO'::status_chamado, 'A_FAZER'::status_chamado)
@@ -590,6 +599,7 @@ class ChamadosRepo:
                 chamado_id,
                 operador_id,
                 autoatendimento,
+                novo_status,
             )
             if row is None:
                 return None

@@ -41,7 +41,7 @@ def _chamado(**extra):
 
 class FakeRepo:
     def __init__(self, *, is_ti=True, status="NOVO", perfil_departamento_id="d1",
-                 operador_id=None, cliente_id="aaa", observadores=None):
+                 operador_id=None, cliente_id="aaa", observadores=None, departamento="TI"):
         self.acoes = []
         self._is_ti = is_ti
         self._status = status
@@ -49,12 +49,13 @@ class FakeRepo:
         self._operador_id = operador_id
         self._cliente_id = cliente_id
         self._observadores = observadores or []
+        self._departamento = departamento
         self.operadores_dep = "__nao_chamado__"  # captura o filtro de departamento
         self.operadores_excluir = "__nao_chamado__"  # captura o excluir_id
 
     async def perfil(self, claims):
         return {"id": OP, "nome": "Op TI", "role": "OPERADOR", "empresa_id": "e1",
-                "departamento_id": self._perfil_departamento_id, "departamento": "TI",
+                "departamento_id": self._perfil_departamento_id, "departamento": self._departamento,
                 "is_ti": self._is_ti}
 
     async def fila(self, claims, *, departamento_id=None, status=None, categoria_id=None,
@@ -63,11 +64,16 @@ class FakeRepo:
             "departamento_id": departamento_id, "categoria_id": categoria_id,
             "prioridade": prioridade, "operador_id": operador_id,
         }
-        cs = [_chamado(), _chamado(id="c2", codigo="BOND-2026-00002", status="EM_ATENDIMENTO")]
+        cs = [
+            _chamado(),
+            _chamado(id="c2", codigo="BOND-2026-00002", status="EM_ATENDIMENTO"),
+            _chamado(id="c3", codigo="BOND-2026-00003", status="AGUARDANDO_TERCEIROS"),
+        ]
         return [c for c in cs if status is None or c["status"] == status]
 
     async def fila_stats(self, claims, *, departamento_id=None):
-        return {"total": 2, "NOVO": 1, "EM_ATENDIMENTO": 1, "AGUARDANDO": 0, "RESOLVIDO": 0}
+        return {"total": 3, "NOVO": 1, "EM_ATENDIMENTO": 1, "AGUARDANDO_TERCEIROS": 1,
+                "AGUARDANDO": 0, "RESOLVIDO": 0}
 
     async def fila_assinatura(self, claims, *, departamento_id=None, status=None):
         return (2, NOW)
@@ -109,9 +115,9 @@ class FakeRepo:
     async def atribuir(self, claims, cid, operador_id):
         self.acoes.append(("atribuir", cid, operador_id)); return {"id": cid, "operador_id": operador_id}
 
-    async def iniciar_atendimento(self, claims, cid, *, operador_id):
+    async def iniciar_atendimento(self, claims, cid, *, operador_id, novo_status="EM_ATENDIMENTO"):
         self.acoes.append(("iniciar", cid, operador_id))
-        return {"id": cid, "status": "EM_ATENDIMENTO", "operador_id": operador_id}
+        return {"id": cid, "status": novo_status, "operador_id": operador_id}
 
     async def transferir(self, claims, cid, *, departamento_id):
         self.acoes.append(("transferir", cid, departamento_id))
@@ -168,8 +174,28 @@ def test_kanban_renderiza_colunas():
     assert "kanban-delete-btn" in r.text
 
 
+def test_kanban_marketing_tem_coluna_aguardando_terceiros_apos_em_andamento():
+    """"Aguardando terceiros" (0043/0044) fica entre "Em andamento" e
+    "Aguardando Validação" — chamado travado esperando um fornecedor
+    externo, não o solicitante."""
+    with ws_client(FakeRepo(departamento="Marketing")) as c:
+        r = c.get("/workspace/kanban")
+    assert r.status_code == 200
+    ordem = ["Em andamento", "Aguardando terceiros", "Aguardando Validação", "Concluídos"]
+    posicoes = [r.text.index(label) for label in ordem]
+    assert posicoes == sorted(posicoes)
+    assert 'data-status="AGUARDANDO_TERCEIROS"' in r.text
+    assert "BOND-2026-00003" in r.text
+
+
 def test_mudar_status_registra_e_redireciona():
+    """Chamado já assumido (``iniciar_atendimento`` não se aplica — no-op)
+    só troca o status, mesmo pulando direto pra "Aguardando"."""
+    async def _ja_assumido(claims, cid, *, operador_id, novo_status="EM_ATENDIMENTO"):
+        return None
+
     repo = FakeRepo()
+    repo.iniciar_atendimento = _ja_assumido
     with ws_client(repo) as c:
         t = _csrf(c)
         r = c.post("/workspace/chamados/c1/status", data={"novo_status": "AGUARDANDO"},
@@ -192,11 +218,27 @@ def test_mudar_status_para_em_atendimento_atribui_operador():
     assert not any(a[0] == "status" for a in repo.acoes)
 
 
+def test_mudar_status_pula_em_atendimento_tambem_atribui_operador():
+    """Arrastar direto de "A Fazer"/"Novo" pra "Aguardando" (pulando "Em
+    andamento") também é uma primeira atribuição — bug real (BOND-2026-00035/
+    00038): esse pulo só trocava o status e o chamado ficava sem operador
+    para sempre (``iniciar_atendimento`` só reage a ``NOVO``/``A_FAZER``, e
+    depois desse pulo o chamado nunca mais volta pra lá)."""
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/status", data={"novo_status": "AGUARDANDO"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ("iniciar", "c1", OP) in repo.acoes
+    assert not any(a[0] == "status" for a in repo.acoes)
+
+
 def test_mudar_status_para_em_atendimento_cai_no_fallback_se_ja_assumido():
     """Quando o chamado já tem operador (ex.: voltando de "Aguardando"),
     ``iniciar_atendimento`` não se aplica mais — cai na troca simples de
     status, preservando o operador já atribuído."""
-    async def _ja_assumido(claims, cid, *, operador_id):
+    async def _ja_assumido(claims, cid, *, operador_id, novo_status="EM_ATENDIMENTO"):
         return None
 
     repo = FakeRepo()
