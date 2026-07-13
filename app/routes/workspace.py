@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status, BackgroundTasks
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app.anexos import assinar_anexos, processar_uploads
 from app.auth.dependencies import CurrentUser, require_role
@@ -266,18 +266,21 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
     # Portal (/portal/chamados/{id}), acessível a qualquer staff que veja o chamado.
     observadores = await repo.observadores(ctx.user.claims, chamado_id)
     eh_autor = str(chamado.get("cliente_id") or "") == str(ctx.user.id)
-    # Marketing é a exceção da segregação de função (0029): o setor não é
-    # suporte (alguém de fora abre, o setor atende) — é o próprio time que cria
-    # e gerencia as demandas, quadro estilo Trello. Lá o autor PODE ser o
-    # responsável pela própria demanda; nos demais setores, nunca.
-    eh_marketing = str(chamado.get("departamento") or "") == "Marketing"
+    # Departamentos com autoatendimento (`departamentos.autoatendimento` —
+    # Marketing e RH, migrations 0038/0042) são a exceção da segregação de
+    # função (0029): o setor não é suporte (alguém de fora abre, o setor
+    # atende) — é o próprio time que cria e gerencia as demandas, quadro
+    # estilo Trello. Lá o autor PODE ser o responsável pela própria demanda;
+    # nos demais setores, nunca.
+    eh_autoatendimento = bool(chamado.get("autoatendimento"))
     # Responsáveis atribuíveis = staff do departamento do chamado (mesmo setor),
     # exceto o próprio autor (autor nunca é o responsável pelo próprio chamado) —
-    # exceto no Marketing, onde o autor entra na lista normalmente.
+    # exceto nos departamentos com autoatendimento, onde o autor entra na lista
+    # normalmente.
     operadores = await repo.operadores(
         ctx.user.claims,
         departamento_id=str(chamado.get("departamento_id") or "") or None,
-        excluir_id=None if eh_marketing else (str(chamado.get("cliente_id") or "") or None),
+        excluir_id=None if eh_autoatendimento else (str(chamado.get("cliente_id") or "") or None),
     )
     # Líder de setor (0028) enxerga chamados abertos pela própria equipe mesmo
     # fora da fila do seu departamento — mas só ACOMPANHA: quem atende (muda
@@ -295,7 +298,7 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         ctx.perfil.get("departamento_id") or ""
     ) and bool(ctx.perfil.get("departamento_id"))
     ja_assumido = chamado.get("operador_id") is not None
-    bloqueado_por_autoria = eh_autor and not eh_marketing
+    bloqueado_por_autoria = eh_autor and not eh_autoatendimento
     pode_reivindicar = dept_bate and not bloqueado_por_autoria and not ja_assumido
     pode_atender = dept_bate and not bloqueado_por_autoria and ja_assumido
     # Repasse de departamento é exclusivo do TI (RLS reforça); só então buscamos a lista.
@@ -375,8 +378,29 @@ async def mudar_status(
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
 ):
+    """Troca de status (form da tela de detalhe e drag do Kanban).
+
+    Indo para ``EM_ATENDIMENTO`` a partir de um chamado ainda não assumido, isso
+    é o "iniciar atendimento" — atribui o operador (com a mesma segregação de
+    função/exceção do Marketing) em vez de só mudar o rótulo da coluna; sem essa
+    atribuição o chamado "andava" no Kanban mas ninguém ficava responsável por
+    ele. Se o chamado já tinha operador (só mudando de coluna, ex.: devolvido de
+    "Aguardando"), cai no fallback de troca simples de status.
+    """
+    resultado: dict | None = None
     if novo_status in STATUS_VALIDOS:
-        await repo.alterar_status(ctx.user.claims, chamado_id, novo_status)
+        if novo_status == "EM_ATENDIMENTO":
+            resultado = await repo.iniciar_atendimento(
+                ctx.user.claims, chamado_id, operador_id=ctx.user.id
+            )
+        if resultado is None:
+            resultado = await repo.alterar_status(ctx.user.claims, chamado_id, novo_status)
+
+    # O drag do Kanban chama via fetch (header X-Kanban-Drag) e precisa saber se
+    # a mudança realmente aconteceu para poder desfazer o arraste na tela; o
+    # form clássico da tela de detalhe continua recebendo o redirect de sempre.
+    if request.headers.get("X-Kanban-Drag"):
+        return JSONResponse({"ok": resultado is not None})
     return _voltar(chamado_id, origem)
 
 

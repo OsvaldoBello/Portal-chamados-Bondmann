@@ -111,7 +111,7 @@ class ChamadosRepo:
                        c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
                        c.volume, c.origem_demanda, c.causa_atraso,
                        cat.nome AS categoria, sub.nome AS subcategoria,
-                       dep.nome AS departamento,
+                       dep.nome AS departamento, dep.autoatendimento,
                        autor.nome AS cliente_nome, autor.avatar_path AS cliente_avatar_path,
                        autor.updated_at AS cliente_avatar_atualizado_em,
                        op.nome AS operador_nome
@@ -388,12 +388,14 @@ class ChamadosRepo:
         setor (o público que a fila existe para atender). Chamados abertos por um
         colega ficam em :meth:`chamados_departamento`; os meus, em :meth:`listar`.
 
-        **Exceção Marketing:** o setor não funciona como suporte (alguém de fora
-        abre, alguém do setor atende) — é um quadro estilo Trello onde o próprio
-        time cria e gerencia as demandas. Por isso, pra chamados destinados ao
-        Marketing, o recorte "de fora do setor" não se aplica: toda demanda do
-        departamento aparece aqui (kanban/fila), inclusive as próprias e as de
-        colega, além de continuar em :meth:`listar` ("Meus chamados").
+        **Departamentos com autoatendimento** (``departamentos.autoatendimento`` —
+        hoje Marketing e RH, migrations 0038/0042): o setor não funciona como
+        suporte (alguém de fora abre, alguém do setor atende) — é um quadro estilo
+        Trello onde o próprio time cria e gerencia as demandas. Por isso, pra
+        chamados destinados a um desses departamentos, o recorte "de fora do
+        setor" não se aplica: toda demanda do departamento aparece aqui
+        (kanban/fila), inclusive as próprias e as de colega, além de continuar em
+        :meth:`listar` ("Meus chamados").
 
         Filtros opcionais: ``status``, ``categoria_id``, ``prioridade`` e
         ``operador_id`` (o filtro de SLA é aplicado na camada de rota, pois depende
@@ -407,7 +409,7 @@ class ChamadosRepo:
                 + """
                  WHERE ($6::uuid IS NULL OR c.departamento_id = $6::uuid)
                    AND (
-                     dep.nome = 'Marketing'
+                     dep.autoatendimento
                      OR (c.cliente_id <> auth.uid() AND autor.departamento_id IS DISTINCT FROM c.departamento_id)
                    )
                    AND ($1::status_chamado IS NULL OR c.status = $1::status_chamado)
@@ -473,8 +475,8 @@ class ChamadosRepo:
 
         Usada para ETag/304 no polling: se nada mudou, evita buscar todas as linhas
         e re-renderizar o fragmento (Seção 2.2). Escopo alinhado ao de :meth:`fila`
-        (chamados "de fora" do setor, exceto Marketing — ver docstring de `fila`);
-        os demais filtros entram no ETag pela rota."""
+        (chamados "de fora" do setor, exceto autoatendimento — ver docstring de
+        `fila`); os demais filtros entram no ETag pela rota."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """SELECT count(*)::int AS n, max(c.updated_at) AS mx
@@ -483,7 +485,7 @@ class ChamadosRepo:
                      LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                     WHERE ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
                       AND (
-                        dep.nome = 'Marketing'
+                        dep.autoatendimento
                         OR (c.cliente_id <> auth.uid() AND autor.departamento_id IS DISTINCT FROM c.departamento_id)
                       )
                       AND ($1::status_chamado IS NULL OR c.status = $1::status_chamado)""",
@@ -495,7 +497,8 @@ class ChamadosRepo:
     async def fila_stats(self, claims: dict, *, departamento_id: str | None = None) -> dict[str, int]:
         """Contagem por status no escopo da fila/kanban (cabeçalhos), mesmo
         recorte de :meth:`fila` — não conta chamados próprios nem de colegas,
-        exceto no Marketing (quadro Trello: toda demanda do setor conta)."""
+        exceto nos departamentos com autoatendimento (quadro Trello: toda
+        demanda do setor conta)."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """SELECT c.status, count(*) AS n
@@ -504,7 +507,7 @@ class ChamadosRepo:
                      LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                     WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
                       AND (
-                        dep.nome = 'Marketing'
+                        dep.autoatendimento
                         OR (c.cliente_id <> auth.uid() AND autor.departamento_id IS DISTINCT FROM c.departamento_id)
                       )
                     GROUP BY c.status""",
@@ -548,41 +551,45 @@ class ChamadosRepo:
     async def iniciar_atendimento(
         self, claims: dict, chamado_id: str, *, operador_id: str
     ) -> dict[str, Any] | None:
-        """Inicia o atendimento: move NOVO→EM_ATENDIMENTO e assume como responsável.
+        """Inicia o atendimento: move NOVO/A_FAZER→EM_ATENDIMENTO e assume como responsável.
 
-        Idempotente: só age quando o chamado está em ``NOVO`` (senão devolve None).
-        Segregação de função: o autor do chamado nunca pode assumir o próprio
-        chamado, mesmo sendo staff do setor de destino (devolve None) — **exceto
-        no Marketing**, onde o próprio setor cria e gerencia as demandas (quadro
-        estilo Trello, sem a lógica de suporte de TI/RH). Registra
+        Idempotente: só age quando o chamado ainda não foi assumido (``NOVO`` ou
+        ``A_FAZER`` — o Kanban do Marketing tem essa coluna intermediária antes de
+        "Em atendimento"; senão devolve None). Segregação de função: o autor do
+        chamado nunca pode assumir o próprio chamado, mesmo sendo staff do setor
+        de destino (devolve None) — **exceto nos departamentos com
+        autoatendimento** (``departamentos.autoatendimento`` — Marketing e RH,
+        migrations 0038/0042), onde o próprio setor cria e gerencia as demandas
+        (quadro estilo Trello, sem a lógica de suporte de TI). Registra
         ``ATENDIMENTO_INICIADO`` no histórico. Escopo por RLS (staff)."""
         async with rls_connection(claims) as conn:
             atual = await conn.fetchrow(
                 """
-                SELECT c.status, c.cliente_id, dep.nome AS departamento
+                SELECT c.status, c.cliente_id, dep.autoatendimento
                   FROM chamados c
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                  WHERE c.id = $1::uuid
                 """,
                 chamado_id,
             )
-            if atual is None or atual["status"] != "NOVO":
+            if atual is None or atual["status"] not in ("NOVO", "A_FAZER"):
                 return None
-            eh_marketing = atual["departamento"] == "Marketing"
-            if not eh_marketing and str(atual["cliente_id"]) == str(operador_id):
+            autoatendimento = bool(atual["autoatendimento"])
+            if not autoatendimento and str(atual["cliente_id"]) == str(operador_id):
                 return None
             row = await conn.fetchrow(
                 """
                 UPDATE chamados
                    SET status = 'EM_ATENDIMENTO'::status_chamado,
                        operador_id = $2::uuid
-                 WHERE id = $1::uuid AND status = 'NOVO'::status_chamado
+                 WHERE id = $1::uuid
+                   AND status IN ('NOVO'::status_chamado, 'A_FAZER'::status_chamado)
                    AND ($3::boolean OR cliente_id <> $2::uuid)
              RETURNING id, status, operador_id
                 """,
                 chamado_id,
                 operador_id,
-                eh_marketing,
+                autoatendimento,
             )
             if row is None:
                 return None
@@ -699,12 +706,13 @@ class ChamadosRepo:
 
         Segregação de função: não deixa atribuir o autor do chamado como o
         próprio responsável (devolve None nesse caso — a UI já não lista o
-        autor entre os operadores, isto é defesa em profundidade) — **exceto no
-        Marketing**, onde o autor É o dono da própria demanda no quadro."""
+        autor entre os operadores, isto é defesa em profundidade) — **exceto
+        nos departamentos com autoatendimento** (Marketing e RH), onde o autor
+        É o dono da própria demanda no quadro."""
         async with rls_connection(claims) as conn:
             atual = await conn.fetchrow(
                 """
-                SELECT c.cliente_id, dep.nome AS departamento
+                SELECT c.cliente_id, dep.autoatendimento
                   FROM chamados c
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                  WHERE c.id = $1::uuid
@@ -713,8 +721,8 @@ class ChamadosRepo:
             )
             if atual is None:
                 return None
-            eh_marketing = atual["departamento"] == "Marketing"
-            if operador_id and not eh_marketing and str(atual["cliente_id"]) == str(operador_id):
+            autoatendimento = bool(atual["autoatendimento"])
+            if operador_id and not autoatendimento and str(atual["cliente_id"]) == str(operador_id):
                 return None
             row = await conn.fetchrow(
                 "UPDATE chamados SET operador_id = $2::uuid WHERE id = $1::uuid RETURNING id, operador_id",

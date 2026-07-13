@@ -38,11 +38,37 @@
           body.set("csrf_token", csrf());
           fetch("/workspace/chamados/" + id + "/status", {
             method: "POST",
-            headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
+            headers: {
+              "X-CSRF-Token": csrf(),
+              "X-Kanban-Drag": "1",
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
             body: body.toString(),
             credentials: "same-origin",
-          }).then(function () { window.location.reload(); })
-            .catch(function () { window.location.reload(); });
+          })
+            .then(function (resp) {
+              if (!resp.ok) {
+                // Ex.: CSRF expirado (403). O servidor não aplicou a mudança.
+                throw new Error("http_" + resp.status);
+              }
+              return resp.json();
+            })
+            .then(function (data) {
+              if (!data.ok) {
+                // A mudança não teve efeito no servidor (ex.: alguém já assumiu o
+                // chamado). Sem isso, o card "voltava" pra coluna antiga sem
+                // nenhuma explicação — parecia que o Kanban tinha travado.
+                window.alert(
+                  "Não foi possível mover o chamado para \"" + destino +
+                  "\". Ele pode já ter sido assumido por outra pessoa. A tela vai recarregar."
+                );
+              }
+              window.location.reload();
+            })
+            .catch(function () {
+              window.alert("Falha ao salvar a mudança de status. A tela vai recarregar.");
+              window.location.reload();
+            });
         },
       });
     });

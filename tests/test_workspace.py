@@ -172,10 +172,58 @@ def test_mudar_status_registra_e_redireciona():
     repo = FakeRepo()
     with ws_client(repo) as c:
         t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/status", data={"novo_status": "AGUARDANDO"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ("status", "c1", "AGUARDANDO") in repo.acoes
+
+
+def test_mudar_status_para_em_atendimento_atribui_operador():
+    """Arrastar para "Em atendimento" é "iniciar atendimento" — atribui o
+    operador em vez de só trocar o rótulo da coluna (senão o chamado "andava"
+    no Kanban sem que ninguém ficasse responsável por ele)."""
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/status", data={"novo_status": "EM_ATENDIMENTO"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ("iniciar", "c1", OP) in repo.acoes
+    assert not any(a[0] == "status" for a in repo.acoes)
+
+
+def test_mudar_status_para_em_atendimento_cai_no_fallback_se_ja_assumido():
+    """Quando o chamado já tem operador (ex.: voltando de "Aguardando"),
+    ``iniciar_atendimento`` não se aplica mais — cai na troca simples de
+    status, preservando o operador já atribuído."""
+    async def _ja_assumido(claims, cid, *, operador_id):
+        return None
+
+    repo = FakeRepo()
+    repo.iniciar_atendimento = _ja_assumido
+    with ws_client(repo) as c:
+        t = _csrf(c)
         r = c.post("/workspace/chamados/c1/status", data={"novo_status": "EM_ATENDIMENTO"},
                    headers={"X-CSRF-Token": t}, follow_redirects=False)
     assert r.status_code == 303
     assert ("status", "c1", "EM_ATENDIMENTO") in repo.acoes
+
+
+def test_mudar_status_via_kanban_drag_retorna_json():
+    """O drag do Kanban manda o header X-Kanban-Drag e espera um JSON com o
+    resultado (para desfazer o arraste na tela se o servidor não aplicou a
+    mudança), em vez do redirect usado pelo form clássico da tela de detalhe."""
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/status",
+            data={"novo_status": "EM_ATENDIMENTO"},
+            headers={"X-CSRF-Token": t, "X-Kanban-Drag": "1"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
 
 
 def test_status_invalido_ignorado():
