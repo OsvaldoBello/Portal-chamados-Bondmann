@@ -59,6 +59,28 @@ def test_sem_prazo_indefinido():
     assert s.estado == "indefinido"
 
 
+def test_aguardando_terceiros_pausa_mesmo_com_prazo_vencido():
+    """Card parado em "Aguardando terceiros" não pode aparecer vencido/piscando:
+    o prazo real só é corrigido (0044) quando ele SAI do status, então enquanto
+    está "dentro" o `limite_resolucao` já pode estar tecnicamente no passado."""
+    created, limite = _janela(19, -1)  # já venceria há 1h se não estivesse pausado
+    s = estado_sla(created, limite, agora=BASE, status="AGUARDANDO_TERCEIROS")
+    assert s.estado == "pausado" and not s.pulsar
+    assert s.texto == "Prazo pausado"
+
+
+def test_aguardando_tambem_pausa():
+    created, limite = _janela(1, 23)
+    s = estado_sla(created, limite, agora=BASE, status="AGUARDANDO")
+    assert s.estado == "pausado" and not s.pulsar
+
+
+def test_resolvido_tem_prioridade_sobre_pausado():
+    s = estado_sla(BASE, BASE + timedelta(hours=1), resolvido_em=BASE, agora=BASE,
+                    status="AGUARDANDO_TERCEIROS")
+    assert s.estado == "resolvido"
+
+
 # --------------------------------------------------------------------------
 # Barra de progresso (Fase 3): enche com o tempo; verde→amarelo(metade)→vermelho
 # --------------------------------------------------------------------------
@@ -100,3 +122,10 @@ def test_barra_resolvido_e_cheia_neutra():
 def test_barra_sem_prazo_indefinida_vazia():
     b = barra_sla(BASE, None, agora=BASE)
     assert b.estado == "indefinido" and b.pct == 0
+
+
+def test_barra_pausada_nao_pulsa_mesmo_vencida():
+    created, limite = _janela(19, -1)  # venceria há 1h se não estivesse pausado
+    b = barra_sla(created, limite, agora=BASE, status="AGUARDANDO_TERCEIROS")
+    assert b.estado == "pausado" and not b.pulsar
+    assert b.texto == "Prazo pausado"

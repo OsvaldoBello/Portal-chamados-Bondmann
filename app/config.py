@@ -79,6 +79,14 @@ class Settings(BaseSettings):
     # Região da conta: US = https://api.mailgun.net | EU = https://api.eu.mailgun.net
     mailgun_base_url: str = Field(default="https://api.mailgun.net")
 
+    # --- WhatsApp Cloud API (Meta) ---
+    # Token arbitrário definido por nós e colado no painel da Meta ("Verificar
+    # token"); usado só no handshake GET de assinatura do webhook.
+    whatsapp_verify_token: str = Field(default="")
+    # App Secret do app da Meta, usado para validar a assinatura HMAC
+    # (header X-Hub-Signature-256) de cada POST recebido no webhook.
+    whatsapp_app_secret: str = Field(default="")
+
     @property
     def email_from(self) -> str:
         """Remetente do e-mail. Para alinhamento DKIM/DMARC no Mailgun o domínio

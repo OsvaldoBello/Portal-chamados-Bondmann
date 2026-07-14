@@ -1,11 +1,12 @@
 {# Chip visual de SLA (Fase 4) — cor por estado; vermelho piscante quando crítico. #}
 {% macro sla_chip(chamado) %}
-  {% set s = estado_sla(chamado.created_at, chamado.limite_resolucao, chamado.resolvido_em) %}
+  {% set s = estado_sla(chamado.created_at, chamado.limite_resolucao, chamado.resolvido_em, status=chamado.status) %}
   {% set cls = {
       'ok': 'bg-sla-ok/10 text-sla-ok',
       'warn': 'bg-sla-warn/10 text-sla-warn',
       'danger': 'bg-sla-danger/10 text-sla-danger',
       'resolvido': 'bg-slate-100 text-slate-500',
+      'pausado': 'bg-slate-100 text-slate-500',
       'indefinido': 'bg-slate-100 text-slate-400',
   } %}
   <span class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold {{ cls[s.estado] }}{% if s.pulsar %} animate-pulse{% endif %}">
@@ -18,12 +19,13 @@
    A largura é aplicada por JS (shell.js lê data-sla-pct) — CSP não permite
    style="" inline. #}
 {% macro sla_barra(chamado) %}
-  {% set b = barra_sla(chamado.created_at, chamado.limite_resolucao, chamado.resolvido_em) %}
+  {% set b = barra_sla(chamado.created_at, chamado.limite_resolucao, chamado.resolvido_em, status=chamado.status) %}
   {% set fill = {
       'ok': 'bg-sla-ok',
       'warn': 'bg-sla-warn',
       'danger': 'bg-sla-danger',
       'resolvido': 'bg-st_resolv',
+      'pausado': 'bg-slate-300',
       'indefinido': 'bg-slate-300',
   } %}
   {% set txt = {
@@ -31,6 +33,7 @@
       'warn': 'text-sla-warn',
       'danger': 'text-sla-danger',
       'resolvido': 'text-slate-500',
+      'pausado': 'text-slate-500',
       'indefinido': 'text-slate-400',
   } %}
   <div>

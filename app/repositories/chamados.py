@@ -381,6 +381,9 @@ class ChamadosRepo:
         categoria_id: str | None = None,
         prioridade: str | None = None,
         operador_id: str | None = None,
+        setor: str | None = None,
+        data_de: "date | None" = None,
+        data_ate: "date | None" = None,
         limite: int = 200,
     ) -> list[dict[str, Any]]:
         """Fila/Kanban (a atender): chamados do MEU setor abertos por alguém que
@@ -397,11 +400,13 @@ class ChamadosRepo:
         (kanban/fila), inclusive as próprias e as de colega, além de continuar em
         :meth:`listar` ("Meus chamados").
 
-        Filtros opcionais: ``status``, ``categoria_id``, ``prioridade`` e
-        ``operador_id`` (o filtro de SLA é aplicado na camada de rota, pois depende
-        do cálculo de estado do domínio). **Ordenação padrão: data de entrega
-        (mais próxima primeiro); sem data de entrega fica por último, por data
-        de abertura (mais recentes primeiro).**
+        Filtros opcionais: ``status``, ``categoria_id``, ``prioridade``,
+        ``operador_id``, ``setor`` (setor solicitante, texto livre) e o período
+        ``data_de``/``data_ate`` (sobre `created_at`, inclusive nas duas pontas —
+        o filtro de SLA é aplicado na camada de rota, pois depende do cálculo de
+        estado do domínio). **Ordenação padrão: data de entrega (mais próxima
+        primeiro); sem data de entrega fica por último, por data de abertura
+        (mais recentes primeiro).**
         """
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
@@ -416,6 +421,9 @@ class ChamadosRepo:
                    AND ($3::uuid IS NULL OR c.categoria_id = $3::uuid)
                    AND ($4::prioridade_chamado IS NULL OR c.prioridade = $4::prioridade_chamado)
                    AND ($5::uuid IS NULL OR c.operador_id = $5::uuid)
+                   AND ($7::text IS NULL OR c.setor = $7::text)
+                   AND ($8::date IS NULL OR c.created_at >= $8::date)
+                   AND ($9::date IS NULL OR c.created_at < ($9::date + 1))
                  ORDER BY c.data_entrega ASC NULLS LAST, c.created_at DESC
                  LIMIT $2
                 """,
@@ -425,8 +433,24 @@ class ChamadosRepo:
                 prioridade,
                 operador_id,
                 departamento_id,
+                setor,
+                data_de,
+                data_ate,
             )
             return [dict(r) for r in rows]
+
+    async def setores_ativos(self, claims: dict, departamento_id: str | None = None) -> list[str]:
+        """Valores distintos de `setor` (setor solicitante) já usados em chamados
+        do departamento — alimenta o select de filtro do Kanban/fila."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """SELECT DISTINCT c.setor FROM chamados c
+                    WHERE c.setor IS NOT NULL AND c.setor <> ''
+                      AND ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                    ORDER BY c.setor""",
+                departamento_id,
+            )
+            return [r["setor"] for r in rows]
 
     async def chamados_departamento(
         self,

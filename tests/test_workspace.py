@@ -59,10 +59,12 @@ class FakeRepo:
                 "is_ti": self._is_ti}
 
     async def fila(self, claims, *, departamento_id=None, status=None, categoria_id=None,
-                   prioridade=None, operador_id=None, limite=200):
+                   prioridade=None, operador_id=None, setor=None, data_de=None, data_ate=None,
+                   limite=200):
         self.fila_filtros = {  # captura os filtros aplicados
             "departamento_id": departamento_id, "categoria_id": categoria_id,
             "prioridade": prioridade, "operador_id": operador_id,
+            "setor": setor, "data_de": data_de, "data_ate": data_ate,
         }
         cs = [
             _chamado(),
@@ -80,6 +82,9 @@ class FakeRepo:
 
     async def categorias_ativas(self, claims, departamento_id=None):
         return [{"id": "cat1", "nome": "Suporte"}]
+
+    async def setores_ativos(self, claims, departamento_id=None):
+        return ["Comercial", "Financeiro"]
 
     async def obter(self, claims, cid):
         return _chamado(id=cid, status=self._status, operador_id=self._operador_id,
@@ -186,6 +191,35 @@ def test_kanban_marketing_tem_coluna_aguardando_terceiros_apos_em_andamento():
     assert posicoes == sorted(posicoes)
     assert 'data-status="AGUARDANDO_TERCEIROS"' in r.text
     assert "BOND-2026-00003" in r.text
+
+
+def test_kanban_repassa_filtros_para_o_repo():
+    from datetime import date
+
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        r = c.get("/workspace/kanban", params={
+            "categoria": "cat1", "prioridade": "alta", "operador": "op1",
+            "setor": "Comercial", "data_de": "2026-07-01", "data_ate": "2026-07-31",
+        })
+    assert r.status_code == 200
+    assert repo.fila_filtros["categoria_id"] == "cat1"
+    assert repo.fila_filtros["prioridade"] == "ALTA"
+    assert repo.fila_filtros["operador_id"] == "op1"
+    assert repo.fila_filtros["setor"] == "Comercial"
+    assert repo.fila_filtros["data_de"] == date(2026, 7, 1)
+    assert repo.fila_filtros["data_ate"] == date(2026, 7, 31)
+    # Formulário repopulado com os valores selecionados.
+    assert 'value="2026-07-01"' in r.text
+    assert 'value="2026-07-31"' in r.text
+    assert "limpar filtros" in r.text
+
+
+def test_kanban_sem_filtro_nao_mostra_link_de_limpar():
+    with ws_client(FakeRepo()) as c:
+        r = c.get("/workspace/kanban")
+    assert r.status_code == 200
+    assert "limpar filtros" not in r.text
 
 
 def test_mudar_status_registra_e_redireciona():

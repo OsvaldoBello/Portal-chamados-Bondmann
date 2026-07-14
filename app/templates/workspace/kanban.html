@@ -4,6 +4,7 @@
 {% set active = "kanban" %}
 {% block title %}Kanban — Workspace{% endblock %}
 {% block heading %}Kanban{% endblock %}
+{% block main_class %}{% endblock %}
 {% block content %}
 
 <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
@@ -11,10 +12,79 @@
   <a href="/workspace" class="text-sm font-semibold text-navy hover:underline">Ver como Lista →</a>
 </div>
 
-<div id="kanban" class="flex flex-row gap-3 pb-4 items-start">
+{# Filtros: período (data de abertura), setor, categoria, prioridade, operador e
+   SLA. Um único form GET autosubmit — mesmo padrão de app/templates/workspace/fila.html. #}
+{% set sla_labels = {"atrasado": "Atrasado / vencido", "risco": "Em risco", "no_prazo": "No prazo"} %}
+<form method="get" action="/workspace/kanban" class="mb-4 flex flex-wrap items-end gap-3">
+  <label class="flex flex-col gap-1">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">De</span>
+    <input type="date" name="data_de" value="{{ data_de_sel }}" data-autosubmit
+           class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+  </label>
+  <label class="flex flex-col gap-1">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Até</span>
+    <input type="date" name="data_ate" value="{{ data_ate_sel }}" data-autosubmit
+           class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+  </label>
+  <label class="flex flex-col gap-1">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Setor</span>
+    <select name="setor" data-autosubmit
+            class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+      <option value="">Todos</option>
+      {% for s in setores %}
+      <option value="{{ s }}" {% if s == setor_sel %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="flex flex-col gap-1">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Categoria</span>
+    <select name="categoria" data-autosubmit
+            class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+      <option value="">Todas</option>
+      {% for c in categorias %}
+      <option value="{{ c.id }}" {% if c.id|string == categoria_sel|string %}selected{% endif %}>{{ c.nome }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="flex flex-col gap-1">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Prioridade</span>
+    <select name="prioridade" data-autosubmit
+            class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+      <option value="">Todas</option>
+      {% for p in prioridades %}
+      <option value="{{ p }}" {% if p == prioridade_sel %}selected{% endif %}>{{ PRIORIDADE_META[p].label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="flex flex-col gap-1">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Operador</span>
+    <select name="operador" data-autosubmit
+            class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+      <option value="">Todos</option>
+      {% for op in operadores %}
+      <option value="{{ op.id }}" {% if op.id|string == operador_sel|string %}selected{% endif %}>{{ op.nome }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="flex flex-col gap-1">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">SLA</span>
+    <select name="sla" data-autosubmit
+            class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+      <option value="">Todos</option>
+      {% for s in sla_filtros %}
+      <option value="{{ s }}" {% if s == sla_sel %}selected{% endif %}>{{ sla_labels[s] }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% if tem_filtro %}
+  <a href="/workspace/kanban" class="text-sm text-muted hover:text-navy pb-2">limpar filtros</a>
+  {% endif %}
+</form>
+
+<div id="kanban" class="flex flex-row gap-3 pb-4 items-stretch h-[calc(100vh-16rem)] min-h-[420px]">
   {% for s in status_validos %}
-  <section class="flex-1 min-w-0 bg-surface2/60 rounded-xl border border-line/60 flex flex-col">
-    <header class="px-3 py-2.5 flex items-center justify-between">
+  <section class="flex-1 min-w-0 bg-surface2/60 rounded-xl border border-line/60 flex flex-col overflow-hidden">
+    <header class="px-3 py-2.5 flex items-center justify-between shrink-0">
       {% set label = STATUS_META[s].label %}
       {% if perfil.departamento == 'Marketing' %}
         {% if s == 'EM_ATENDIMENTO' %}{% set label = 'Em andamento' %}
@@ -25,7 +95,10 @@
       <span class="text-xs font-bold uppercase tracking-wide text-muted">{{ label }}</span>
       <span class="text-xs font-semibold text-navy bg-white rounded-full px-2 py-0.5">{{ colunas[s]|length }}</span>
     </header>
-    <div class="kanban-col flex-1 p-2 space-y-2 min-h-[80px]" data-status="{{ s }}">
+    {# min-h-0 é o que permite este flex item encolher abaixo do conteúdo e
+       rolar internamente (senão o flex-col empurra a altura pro conteúdo e
+       quem rola é a página inteira, não a coluna — estilo Trello). #}
+    <div class="kanban-col flex-1 min-h-0 overflow-y-auto p-2 space-y-2" data-status="{{ s }}">
       {% for c in colunas[s] %}
       <article class="kanban-card relative bg-white rounded-lg border border-line/60 p-3 shadow-soft cursor-grab" data-id="{{ c.id }}">
         {# Exclusão rápida: ícone de lixeira vermelha no canto do cartão (fora do

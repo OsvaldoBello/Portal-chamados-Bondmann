@@ -103,9 +103,45 @@ def _aplicar_sla(chamados: list[dict], sla: str) -> list[dict]:
     return [
         c for c in chamados
         if estado_sla(
-            c.get("created_at"), c.get("limite_resolucao"), c.get("resolvido_em")
+            c.get("created_at"), c.get("limite_resolucao"), c.get("resolvido_em"),
+            status=c.get("status"),
         ).estado == alvo
     ]
+
+
+def _parse_filtros_kanban(
+    categoria: str, prioridade: str, operador: str, sla: str, setor: str, data_de: str, data_ate: str
+) -> dict:
+    """Normaliza os filtros do Kanban (categoria/prioridade/operador/SLA/setor/período).
+
+    Sem filtro de ``status``: no Kanban o status é escolhido implicitamente pela
+    coluna, não por um seletor.
+    """
+    from datetime import date
+
+    prio = (prioridade or "").strip().upper()
+    sla_v = (sla or "").strip()
+
+    def _data(v: str):
+        v = (v or "").strip()
+        if not v:
+            return None
+        try:
+            return date.fromisoformat(v)
+        except ValueError:
+            return None
+
+    return {
+        "categoria_id": (categoria or "").strip() or None,
+        "prioridade": prio if prio in PRIORIDADES else None,
+        "operador_id": (operador or "").strip() or None,
+        "sla": sla_v if sla_v in _SLA_FILTROS else "",
+        "setor": (setor or "").strip() or None,
+        "data_de": _data(data_de),
+        "data_ate": _data(data_ate),
+        "data_de_raw": (data_de or "").strip(),
+        "data_ate_raw": (data_ate or "").strip(),
+    }
 
 
 async def _opcoes_filtro(ctx: StaffCtx, repo: ChamadosRepo) -> tuple[list[dict], list[dict]]:
@@ -224,6 +260,13 @@ async def fila_fragmento(
 @router.get("/kanban")
 async def kanban(
     request: Request,
+    categoria: str = "",
+    prioridade: str = "",
+    operador: str = "",
+    sla: str = "",
+    setor: str = "",
+    data_de: str = "",
+    data_ate: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
@@ -233,8 +276,19 @@ async def kanban(
     else:
         status_list = ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
 
+    f = _parse_filtros_kanban(categoria, prioridade, operador, sla, setor, data_de, data_ate)
     dep_id = _dep_id(ctx)
-    chamados = await repo.fila(ctx.user.claims, departamento_id=dep_id)
+    chamados = await repo.fila(
+        ctx.user.claims,
+        departamento_id=dep_id,
+        categoria_id=f["categoria_id"],
+        prioridade=f["prioridade"],
+        operador_id=f["operador_id"],
+        setor=f["setor"],
+        data_de=f["data_de"],
+        data_ate=f["data_ate"],
+    )
+    chamados = _aplicar_sla(chamados, f["sla"])
     colunas = {s: [c for c in chamados if c["status"] == s] for s in status_list}
     if is_marketing:
         # Coluna "Concluídos" foge da ordenação padrão da fila (por data de
@@ -242,6 +296,12 @@ async def kanban(
         # o prazo (já cumprido). Mais recente concluído primeiro.
         colunas["RESOLVIDO"].sort(key=lambda c: c["resolvido_em"] or c["created_at"], reverse=True)
     stats = await repo.fila_stats(ctx.user.claims, departamento_id=dep_id)
+    categorias, operadores = await _opcoes_filtro(ctx, repo)
+    setores = await repo.setores_ativos(ctx.user.claims, dep_id)
+    tem_filtro = any([
+        f["categoria_id"], f["prioridade"], f["operador_id"], f["sla"],
+        f["setor"], f["data_de_raw"], f["data_ate_raw"],
+    ])
     return render(
         request,
         "workspace/kanban.html",
@@ -250,6 +310,19 @@ async def kanban(
             "colunas": colunas,
             "stats": stats,
             "status_validos": status_list,
+            "categorias": categorias,
+            "operadores": operadores,
+            "setores": setores,
+            "prioridades": PRIORIDADES,
+            "sla_filtros": list(_SLA_FILTROS.keys()),
+            "categoria_sel": f["categoria_id"] or "",
+            "prioridade_sel": f["prioridade"] or "",
+            "operador_sel": f["operador_id"] or "",
+            "sla_sel": f["sla"],
+            "setor_sel": f["setor"] or "",
+            "data_de_sel": f["data_de_raw"],
+            "data_ate_sel": f["data_ate_raw"],
+            "tem_filtro": tem_filtro,
         },
     )
 

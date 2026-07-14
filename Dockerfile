@@ -9,8 +9,12 @@ WORKDIR /build
 COPY package.json ./
 RUN npm install --no-audit --no-fund
 COPY tailwind.config.js ./
-COPY app/static/src ./app/static/src
-COPY app/templates ./app/templates
+# Precisa do app/ inteiro, não só static/src e templates: o content scan do
+# Tailwind (tailwind.config.js) também cobre app/static/js/**/*.js (classes
+# aplicadas via JS) e app/**/*.py (paleta de rótulos de app/templating.py).
+# Copiar só templates+src fazia o purge derrubar essas classes em produção
+# (etiquetas do Kanban saíam sem cor mesmo com o CSS "correto" localmente).
+COPY app ./app
 RUN npx tailwindcss -i ./app/static/src/input.css -o ./app/static/css/app.css --minify
 
 # ============================================================

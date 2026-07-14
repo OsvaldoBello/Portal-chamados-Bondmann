@@ -58,9 +58,10 @@
     if (e.key === "Escape") { closeSidebar(); closeMenus(); }
   });
 
-  // ---- Auto-submit: selects com [data-autosubmit] enviam o form ao mudar ----
-  // (dispensa botão "OK" — selecionar já aplica a ação). CSP-safe, sem inline.
-  document.querySelectorAll("select[data-autosubmit]").forEach(function (sel) {
+  // ---- Auto-submit: selects/inputs com [data-autosubmit] enviam o form ao
+  // mudar (dispensa botão "OK" — selecionar/preencher já aplica a ação;
+  // usado também pelos filtros de data do Kanban). CSP-safe, sem inline.
+  document.querySelectorAll("select[data-autosubmit], input[data-autosubmit]").forEach(function (sel) {
     sel.addEventListener("change", function () {
       if (sel.form) {
         if (sel.form.requestSubmit) sel.form.requestSubmit();

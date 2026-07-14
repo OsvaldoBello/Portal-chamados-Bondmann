@@ -159,7 +159,7 @@
           </div>
         </div>
       </header>
-      <main class="anim-rise flex-1 p-4 sm:p-7 max-w-[1400px] w-full">
+      <main class="anim-rise flex-1 p-4 sm:p-7 w-full {% block main_class %}max-w-[1400px]{% endblock %}">
         {% block content %}{% endblock %}
       </main>
     </div>

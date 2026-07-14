@@ -2,6 +2,7 @@
 
 Regra (Seção 6, Fase 4 do plano mestre), sobre o prazo de **resolução**:
 - **resolvido**: chamado já resolvido (`resolvido_em` setado) → neutro.
+- **pausado**: status AGUARDANDO/AGUARDANDO_TERCEIROS → relógio parado, neutro.
 - **danger**: vencido, OU faltando **< 10%** da janela (vermelho, piscante).
 - **warn**: faltando **< 25%** da janela (amarelo).
 - **ok**: caso contrário (verde).
@@ -15,6 +16,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
+
+# Status em que o trigger sla_pausa_aguardando (migrations 0017/0044) congela o
+# prazo: `limite_resolucao` só é corrigido (empurrado pra frente) quando o
+# chamado SAI de um desses status, não enquanto ele está "dentro". Mostrar o
+# chip/barra contando com o valor ainda não corrigido faria o card parecer
+# vencido/piscando enquanto só está esperando aprovação/fornecedor — por isso
+# o indicador visual precisa saber o status e tratar como pausado, não recalcular
+# em cima de um `limite_resolucao` que está temporariamente desatualizado.
+STATUS_PAUSADOS = frozenset({"AGUARDANDO", "AGUARDANDO_TERCEIROS"})
 
 
 @dataclass(frozen=True)
@@ -57,11 +67,14 @@ def estado_sla(
     limite_resolucao: Optional[datetime],
     resolvido_em: Optional[datetime] = None,
     agora: Optional[datetime] = None,
+    status: Optional[str] = None,
 ) -> EstadoSLA:
     agora = agora or datetime.now(timezone.utc)
 
     if resolvido_em is not None:
         return EstadoSLA("resolvido", "Resolvido", False)
+    if status in STATUS_PAUSADOS:
+        return EstadoSLA("pausado", "Prazo pausado", False)
     if limite_resolucao is None or created_at is None:
         return EstadoSLA("indefinido", "Sem prazo", False)
 
@@ -84,6 +97,7 @@ def barra_sla(
     limite_resolucao: Optional[datetime],
     resolvido_em: Optional[datetime] = None,
     agora: Optional[datetime] = None,
+    status: Optional[str] = None,
 ) -> BarraSLA:
     """Barra de progresso do prazo de resolução (verde→amarelo na metade→vermelho).
 
@@ -94,6 +108,8 @@ def barra_sla(
 
     if resolvido_em is not None:
         return BarraSLA("resolvido", 100, "Resolvido", False)
+    if status in STATUS_PAUSADOS:
+        return BarraSLA("pausado", 0, "Prazo pausado", False)
     if limite_resolucao is None or created_at is None:
         return BarraSLA("indefinido", 0, "Sem prazo", False)
 
