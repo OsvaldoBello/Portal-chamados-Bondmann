@@ -28,6 +28,11 @@ supabase/.temp/
 .DS_Store
 *.log
 
+# Documentos de origem em Word — citados pelo nome nos MDs (plano mestre/plano de
+# melhorias), não versionados (mesmo precedente do docx de spec v2.0).
+*.docx
+~$*
+
 # Claude Agent Workspace
 .claude/
 

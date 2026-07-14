@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, claude/develop]
+  pull_request:
+
+jobs:
+  pytest:
+    name: Suíte pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências (runtime + dev)
+        run: pip install -r requirements-dev.txt
+
+      - name: Rodar suíte pytest completa
+        run: python -m pytest
+
+  build-css:
+    name: Build Tailwind
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Instalar dependências de front-end
+        run: npm ci
+
+      - name: Build do CSS (Tailwind)
+        run: npm run build:css
+
+  migrations-sequence:
+    name: Numeração de migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Checar cadeia 0001..NNNN contínua em supabase/migrations
+        run: python scripts/check_migrations_sequence.py
+
+  ruff:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar ruff
+        run: pip install -r requirements-dev.txt
+
+      - name: ruff check
+        run: python -m ruff check .

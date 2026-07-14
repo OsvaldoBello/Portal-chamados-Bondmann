@@ -48,13 +48,39 @@ def _assinatura_valida(body: bytes, header_sig: str | None, app_secret: str) -> 
     return hmac.compare_digest(esperado, recebido)
 
 
+def _metadados_evento(payload: dict | None) -> tuple[str, list[str]]:
+    """Extrai só metadados não sensíveis (tipo de evento + ids de mensagem/status)
+    para log — nunca telefone, nome de contato ou corpo da mensagem (PII)."""
+    if not payload:
+        return "desconhecido", []
+    tipos: set[str] = set()
+    ids: list[str] = []
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            if change.get("field"):
+                tipos.add(change["field"])
+            valor = change.get("value") or {}
+            for msg in valor.get("messages") or []:
+                if msg.get("id"):
+                    ids.append(msg["id"])
+            for status in valor.get("statuses") or []:
+                if status.get("id"):
+                    ids.append(status["id"])
+    tipo = ",".join(sorted(tipos)) or payload.get("object") or "desconhecido"
+    return tipo, ids
+
+
 @router.post("/api/webhooks/whatsapp")
 async def whatsapp_receive(request: Request):
     """Recebe notificações de mensagens/status do WhatsApp Cloud API.
 
     Valida a assinatura HMAC (X-Hub-Signature-256) quando WHATSAPP_APP_SECRET
-    está configurado. Por ora só loga o payload — a Meta exige 200 rápido,
-    então nunca fazemos trabalho pesado aqui de forma síncrona.
+    está configurado. Em produção, sem o secret configurado o POST é rejeitado
+    (nunca processa webhook não assinável em produção) — em dev/staging sem o
+    secret, segue sem validar (facilita testar o handshake antes de configurar
+    o App Secret da Meta). A Meta exige 200 rápido, então nunca fazemos
+    trabalho pesado aqui de forma síncrona. O log nunca grava o payload
+    completo (pode conter telefone/nome/texto da mensagem — PII), só metadados.
     """
     settings = get_settings()
     body = await request.body()
@@ -64,13 +90,17 @@ async def whatsapp_receive(request: Request):
         if not _assinatura_valida(body, header_sig, settings.whatsapp_app_secret):
             log.warning("WhatsApp webhook: assinatura inválida ou ausente.")
             return JSONResponse({"error": "Assinatura inválida"}, status_code=403)
+    elif settings.is_production:
+        log.error("WhatsApp webhook: WHATSAPP_APP_SECRET ausente em produção — POST rejeitado.")
+        return JSONResponse({"error": "Webhook não configurado"}, status_code=503)
 
     try:
         payload = await request.json()
     except Exception:
         payload = None
 
-    log.info("WhatsApp webhook payload recebido: %s", payload)
+    tipo_evento, ids = _metadados_evento(payload)
+    log.info("WhatsApp webhook: evento=%s ids=%s", tipo_evento, ids)
 
     return JSONResponse({"success": True})
 

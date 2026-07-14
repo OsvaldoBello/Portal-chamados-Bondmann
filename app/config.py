@@ -10,8 +10,11 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_SESSION_SECRET = "dev-insecure-session-secret-change-me"
+_DEFAULT_CSRF_SECRET = "dev-insecure-csrf-secret-change-me"
 
 
 class Settings(BaseSettings):
@@ -54,8 +57,8 @@ class Settings(BaseSettings):
     avatar_max_bytes: int = Field(default=2 * 1024 * 1024)  # 2MB — só imagem
 
     # --- Segredos de aplicação ---
-    session_secret: str = Field(default="dev-insecure-session-secret-change-me")
-    csrf_secret: str = Field(default="dev-insecure-csrf-secret-change-me")
+    session_secret: str = Field(default=_DEFAULT_SESSION_SECRET)
+    csrf_secret: str = Field(default=_DEFAULT_CSRF_SECRET)
 
     # --- Cookies ---
     cookie_secure: bool = Field(default=True)
@@ -106,6 +109,31 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"
+
+    @model_validator(mode="after")
+    def _fail_fast_segredos_default_em_producao(self) -> "Settings":
+        """Sprint 0 / item 0.2 (auditoria 2026-07-14): impossível subir produção
+        com SESSION_SECRET/CSRF_SECRET no valor default de desenvolvimento —
+        aborta o boot em vez de servir sessões/CSRF assinados com um segredo
+        público (presente neste repo)."""
+        if not self.is_production:
+            return self
+        defaults_em_uso = [
+            nome
+            for nome, valor, default in (
+                ("SESSION_SECRET", self.session_secret, _DEFAULT_SESSION_SECRET),
+                ("CSRF_SECRET", self.csrf_secret, _DEFAULT_CSRF_SECRET),
+            )
+            if valor == default
+        ]
+        if defaults_em_uso:
+            raise ValueError(
+                "Boot abortado: ambiente de produção com segredo(s) de "
+                f"desenvolvimento não substituído(s): {', '.join(defaults_em_uso)}. "
+                "Gere valores aleatórios (ex.: `openssl rand -hex 32`) e defina-os "
+                "nas variáveis de ambiente antes de subir em produção."
+            )
+        return self
 
     @property
     def is_serverless(self) -> bool:
