@@ -144,9 +144,12 @@
                  class="w-5 h-5 rounded-full object-cover ring-1 ring-line shrink-0">
             {% endif %}
           </div>
-          <div class="mt-2">
+          <div class="flex flex-wrap gap-1 mt-2">
             <span class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-500">
               📅 Solicitado em {{ fmt_dt(c.created_at, "%d/%m/%Y") }}
+            </span>
+            <span class="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-500">
+              🎯 Entregar até {{ fmt_dt(c.limite_resolucao, "%d/%m/%Y") }}
             </span>
           </div>
           <div class="flex items-center justify-between mt-1">
