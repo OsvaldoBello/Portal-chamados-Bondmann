@@ -3,8 +3,8 @@ name = "portal-chamados-bondmann"
 version = "0.1.0"
 description = "Portal de Chamados Bondmann Química — Help Desk multi-tenant (FastAPI + Supabase)"
 requires-python = ">=3.12"
-# Espelho de requirements.txt — o builder Python da Vercel (uv) instala daqui.
-# Manter em sincronia com requirements.txt (Seção 0 do plano mestre).
+# Espelho de requirements.txt — duplicação pendente de eliminar (Sprint 2 /
+# item 2.5, M8). Manter em sincronia enquanto isso não roda.
 dependencies = [
   "fastapi==0.115.6",
   "uvicorn[standard]==0.34.0",
@@ -24,12 +24,6 @@ dependencies = [
   "holidays==0.100",
   "Pillow==12.3.0",
 ]
-
-# Deploy na Vercel (framework FastAPI): expõe a app ASGI `app.main:app`.
-# Deps vêm de requirements.txt; o CSS é gerado no buildCommand (vercel.json)
-# e o app.css também é versionado como fallback.
-[tool.vercel]
-entrypoint = "app.main:app"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

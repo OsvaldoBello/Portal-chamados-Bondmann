@@ -22,7 +22,7 @@ histórico auditável e avaliação (CSAT) do autor.
 | Acesso a dados | `asyncpg` (domínio, via Supavisor *transaction mode*) + `supabase-py` async (Auth/Storage) |
 | Frontend | Server-rendered com Jinja2 + HTMX 2.0 (fragmentos), Alpine.js (build CSP), Tailwind CSS (build CLI) |
 | Testes | `pytest` + `pytest-asyncio`, contra Supabase local (RLS real, sem mocks) |
-| Deploy | Docker (Railway) / Vercel (função ASGI) |
+| Deploy | Docker (Railway — alvo único de produção, decisão 2026-07-15) |
 
 Padrão de página: o FastAPI é a única fonte de verdade — o navegador só exibe
 e dispara requisições HTMX; nenhuma regra de negócio roda no cliente. Alpine.js

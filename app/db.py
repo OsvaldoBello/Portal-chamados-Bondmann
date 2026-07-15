@@ -94,33 +94,23 @@ _request_holder: ContextVar["_RLSHolder | None"] = ContextVar("_request_holder",
 
 
 async def init_pool(settings: Settings) -> asyncpg.Pool:
-    """Cria o pool global. Chamado no lifespan da app (ou sob demanda em serverless).
+    """Cria o pool global. Chamado no lifespan da app (ou sob demanda via `_ensure_pool`).
 
-    Em **serverless (Vercel)** as funções são efêmeras: um pool com ``min_size>0``
-    mantém conexões ociosas que vazam e estouram o teto do Supavisor. Nesse modo
-    forçamos ``min_size=0`` (nada persistente), ``max_size`` restrito e reciclagem
-    rápida de conexões ociosas. Fora da Vercel (Railway/Docker/local) usamos os
-    valores configurados. Ver Seção 2.1 do plano mestre.
+    Processo persistente (Railway — Sprint 1 / item 1.8, M10: alvo único de
+    deploy, decisão 2026-07-15): usa os valores configurados diretamente, sem
+    o modo restrito que a Vercel serverless exigia (funções efêmeras, pool
+    forçado a `min_size=0`). Ver Seção 2.1 do plano mestre.
     """
     global _pool
     if _pool is None:
-        if settings.is_serverless:
-            min_size = 0
-            max_size = min(settings.db_pool_max_size, 2)
-            max_inactive = 10.0
-        else:
-            min_size = settings.db_pool_min_size
-            max_size = settings.db_pool_max_size
-            max_inactive = 300.0
         _pool = await asyncpg.create_pool(
             dsn=settings.database_url,
-            min_size=min_size,
-            max_size=max_size,
+            min_size=settings.db_pool_min_size,
+            max_size=settings.db_pool_max_size,
             # Obrigatório sob Supavisor transaction mode (Seção 2.1).
             statement_cache_size=0,
             command_timeout=30,
-            # Fecha conexões ociosas rápido em serverless para não segurar o pooler.
-            max_inactive_connection_lifetime=max_inactive,
+            max_inactive_connection_lifetime=300.0,
         )
     return _pool
 
@@ -139,7 +129,7 @@ def get_pool() -> asyncpg.Pool:
 
 
 async def _ensure_pool() -> asyncpg.Pool:
-    """Garante o pool mesmo sem lifespan (ex.: serverless/Vercel cold start).
+    """Garante o pool mesmo se chamado antes do lifespan rodar.
 
     Idempotente e barato quando já inicializado. Levanta erro claro se não há
     ``DATABASE_URL`` configurada."""

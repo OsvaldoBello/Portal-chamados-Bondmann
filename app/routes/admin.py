@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -41,6 +42,8 @@ from app.repositories.chamados import (
 )
 from app.security.csrf import get_csrf
 from app.templating import render
+
+log = logging.getLogger("app.routes.admin")
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -651,8 +654,49 @@ async def mudar_papel(
     if client is not None:
         try:
             await client.auth.admin.update_user_by_id(user_id, {"app_metadata": {"role": papel}})
-        except Exception:  # noqa: BLE001 — perfis já atualizado; JWT sincroniza no próximo login
-            return _volta(ok="Papel atualizado no banco. Peça re-login (JWT sincroniza depois).")
+        except Exception as exc:  # noqa: BLE001 — perfis já atualizado; confirmado abaixo
+            log.error(
+                "Dual-write de papel: falha ao atualizar app_metadata.role (user_id=%s alvo=%s): %s",
+                user_id, papel, exc,
+            )
+    else:
+        log.error(
+            "Dual-write de papel: service_role não configurada — app_metadata.role não "
+            "pôde ser sincronizado (user_id=%s alvo=%s).",
+            user_id, papel,
+        )
+
+    # Sprint 1 / item 1.5 (M12): relê os dois lados da escrita dupla (perfis e
+    # o JWT) em vez de assumir sucesso — hoje a etapa 2 podia falhar em
+    # silêncio e a divergência só aparecia num incidente de permissão depois.
+    papel_no_banco = await repo.obter_papel(ctx.user.claims, user_id)
+    papel_no_jwt = None
+    if client is not None:
+        try:
+            res = await client.auth.admin.get_user_by_id(user_id)
+            u = getattr(res, "user", res)
+            papel_no_jwt = (getattr(u, "app_metadata", None) or {}).get("role")
+        except Exception as exc:  # noqa: BLE001 — não bloqueia a resposta, só perde a confirmação
+            log.warning("Não foi possível reler app_metadata.role para confirmar (user_id=%s): %s", user_id, exc)
+
+    if papel_no_banco != papel:
+        log.error(
+            "Divergência de papel após promoção: perfis.role=%r ≠ alvo=%r (user_id=%s).",
+            papel_no_banco, papel, user_id,
+        )
+        return _volta(erro="Falha ao gravar o papel no banco. Tente novamente.")
+    if client is not None and papel_no_jwt is not None and papel_no_jwt != papel:
+        log.error(
+            "Divergência de papel após promoção: app_metadata.role=%r ≠ alvo=%r (user_id=%s).",
+            papel_no_jwt, papel, user_id,
+        )
+        return _volta(
+            ok=(
+                "Papel atualizado no banco, mas o JWT (app_metadata) ficou com um valor "
+                "diferente — peça para o usuário deslogar e logar de novo; se persistir, "
+                "verifique manualmente."
+            )
+        )
     return _volta(ok="Papel atualizado. A mudança vale no próximo login do usuário.")
 
 

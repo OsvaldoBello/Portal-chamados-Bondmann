@@ -7,7 +7,6 @@ hard-coded — ver REGRA DURA da Seção 6.2 do plano mestre.
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 
 from pydantic import Field, model_validator
@@ -63,6 +62,12 @@ class Settings(BaseSettings):
     # --- Cookies ---
     cookie_secure: bool = Field(default=True)
 
+    # --- Diagnóstico (Sprint 1 / item 1.2) ---
+    # Token exigido em produção para acessar /health/ready e /health/config
+    # (header X-Diagnostics-Token). Vazio ⇒ rotas negadas em produção (não há
+    # como liberar por omissão — fail-closed).
+    diagnostics_token: str = Field(default="")
+
     # --- SMTP / E-mail (Notificações — fallback quando Mailgun não está ativo) ---
     smtp_host: str = Field(default="")
     smtp_port: int = Field(default=587)
@@ -75,8 +80,8 @@ class Settings(BaseSettings):
 
     # --- Mailgun (provedor transacional preferencial: envio via API HTTP +
     #     recebimento de respostas via webhook inbound). Usar API é mais confiável
-    #     que SMTP em ambiente serverless (Vercel): sem socket TCP bloqueante,
-    #     sem timeouts de STARTTLS, entrega por HTTPS. ---
+    #     que SMTP no event loop assíncrono: sem socket TCP bloqueante, sem
+    #     timeouts de STARTTLS, entrega por HTTPS. ---
     mailgun_api_key: str = Field(default="")
     mailgun_domain: str = Field(default="")
     # Região da conta: US = https://api.mailgun.net | EU = https://api.eu.mailgun.net
@@ -134,16 +139,6 @@ class Settings(BaseSettings):
                 "nas variáveis de ambiente antes de subir em produção."
             )
         return self
-
-    @property
-    def is_serverless(self) -> bool:
-        """True no ambiente serverless da Vercel (funções efêmeras, Seção 2.1).
-
-        A Vercel injeta ``VERCEL=1`` no runtime. Nesse modo o pool asyncpg deve
-        rodar com ``min_size=0`` e teto restrito para não vazar conexões ociosas
-        contra o Supavisor (ver ``app/db.py``).
-        """
-        return bool(os.environ.get("VERCEL"))
 
     @property
     def jwks_url(self) -> str:

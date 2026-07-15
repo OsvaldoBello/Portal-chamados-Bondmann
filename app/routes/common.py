@@ -200,9 +200,19 @@ async def inbound_email(
 ):
     """Recebe e-mails de resposta do usuário via webhook do provedor transacional.
     Verifica o token HMAC de segurança e insere a mensagem diretamente no chat do chamado.
+
+    Sprint 1 / item 1.3 (M4): exige INBOUND_EMAIL_SECRET dedicado — sem ele a
+    rota fica desabilitada (nunca reaproveita o SESSION_SECRET, que autentica
+    sessões de usuário, para validar tokens expostos publicamente em endereços
+    de e-mail).
     """
     from app.db import admin_connection
     from app.notification import validar_token_resposta, notificar_nova_mensagem_email
+
+    settings = get_settings()
+    if not settings.inbound_email_secret:
+        log.warning("Inbound de e-mail: INBOUND_EMAIL_SECRET ausente — rota desabilitada.")
+        return JSONResponse({"error": "Inbound de e-mail não configurado"}, status_code=503)
 
     # Aceita payloads JSON ou Form-Data do Mailgun/SendGrid
     content_type = request.headers.get("content-type", "")
@@ -302,9 +312,7 @@ async def inbound_email(
             return JSONResponse({"error": "Remetente não autorizado"}, status_code=400)
 
         # 4. Valida a assinatura HMAC de segurança
-        settings = get_settings()
-        secret = settings.inbound_email_secret or settings.session_secret
-        if not validar_token_resposta(codigo, sender_id, token, secret):
+        if not validar_token_resposta(codigo, sender_id, token, settings.inbound_email_secret):
             log.warning(f"Invalid reply signature token for user {sender_id} on ticket {codigo}.")
             return JSONResponse({"error": "Assinatura inválida"}, status_code=403)
 

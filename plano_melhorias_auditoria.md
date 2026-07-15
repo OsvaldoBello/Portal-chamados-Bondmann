@@ -115,46 +115,128 @@
 
 ## Sprint 1 — Hardening de borda e validação sistemática (P1, 2–4 semanas)
 
-### 1.1 · A5 — Proxy confiável para o rate limit 🟢
-- [ ] Configurar `--proxy-headers`/`forwarded_allow_ips` no Uvicorn (Railway) e revisar
+### 1.1 · A5 — Proxy confiável para o rate limit 🟢 ✅ **Concluído 2026-07-15**
+- [x] Configurar `--proxy-headers`/`forwarded_allow_ips` no Uvicorn (Railway) e revisar
       `app/ratelimit.py::client_ip` para usar o IP adicionado pelo proxy confiável, não o
       primeiro do header `X-Forwarded-For` (spoofável).
-- [ ] Teste: header forjado não muda a chave de rate limit.
+- [x] Teste: header forjado não muda a chave de rate limit.
 - **Aceite:** rate limit não contornável via header.
+- **Notas de execução:** `client_ip()` agora usa o **último** IP da cadeia
+  `X-Forwarded-For` (o único hop confiável, acrescentado pelo Railway) em vez do
+  primeiro (escrito pelo cliente, forjável). O `--forwarded-allow-ips "*"` do
+  Dockerfile continua necessário (Railway não publica IPs fixos de proxy) — a
+  correção real estava na leitura do header, não na config do Uvicorn. Plano
+  mestre (Seção 2.4) atualizado para não documentar mais a lógica antiga.
+  4 testes novos em `tests/test_ratelimit.py`.
 
-### 1.2 · M3 — Restringir endpoints de diagnóstico 🟢
-- [ ] `/health/ready` e `/health/config`: em produção, exigir token simples (env) ou
+### 1.2 · M3 — Restringir endpoints de diagnóstico 🟢 ✅ **Concluído 2026-07-15**
+- [x] `/health/ready` e `/health/config`: em produção, exigir token simples (env) ou
       restringir; `/health` continua público (liveness).
-- [ ] `/health/ready` sem detalhes internos do erro de banco em produção (mensagem
+- [x] `/health/ready` sem detalhes internos do erro de banco em produção (mensagem
       genérica; detalhe só no log).
 - **Aceite:** anônimo em produção não enumera config nem lê erro de infraestrutura.
+- **Notas de execução:** nova config `DIAGNOSTICS_TOKEN` (`app/config.py`); em
+  produção sem o token configurado as duas rotas negam por padrão
+  (fail-closed, nunca abertas por omissão). Comparação via `hmac.compare_digest`.
+  Fora de produção seguem livres (sem fricção local/staging). 7 testes novos
+  em `tests/test_health.py`.
 
-### 1.3 · M4 — Segredo dedicado do inbound e-mail 🟢
-- [ ] `routes/common.py`: remover o fallback `inbound_email_secret or session_secret`;
+### 1.3 · M4 — Segredo dedicado do inbound e-mail 🟢 ✅ **Concluído 2026-07-15**
+- [x] `routes/common.py`: remover o fallback `inbound_email_secret or session_secret`;
       inbound ativo sem segredo dedicado ⇒ rota desabilitada com log de aviso.
-- [ ] Avaliar usar o HMAC integral (não truncado a 16 hex) no endereço de resposta —
+- [x] Avaliar usar o HMAC integral (não truncado a 16 hex) no endereço de resposta —
       medir impacto no comprimento do e-mail antes de decidir.
 - **Aceite:** segredo de sessão nunca reutilizado para tokens de e-mail.
+- **Notas de execução:** fallback removido em `routes/common.py` (webhook
+  rejeita com 503 sem `INBOUND_EMAIL_SECRET`) e em `notification.py` (sem
+  segredo dedicado, nenhum reply-to é gerado — log de aviso nos dois casos).
+  Avaliação do HMAC integral: **deferida** — truncar para 16 hex já está em
+  produção (tokens antigos quebrariam se o formato mudasse) e o ganho de
+  segurança é marginal (16 hex = 64 bits de HMAC, suficiente pra esse caso de
+  uso); não vale o risco de compatibilidade sem necessidade concreta. 7 testes
+  novos/atualizados em `tests/test_inbound_email.py`.
 
-### 1.4 · M11 — Gates de permissão na UI do Kanban 🟢
-- [ ] Aplicar no Kanban o mesmo gate da tela de atendimento: cartão fora do setor do
+### 1.4 · M11 — Gates de permissão na UI do Kanban 🟢 ✅ **Concluído 2026-07-15**
+- [x] Aplicar no Kanban o mesmo gate da tela de atendimento: cartão fora do setor do
       usuário sem drag e sem botão de excluir (RLS continua como rede de segurança).
-- [ ] Teste em `test_workspace.py`: cartão alheio renderiza sem ações.
+- [x] Teste em `test_workspace.py`: cartão alheio renderiza sem ações.
 - **Aceite:** UI não oferece ação que a RLS vai negar.
+- **Notas de execução:** mesmo critério `dept_bate` da tela de atendimento
+  (`app/routes/workspace.py`), agora também no Kanban — precisou expor
+  `c.departamento_id` em `_FILA_COLUNAS` (`app/repositories/chamados.py`, só
+  faltava no SELECT). Cartão fora do setor recebe classe `kanban-card-locked`
+  (Sortable.js ignora via `filter`/`preventOnFilter`) e não renderiza o botão
+  de excluir. 1 teste novo em `tests/test_workspace.py`.
 
-### 1.5 · M12 — Consistência do dual-write de papel 🟢
-- [ ] Após promoção em `/admin/usuarios`: reler `perfis.role` e `app_metadata.role` e
+### 1.5 · M12 — Consistência do dual-write de papel 🟢 ✅ **Concluído 2026-07-15**
+- [x] Após promoção em `/admin/usuarios`: reler `perfis.role` e `app_metadata.role` e
       falhar/alertar em divergência (hoje uma escrita pode falhar silenciosamente).
-- [ ] Opcional: SQL de reconciliação em `supabase/registro_usuarios.sql` para auditoria
+- [x] Opcional: SQL de reconciliação em `supabase/registro_usuarios.sql` para auditoria
       periódica.
 - **Aceite:** divergência perfis × JWT detectada no ato, não em incidente futuro.
+- **Notas de execução:** `AdminRepo.obter_papel` (nova) relê `perfis.role`
+  após a escrita; `mudar_papel` também relê `app_metadata.role` via Admin API
+  quando o service_role está configurado. Divergência no banco ⇒ resposta de
+  erro explícita; divergência só no JWT ⇒ aviso específico (não mais um "ok"
+  genérico enganoso); service_role ausente ⇒ logado (`log.error`), sem
+  bloquear a resposta. Query de reconciliação periódica adicionada ao final de
+  `supabase/registro_usuarios.sql`. 3 testes novos em `tests/test_admin.py`.
 
-### 1.6 · M7 — Arquivar `prototipos/` 🟢
-- [ ] Mover para branch órfã/repo de arquivo **ou** manter a pasta e excluí-la de
+### 1.6 · M7 — Arquivar `prototipos/` 🟢 ✅ **Concluído 2026-07-15**
+- [x] Mover para branch órfã/repo de arquivo **ou** manter a pasta e excluí-la de
       ferramentas (análise, grep de rotina, graphify) — decidir a forma mais simples.
-- [ ] Confirmar que nada em produção referencia `prototipos/` (Dockerfile/vercel.json não
+- [x] Confirmar que nada em produção referencia `prototipos/` (Dockerfile/vercel.json não
       copiam — validar).
 - **Aceite:** grafo/análises sem as ~20 comunidades "(Prototype)" duplicadas.
+- **Notas de execução:** confirmado — `Dockerfile` só faz `COPY app ./app`;
+  `vercel.json` só lista `app/static/**` e `app/main.py`; nenhum copia
+  `prototipos/`. Optou-se pela forma mais simples (manter a pasta, excluir de
+  ferramentas) em vez de branch órfã: `prototipos/` já estava fora do lint
+  (`pyproject.toml`) e do bundle Vercel (`.vercelignore`); adicionado também a
+  `.dockerignore` (higiene do contexto de build) e uma nota no
+  `prototipos/README.md` orientando ferramentas de análise (graphify incluído
+  — não tem mecanismo de ignore-file próprio) a apontar para `app/`, não a
+  raiz do repo. **Pendência:** o `graphify-out/` atual (2026-07-10) ainda tem
+  as comunidades "(Prototype)" antigas — só some numa próxima regeneração
+  (`/graphify app` ou similar), não executada aqui (custo de LLM, decisão do
+  gestor sobre quando vale regenerar).
+
+### 1.7 · M9 — Suíte e2e de RLS recorrente 🔴 **Não executado nesta rodada**
+- [ ] Suite dedicada (`tests/e2e/` ou marker `@pytest.mark.rls`) contra Supabase local
+      cobrindo a matriz de visibilidade vigente: autor · staff RH/Marketing · líder de
+      setor (0028) · TI pós-0020 · exceções Marketing (0038) e RH (0042) · nota interna
+      invisível ao autor · upload de avatar (1º envio **e** reenvio, regressão da 0037)
+      · Realtime não entrega `is_interna` ao cliente.
+- [ ] Integrar ao CI (job separado com `supabase start`; pode rodar só em PRs que tocam
+      `supabase/` ou `app/repositories/`).
+- **Aceite:** a classe de bug "mock verde × banco real divergente" (0028, chamados_departamento) coberta por teste automatizado.
+- **Nota:** item 🔴 (3+ dias) — infraestrutura nova (Supabase local no CI) e
+  cobertura ampla de matriz de RLS, fora do escopo de uma sessão de execução
+  do Sprint 1 junto dos itens 🟢. Fica para uma sessão dedicada.
+
+### 1.8 · M10 — `[DECISÃO DO GESTOR]` Alvo canônico de deploy 🟡 ✅ **Decidido e executado 2026-07-15**
+- Opções: **(a) Railway como produção única** (recomendação da auditoria e do próprio
+  plano mestre — processo persistente, libmagic, BackgroundTasks confiáveis; Vercel
+  vira apenas preview/desativa) · **(b) manter Vercel** ⇒ implementar outbox/fila com
+  retry para e-mails (BackgroundTasks morre pós-response no serverless).
+- [x] Decisão registrada aqui e no plano mestre: **(a) Railway única** (Osvaldo, 2026-07-15).
+- [x] Executar a opção escolhida (limpar configs do alvo abandonado ou implementar outbox).
+- **Aceite:** notificações por e-mail com garantia de envio no ambiente de produção real.
+- **Notas de execução:** Vercel desativado por completo — `vercel.json` e
+  `.vercelignore` removidos; `[tool.vercel]` tirado do `pyproject.toml`;
+  `Settings.is_serverless` eliminado de `app/config.py`; os ramos
+  condicionais que ele acionava em `app/db.py::init_pool` (pool restrito
+  `min_size=0` do modo efêmero) e `app/notification.py::agendar_notificacao_email`
+  (envio inline em vez de `BackgroundTasks`, workaround da função serverless
+  morrer pós-response) foram removidos — agora sempre o caminho de servidor
+  persistente, que é justamente a garantia de entrega que este item pedia.
+  Comentários residuais mencionando Vercel/serverless em `app/main.py`,
+  `app/config.py` e `app/notification.py` reescritos; `README.md` e a tabela
+  de Estado do plano mestre atualizados. Entradas de changelog antigas
+  (2026-07-01/03) mantidas como estão — são histórico, não estado atual.
+  **Fora do escopo desta limpeza:** a duplicação `requirements.txt` ×
+  `pyproject.toml [project.dependencies]` (isso é o item 2.5/M8, que esta
+  decisão agora destrava).
 
 ### 1.7 · M9 — Suíte e2e de RLS recorrente 🔴
 - [ ] Suite dedicada (`tests/e2e/` ou marker `@pytest.mark.rls`) contra Supabase local
@@ -265,6 +347,14 @@
 | 2026-07-14 | 0.2 (A3) | `app/config.py`, `tests/test_config.py` | Fail-fast: `Settings` recusa instanciar em produção com `SESSION_SECRET`/`CSRF_SECRET` ainda no default de dev. 5 testes novos, suíte verde. |
 | 2026-07-14 | 0.3 (A4) | `app/routes/whatsapp.py`, `tests/test_whatsapp.py` | Webhook WhatsApp: sem `WHATSAPP_APP_SECRET` em produção ⇒ 503 (antes aceitava sem validar); log só com tipo de evento + ids de mensagem, nunca payload/PII. 4 testes novos, suíte verde. |
 | 2026-07-14 | 0.4 (A2) | `.github/workflows/ci.yml`, `scripts/check_migrations_sequence.py`, `pyproject.toml`, `requirements-dev.txt` | CI mínimo com 4 jobs (pytest, build:css, numeração de migrations, ruff). Branch protection (merge só com CI verde) fica pendente — ação manual de admin no GitHub, fora do alcance de um PR. |
+| 2026-07-15 | 1.1 (A5) | `app/ratelimit.py`, `tests/test_ratelimit.py`, plano mestre (Seção 2.4) | Chave do rate limit passa a usar o último IP de `X-Forwarded-For` (hop do Railway), não o primeiro (forjável pelo cliente). |
+| 2026-07-15 | 1.2 (M3) | `app/config.py`, `app/routes/health.py`, `tests/test_health.py`, `.env.example` | `/health/ready` e `/health/config` exigem `DIAGNOSTICS_TOKEN` em produção (fail-closed sem o token); erro de banco sem detalhe interno em produção. |
+| 2026-07-15 | 1.3 (M4) | `app/routes/common.py`, `app/notification.py`, `tests/test_inbound_email.py` | Fallback `inbound_email_secret or session_secret` removido nos dois pontos (geração e validação do token); sem segredo dedicado, webhook rejeita (503) e nenhum reply-to é gerado. |
+| 2026-07-15 | 1.4 (M11) | `app/templates/workspace/kanban.html`, `app/static/js/workspace.js`, `app/repositories/chamados.py`, `tests/test_workspace.py` | Kanban aplica o mesmo `dept_bate` da tela de atendimento: cartão fora do setor sem drag (`kanban-card-locked` + `Sortable.filter`) e sem botão de excluir. |
+| 2026-07-15 | 1.5 (M12) | `app/repositories/admin.py`, `app/routes/admin.py`, `supabase/registro_usuarios.sql`, `tests/test_admin.py` | `mudar_papel` relê `perfis.role` e `app_metadata.role` após a escrita dupla; divergência no banco vira erro explícito, divergência só no JWT vira aviso específico (antes era "ok" genérico mesmo em falha silenciosa). |
+| 2026-07-15 | 1.6 (M7) | `.dockerignore`, `prototipos/README.md` | Confirmado que Dockerfile/vercel.json não referenciam `prototipos/`; pasta mantida (não branch órfã) e documentada como arquivada/fora do escopo de ferramentas de análise. |
+| — | 1.7 (M9) | — | Não executado — item 🔴 (suíte e2e de RLS + Supabase local no CI), fora do escopo desta rodada; fica para sessão dedicada. |
+| 2026-07-15 | 1.8 (M10) | `vercel.json` (removido), `.vercelignore` (removido), `pyproject.toml`, `app/config.py`, `app/db.py`, `app/notification.py`, `app/main.py`, `README.md`, plano mestre (tabela de Estado) | Decisão do gestor: Railway como alvo único de produção. Vercel desativado por completo — arquivos de deploy removidos, `Settings.is_serverless` e os ramos condicionais que ele acionava (pool restrito, envio inline de e-mail) eliminados. Destrava o item 2.5 (fonte única de dependências). |
 
 ## Definição de pronto (todos os itens)
 

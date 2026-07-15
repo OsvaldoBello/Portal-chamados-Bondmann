@@ -27,6 +27,11 @@
         ghostClass: "opacity-40",
         forceFallback: true,
         fallbackTolerance: 4,
+        // Sprint 1 / item 1.4 (M11): cartão fora do setor do usuário
+        // (.kanban-card-locked, ver kanban.html) não é arrastável — mesmo
+        // gate de permissão da tela de atendimento, só que na UI do Kanban.
+        filter: ".kanban-card-locked",
+        preventOnFilter: true,
         onEnd: function (evt) {
           var card = evt.item;
           var destino = evt.to.getAttribute("data-status");

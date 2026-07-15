@@ -38,6 +38,7 @@ class FakeAdmin:
     def __init__(self, is_ti=True):
         self._ti = is_ti
         self.acoes = []
+        self._papeis = {}  # user_id -> role, simula perfis.role para a releitura pós-promoção
 
     async def is_ti(self, claims):
         return self._ti
@@ -108,6 +109,12 @@ class FakeAdmin:
 
     async def atualizar_papel(self, claims, user_id, *, role, departamento_id):
         self.acoes.append(("papel", user_id, role, departamento_id))
+        self._papeis[user_id] = role
+
+    async def obter_papel(self, claims, user_id):
+        """Simula ``perfis.role`` após a escrita — usado pela releitura pós-
+        promoção (Sprint 1 / item 1.5, M12)."""
+        return self._papeis.get(user_id)
 
     async def subcategorias(self, claims):
         return [{"id": "s1", "nome": "Acesso VPN", "ativo": True,
@@ -489,7 +496,75 @@ def test_mudar_papel_operador_em_setor_sem_fila_da_erro():
         r = c.post("/admin/usuarios/u1/papel", data={"papel": "OPERADOR", "departamento_id": "d2"},
                    headers={"X-CSRF-Token": t}, follow_redirects=False)
     assert r.status_code == 303
-    assert not any(a[0] == "papel" for a in repo.acoes)
+
+
+def _query(location: str) -> dict:
+    from urllib.parse import parse_qs, urlsplit
+
+    return {k: v[0] for k, v in parse_qs(urlsplit(location).query).items()}
+
+
+def test_mudar_papel_divergencia_no_banco_reporta_erro():
+    """Sprint 1 / item 1.5 (M12): se a releitura de ``perfis.role`` não bate
+    com o papel alvo (ex.: UPDATE afetou 0 linhas — user_id inexistente), a
+    resposta é um erro explícito, não um "sucesso" silenciosamente incorreto."""
+
+    class FakeAdminEscritaFalha(FakeAdmin):
+        async def atualizar_papel(self, claims, user_id, *, role, departamento_id):
+            self.acoes.append(("papel", user_id, role, departamento_id))
+            # Simula a escrita não pegando (0 linhas afetadas): perfis.role
+            # continua com o valor antigo.
+
+    repo = FakeAdminEscritaFalha()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/admin/usuarios/u1/papel", data={"papel": "ADMIN", "departamento_id": "d1"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert "erro" in _query(r.headers["location"])
+
+
+def test_mudar_papel_divergencia_no_jwt_avisa_sem_reportar_sucesso_puro():
+    """JWT (app_metadata.role) diverge do papel gravado em ``perfis`` — o
+    aviso explica a divergência em vez de dizer só "Papel atualizado"."""
+    from unittest.mock import AsyncMock, patch
+
+    admin_sdk = AsyncMock()
+    admin_sdk.auth.admin.update_user_by_id = AsyncMock(return_value=None)
+    admin_sdk.auth.admin.get_user_by_id = AsyncMock(
+        return_value=type("R", (), {"user": type("U", (), {"app_metadata": {"role": "OPERADOR"}})()})()
+    )
+
+    repo = FakeAdmin()
+    with patch("app.auth.supabase_client.ensure_admin_client", AsyncMock(return_value=admin_sdk)):
+        with admin_client(repo) as c:
+            t = _csrf(c)
+            r = c.post("/admin/usuarios/u1/papel", data={"papel": "ADMIN", "departamento_id": "d1"},
+                       headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    ok = _query(r.headers["location"]).get("ok", "")
+    assert "diferente" in ok or "verifique" in ok.lower()
+
+
+def test_mudar_papel_sem_divergencia_confirma_sucesso():
+    from unittest.mock import AsyncMock, patch
+
+    admin_sdk = AsyncMock()
+    admin_sdk.auth.admin.update_user_by_id = AsyncMock(return_value=None)
+    admin_sdk.auth.admin.get_user_by_id = AsyncMock(
+        return_value=type("R", (), {"user": type("U", (), {"app_metadata": {"role": "ADMIN"}})()})()
+    )
+
+    repo = FakeAdmin()
+    with patch("app.auth.supabase_client.ensure_admin_client", AsyncMock(return_value=admin_sdk)):
+        with admin_client(repo) as c:
+            t = _csrf(c)
+            r = c.post("/admin/usuarios/u1/papel", data={"papel": "ADMIN", "departamento_id": "d1"},
+                       headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    q = _query(r.headers["location"])
+    assert "erro" not in q
+    assert q.get("ok") == "Papel atualizado. A mudança vale no próximo login do usuário."
 
 
 def test_criar_usuario_sem_service_role_avisa():

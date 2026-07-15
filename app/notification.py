@@ -15,10 +15,10 @@ log = logging.getLogger("app.notification")
 
 def gerar_token_resposta(codigo: str, usuario_id: str, secret: str) -> str:
     """Gera um token criptográfico determinístico e curto para identificar e validar
-    a resposta de e-mail do usuário para um determinado chamado.
+    a resposta de e-mail do usuário para um determinado chamado. ``secret`` deve ser
+    o INBOUND_EMAIL_SECRET dedicado (Sprint 1 / item 1.3) — nunca um segredo
+    reaproveitado de outro contexto (ex.: SESSION_SECRET).
     """
-    if not secret:
-        secret = "insecure-fallback-secret"
     msg = f"{codigo.upper().strip()}:{str(usuario_id).strip()}"
     return hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()[:16]
 
@@ -30,9 +30,10 @@ def validar_token_resposta(codigo: str, usuario_id: str, token: str, secret: str
 
 
 async def enviar_email(para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None) -> bool:
-    """Dispatcher de envio de e-mail. Prefere a API HTTP do Mailgun (confiável em
-    serverless/Vercel); se ela não estiver configurada, cai para SMTP (executado
-    fora do event loop para não bloquear). Retorna ``True`` se o e-mail saiu.
+    """Dispatcher de envio de e-mail. Prefere a API HTTP do Mailgun (sem socket
+    bloqueante no event loop); se ela não estiver configurada, cai para SMTP
+    (executado fora do event loop para não bloquear). Retorna ``True`` se o
+    e-mail saiu.
 
     Nunca levanta exceção para o chamador — falha de e-mail não deve quebrar o
     fluxo do chat (Seção 6.3). O motivo real vai para o log.
@@ -309,23 +310,27 @@ async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteu
 """
 
     reply_to = None
-    if settings.inbound_email_domain:
-        secret = settings.inbound_email_secret or settings.session_secret
-        token = gerar_token_resposta(codigo, destinatario_id, secret)
+    if settings.inbound_email_domain and settings.inbound_email_secret:
+        token = gerar_token_resposta(codigo, destinatario_id, settings.inbound_email_secret)
         reply_to = f"chamado+{codigo.lower()}+{token}@{settings.inbound_email_domain}"
+    elif settings.inbound_email_domain:
+        # Sprint 1 / item 1.3 (M4): sem segredo dedicado não geramos reply-to —
+        # nunca reaproveitamos o SESSION_SECRET para assinar tokens expostos
+        # publicamente no endereço de e-mail.
+        log.warning(
+            "Inbound de e-mail: INBOUND_EMAIL_DOMAIN configurado sem "
+            "INBOUND_EMAIL_SECRET dedicado — reply-to desativado nesta notificação."
+        )
 
     await enviar_email(email, assunto, corpo_texto, corpo_html, reply_to=reply_to)
 
 
 async def agendar_notificacao_email(background_tasks: BackgroundTasks, chamado: dict, remetente_id: str, conteudo: str) -> None:
-    """Dispara a notificação de e-mail de forma assíncrona usando BackgroundTasks (em servidores tradicionais)
-    ou de forma síncrona/inline (se rodando em ambiente Serverless como a Vercel) para garantir
-    que a execução não seja congelada antes da entrega da mensagem.
-    """
-    settings = get_settings()
-    if settings.is_serverless:
-        log.info("[NOTIFICATION] Running inline email notification for serverless (Vercel)")
-        await notificar_nova_mensagem_email(chamado, remetente_id, conteudo)
-    else:
-        log.info("[NOTIFICATION] Queueing background task for email notification")
-        background_tasks.add_task(notificar_nova_mensagem_email, chamado, remetente_id, conteudo)
+    """Dispara a notificação de e-mail de forma assíncrona via BackgroundTasks.
+
+    Processo persistente (Railway — Sprint 1 / item 1.8, M10: alvo único de
+    deploy, decisão 2026-07-15): BackgroundTasks roda com garantia de conclusão
+    após a resposta, sem o modo inline que a Vercel serverless exigia (função
+    efêmera derrubada logo após responder, o que perdia o envio)."""
+    log.info("[NOTIFICATION] Queueing background task for email notification")
+    background_tasks.add_task(notificar_nova_mensagem_email, chamado, remetente_id, conteudo)

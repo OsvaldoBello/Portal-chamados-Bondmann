@@ -89,3 +89,16 @@ UPDATE auth.users
 
 -- Adicionar um novo departamento (acesso total / TI também pode fazer pela UI futura):
 -- INSERT INTO departamentos (nome) VALUES ('Financeiro');
+
+-- ---------------------------------------------------------------------------
+-- Auditoria de reconciliação (Sprint 1 / item 1.5, M12 — opcional, rodar
+-- periodicamente): a rota /admin/usuarios/{id}/papel já relê e alerta na hora
+-- de cada promoção, mas essa query pega qualquer divergência acumulada por
+-- outra via (ex.: UPDATE manual direto no SQL Editor, migration antiga,
+-- alteração fora da rota). Divergência = perfis.role ≠ app_metadata.role.
+SELECT u.email,
+       p.role AS role_perfis,
+       u.raw_app_meta_data ->> 'role' AS role_jwt
+  FROM perfis p
+  JOIN auth.users u ON u.id = p.id
+ WHERE p.role::text IS DISTINCT FROM (u.raw_app_meta_data ->> 'role');

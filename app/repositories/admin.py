@@ -324,6 +324,14 @@ class AdminRepo:
                 departamento_id,
             )
 
+    async def obter_papel(self, claims: dict, user_id: str) -> str | None:
+        """Relê ``perfis.role`` após uma promoção (Sprint 1 / item 1.5, M12) —
+        confirma que a escrita em :meth:`atualizar_papel` de fato aplicou
+        (nunca assume; a UPDATE não checa rowcount)."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow("SELECT role FROM perfis WHERE id = $1::uuid", user_id)
+            return row["role"] if row else None
+
     async def atualizar_avatar(self, claims: dict, user_id: str, *, avatar_path: str) -> None:
         """Grava o ``avatar_path`` de OUTRO usuário — só o TI pode (o trigger
         ``enforce_perfil_self_so_avatar``, migration 0033, libera qualquer coluna

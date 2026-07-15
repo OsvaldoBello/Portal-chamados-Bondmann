@@ -100,7 +100,15 @@
        quem rola é a página inteira, não a coluna — estilo Trello). #}
     <div class="kanban-col flex-1 min-h-0 overflow-y-auto p-2 space-y-2" data-status="{{ s }}">
       {% for c in colunas[s] %}
-      <article class="kanban-card relative bg-white rounded-lg border border-line/60 p-3 shadow-soft cursor-grab" data-id="{{ c.id }}">
+      {# Gate de permissão (Sprint 1 / item 1.4, M11): mesmo critério de
+         `dept_bate` da tela de atendimento (app/routes/workspace.py). Fora do
+         setor do usuário (ex.: TI acompanhando via 0028), o cartão fica
+         só-leitura na UI — a RLS já bloqueava a mutação no servidor, mas
+         oferecer drag/exclusão que o banco ia recusar é uma armadilha de UX. #}
+      {% set dept_bate = c.departamento_id and perfil.departamento_id and (c.departamento_id|string) == (perfil.departamento_id|string) %}
+      <article class="kanban-card relative bg-white rounded-lg border border-line/60 p-3 shadow-soft {{ 'cursor-grab' if dept_bate else 'kanban-card-locked cursor-default' }}"
+               data-id="{{ c.id }}" {% if not dept_bate %}title="Fora do seu setor — somente leitura"{% endif %}>
+        {% if dept_bate %}
         {# Exclusão rápida: ícone de lixeira vermelha no canto do cartão (fora do
            <a> para não conflitar com o clique/drag). Confirmação via JS
            (workspace.js) antes de chamar a rota de exclusão. #}
@@ -108,6 +116,7 @@
                 data-id="{{ c.id }}" data-codigo="{{ c.codigo }}" title="Excluir chamado" aria-label="Excluir chamado">
           <svg class="w-3.5 h-3.5 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 7h12M9 7V5.5A1.5 1.5 0 0110.5 4h3A1.5 1.5 0 0115 5.5V7m-6 4v6m4-6v6M5 7l1 12a2 2 0 002 2h8a2 2 0 002-2l1-12"/></svg>
         </button>
+        {% endif %}
         {# draggable=false: impede o drag nativo do link de sequestrar o Sortable. #}
         <a href="/workspace/chamados/{{ c.id }}?origem=kanban" class="block pr-5" draggable="false">
           <div class="font-mono text-[11px] text-brandgreen-700">{{ c.codigo }}</div>

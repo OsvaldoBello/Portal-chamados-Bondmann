@@ -11,3 +11,7 @@ node_modules
 supabase/.branches
 supabase/.temp
 tests
+# Arquivado (Sprint 1 / item 1.6, M7) — Dockerfile já só copia app/, mas
+# reduz o contexto enviado ao daemon.
+prototipos
+graphify-out

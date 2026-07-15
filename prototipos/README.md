@@ -1,3 +1,12 @@
+> **Arquivado (Sprint 1 / item 1.6, M7):** a base visual já virou os templates
+> Jinja2 reais em `app/templates/` — esta pasta fica só como referência
+> histórica, não é tocada por build/deploy (o `Dockerfile` só copia `app/`;
+> `.dockerignore` e o `pyproject.toml` [`ruff`] já a excluem). Ferramentas de
+> análise de código (graphify, grep de rotina) devem apontar para `app/`, não
+> para a raiz do repo — senão o Chart.js/Alpine/HTMX vendorizados aqui
+> duplicam ~20 comunidades "(Prototype)" no grafo, sombra do que já existe em
+> `app/static/vendor/`.
+
 # Protótipo de Alta Fidelidade — Portal de Chamados Bondmann Química
 
 Base visual de **todas as telas** do portal, construída como protótipo navegável de alta

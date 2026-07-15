@@ -361,6 +361,7 @@ class ChamadosRepo:
         SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade, c.setor,
                c.created_at, c.data_entrega, c.sem_prazo,
                c.limite_resolucao, c.respondido_em, c.resolvido_em,
+               c.departamento_id,
                cat.nome AS categoria, dep.nome AS departamento,
                autor.nome AS cliente_nome, autor.avatar_path AS cliente_avatar_path,
                autor.updated_at AS cliente_avatar_atualizado_em,

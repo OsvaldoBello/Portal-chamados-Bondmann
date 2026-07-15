@@ -86,8 +86,8 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
 
-    # Init idempotente e barato aqui (não só no lifespan): garante CSRF/JWT prontos
-    # mesmo em runtimes que não executam o lifespan (ex.: serverless/Vercel).
+    # Init idempotente e barato aqui (não só no lifespan): garante CSRF/JWT
+    # prontos mesmo antes do lifespan rodar (ex.: import isolado em teste/script).
     init_csrf(settings)
     init_verifier(settings)
 

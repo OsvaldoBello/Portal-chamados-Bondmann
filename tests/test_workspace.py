@@ -222,6 +222,40 @@ def test_kanban_sem_filtro_nao_mostra_link_de_limpar():
     assert "limpar filtros" not in r.text
 
 
+def test_kanban_cartao_fora_do_setor_sem_drag_e_sem_excluir():
+    """Sprint 1 / item 1.4 (M11): mesmo gate de permissão da tela de
+    atendimento (dept_bate) aplicado à UI do Kanban — um cartão de outro
+    departamento (ex.: líder de setor acompanhando via 0028) não pode ser
+    arrastado nem excluído pela UI, mesmo que a RLS já bloqueasse no servidor."""
+
+    class FakeRepoMultiDept(FakeRepo):
+        async def fila(self, claims, **kw):
+            return [
+                _chamado(id="c1", codigo="BOND-2026-00001", departamento_id="d1"),
+                _chamado(id="c2", codigo="BOND-2026-00002", departamento_id="d-outro", status="NOVO"),
+            ]
+
+    with ws_client(FakeRepoMultiDept(perfil_departamento_id="d1")) as c:
+        r = c.get("/workspace/kanban")
+    assert r.status_code == 200
+
+    def _cartao(chamado_id: str) -> str:
+        marcador = f'data-id="{chamado_id}"'
+        inicio = r.text.rindex("<article", 0, r.text.index(marcador))
+        fim = r.text.index("</article>", inicio)
+        return r.text[inicio:fim]
+
+    # Cartão do próprio setor (d1): arrastável e com botão de excluir.
+    cartao_c1 = _cartao("c1")
+    assert "kanban-card-locked" not in cartao_c1
+    assert 'data-id="c1" data-codigo="BOND-2026-00001"' in cartao_c1
+
+    # Cartão de outro setor (d-outro): sem drag (classe de bloqueio) e sem lixeira.
+    cartao_c2 = _cartao("c2")
+    assert "kanban-card-locked" in cartao_c2
+    assert 'data-codigo="BOND-2026-00002"' not in cartao_c2
+
+
 def test_mudar_status_registra_e_redireciona():
     """Chamado já assumido (``iniciar_atendimento`` não se aplica — no-op)
     só troca o status, mesmo pulando direto pra "Aguardando"."""
