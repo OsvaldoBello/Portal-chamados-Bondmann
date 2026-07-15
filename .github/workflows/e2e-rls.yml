@@ -1,0 +1,53 @@
+name: E2E RLS
+
+# Item 1.7 (M9) do plano de melhorias: suíte e2e de RLS contra Supabase local real
+# (não mock). Roda num job separado do CI principal porque exige Docker (`supabase
+# start`) e só é relevante quando migrations/policies ou repositórios mudam — mantém
+# o `ci.yml` rápido para o resto dos PRs.
+
+on:
+  push:
+    branches: [main, develop, claude/develop]
+    paths:
+      - "supabase/migrations/**"
+      - "app/repositories/**"
+      - "app/db.py"
+      - "tests/e2e/**"
+      - ".github/workflows/e2e-rls.yml"
+  pull_request:
+    paths:
+      - "supabase/migrations/**"
+      - "app/repositories/**"
+      - "app/db.py"
+      - "tests/e2e/**"
+      - ".github/workflows/e2e-rls.yml"
+
+jobs:
+  e2e-rls:
+    name: Matriz de RLS (Supabase local)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências (runtime + dev)
+        run: pip install -r requirements-dev.txt
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Subir Supabase local (aplica supabase/migrations/*.sql)
+        run: supabase start --exclude studio,edge-runtime,imgproxy,vector,analytics
+
+      - name: Rodar suíte e2e de RLS
+        env:
+          RLS_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: python -m pytest tests/e2e -m rls -v
+
+      - name: Parar Supabase local
+        if: always()
+        run: supabase stop --no-backup

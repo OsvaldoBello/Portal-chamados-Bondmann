@@ -30,6 +30,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+  "rls: suíte e2e contra Supabase local real (item 1.7/M9); skip automático sem RLS_DATABASE_URL.",
+]
 
 [tool.ruff]
 line-length = 100

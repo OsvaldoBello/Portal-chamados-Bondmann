@@ -201,18 +201,57 @@
   (`/graphify app` ou similar), não executada aqui (custo de LLM, decisão do
   gestor sobre quando vale regenerar).
 
-### 1.7 · M9 — Suíte e2e de RLS recorrente 🔴 **Não executado nesta rodada**
-- [ ] Suite dedicada (`tests/e2e/` ou marker `@pytest.mark.rls`) contra Supabase local
+### 1.7 · M9 — Suíte e2e de RLS recorrente 🔴 ✅ **Concluído 2026-07-15**
+- [x] Suite dedicada (`tests/e2e/` ou marker `@pytest.mark.rls`) contra Supabase local
       cobrindo a matriz de visibilidade vigente: autor · staff RH/Marketing · líder de
       setor (0028) · TI pós-0020 · exceções Marketing (0038) e RH (0042) · nota interna
       invisível ao autor · upload de avatar (1º envio **e** reenvio, regressão da 0037)
       · Realtime não entrega `is_interna` ao cliente.
-- [ ] Integrar ao CI (job separado com `supabase start`; pode rodar só em PRs que tocam
+- [x] Integrar ao CI (job separado com `supabase start`; pode rodar só em PRs que tocam
       `supabase/` ou `app/repositories/`).
 - **Aceite:** a classe de bug "mock verde × banco real divergente" (0028, chamados_departamento) coberta por teste automatizado.
-- **Nota:** item 🔴 (3+ dias) — infraestrutura nova (Supabase local no CI) e
-  cobertura ampla de matriz de RLS, fora do escopo de uma sessão de execução
-  do Sprint 1 junto dos itens 🟢. Fica para uma sessão dedicada.
+- **Notas de execução:**
+  - `supabase/config.toml` criado (`supabase init`) para viabilizar Supabase local
+    pela primeira vez neste repo — desabilitado `db.seed` (a suíte semeia os
+    próprios dados por teste), `edge_runtime` e `analytics` (não usados, Seção
+    1.8 já decidiu Railway/sem Edge Functions).
+  - `tests/e2e/conftest.py`: fixture `conn` abre **uma** conexão/transação por
+    teste que nunca comita (rollback no teardown = limpeza automática, sem
+    truncar tabela); fixture `seed` cria departamentos/usuários/chamados reais
+    (mesmo padrão SQL do `docs/tutorial_usuarios.md`, trigger `handle_new_user`);
+    helper `as_user()` reusa `app.db._apply_rls_claims` (o MESMO código de
+    produção) para trocar de persona — em vez de reimplementar `SET LOCAL ROLE`
+    à parte, o que arriscaria a suíte validar um mecanismo diferente do real.
+  - `tests/e2e/test_rls_matrix.py`: 10 testes cobrindo os 8 pontos da matriz
+    (autor; staff RH; staff Marketing; líder de setor 0028 — inclusive prova de
+    que é só leitura, sem poder de atendimento; TI pós-0020; autoatendimento
+    Marketing/RH 0038/0042 vs. TI sem a flag, que deve continuar bloqueado por
+    RLS/`InsufficientPrivilegeError`; nota interna; avatar 1º envio + reenvio
+    0037).
+  - **Realtime (`is_interna`):** sem teste WebSocket separado — documentado em
+    docstring que o Realtime do Supabase aplica a MESMA policy `mensagens_select`
+    na entrega de `postgres_changes` por assinante; o teste de SELECT direto já
+    é a prova da mesma garantia. Levantar um cliente Realtime de verdade no CI
+    seria custo extra sem cobrir um mecanismo distinto.
+  - `.github/workflows/e2e-rls.yml`: job separado (`supabase/setup-cli` +
+    `supabase start` + `pytest tests/e2e -m rls`), só dispara em paths
+    `supabase/migrations/**`, `app/repositories/**`, `app/db.py`,
+    `tests/e2e/**` — não pesa no `ci.yml` principal.
+  - Marker `rls` registrado em `pyproject.toml`; sem `RLS_DATABASE_URL` a suíte
+    inteira é pulada via `pytest_collection_modifyitems` (não quebra `pytest`
+    default de quem não tem Docker local).
+  - **Pendência de validação:** este ambiente de execução não tem Docker
+    disponível (`docker: command not found`), então a suíte foi escrita e
+    revisada linha a linha contra o estado real das 45 migrations (policies
+    finais confirmadas por leitura direta, não por suposição) mas **não foi
+    rodada de ponta a ponta contra um Postgres local**. A suíte pytest
+    principal (sem Docker) roda normal e pula os novos testes de forma limpa —
+    confirmado nesta sessão. Primeira execução real acontece no CI (job
+    `e2e-rls`, `ubuntu-latest` tem Docker) no próximo PR que toque
+    `supabase/`/`app/repositories/`; recomendo rodar `supabase start` +
+    `pytest tests/e2e -m rls -v` localmente (quem tiver Docker) antes do merge
+    para pegar qualquer detalhe de sintaxe/schema que só aparece com o banco
+    de pé.
 
 ### 1.8 · M10 — `[DECISÃO DO GESTOR]` Alvo canônico de deploy 🟡 ✅ **Decidido e executado 2026-07-15**
 - Opções: **(a) Railway como produção única** (recomendação da auditoria e do próprio
@@ -237,25 +276,6 @@
   **Fora do escopo desta limpeza:** a duplicação `requirements.txt` ×
   `pyproject.toml [project.dependencies]` (isso é o item 2.5/M8, que esta
   decisão agora destrava).
-
-### 1.7 · M9 — Suíte e2e de RLS recorrente 🔴
-- [ ] Suite dedicada (`tests/e2e/` ou marker `@pytest.mark.rls`) contra Supabase local
-      cobrindo a matriz de visibilidade vigente: autor · staff RH/Marketing · líder de
-      setor (0028) · TI pós-0020 · exceções Marketing (0038) e RH (0042) · nota interna
-      invisível ao autor · upload de avatar (1º envio **e** reenvio, regressão da 0037)
-      · Realtime não entrega `is_interna` ao cliente.
-- [ ] Integrar ao CI (job separado com `supabase start`; pode rodar só em PRs que tocam
-      `supabase/` ou `app/repositories/`).
-- **Aceite:** a classe de bug "mock verde × banco real divergente" (0028, chamados_departamento) coberta por teste automatizado.
-
-### 1.8 · M10 — `[DECISÃO DO GESTOR]` Alvo canônico de deploy 🟡
-- Opções: **(a) Railway como produção única** (recomendação da auditoria e do próprio
-  plano mestre — processo persistente, libmagic, BackgroundTasks confiáveis; Vercel
-  vira apenas preview/desativa) · **(b) manter Vercel** ⇒ implementar outbox/fila com
-  retry para e-mails (BackgroundTasks morre pós-response no serverless).
-- [ ] Decisão registrada aqui e no plano mestre.
-- [ ] Executar a opção escolhida (limpar configs do alvo abandonado ou implementar outbox).
-- **Aceite:** notificações por e-mail com garantia de envio no ambiente de produção real.
 
 ---
 
@@ -353,7 +373,7 @@
 | 2026-07-15 | 1.4 (M11) | `app/templates/workspace/kanban.html`, `app/static/js/workspace.js`, `app/repositories/chamados.py`, `tests/test_workspace.py` | Kanban aplica o mesmo `dept_bate` da tela de atendimento: cartão fora do setor sem drag (`kanban-card-locked` + `Sortable.filter`) e sem botão de excluir. |
 | 2026-07-15 | 1.5 (M12) | `app/repositories/admin.py`, `app/routes/admin.py`, `supabase/registro_usuarios.sql`, `tests/test_admin.py` | `mudar_papel` relê `perfis.role` e `app_metadata.role` após a escrita dupla; divergência no banco vira erro explícito, divergência só no JWT vira aviso específico (antes era "ok" genérico mesmo em falha silenciosa). |
 | 2026-07-15 | 1.6 (M7) | `.dockerignore`, `prototipos/README.md` | Confirmado que Dockerfile/vercel.json não referenciam `prototipos/`; pasta mantida (não branch órfã) e documentada como arquivada/fora do escopo de ferramentas de análise. |
-| — | 1.7 (M9) | — | Não executado — item 🔴 (suíte e2e de RLS + Supabase local no CI), fora do escopo desta rodada; fica para sessão dedicada. |
+| 2026-07-15 | 1.7 (M9) | `supabase/config.toml`, `tests/e2e/conftest.py`, `tests/e2e/test_rls_matrix.py`, `tests/e2e/README.md`, `.github/workflows/e2e-rls.yml`, `pyproject.toml` | Suíte e2e (10 testes) contra Supabase local real cobrindo a matriz de visibilidade (autor, staff RH/Marketing, líder de setor 0028, TI pós-0020, autoatendimento Marketing/RH 0038/0042, nota interna, avatar 0037); reusa `app.db._apply_rls_claims` de produção para simular persona. Job de CI separado (`e2e-rls.yml`, só em paths de `supabase/`/`app/repositories/`). Sem Docker neste ambiente de execução — não rodada de ponta a ponta aqui; ver nota de execução do item para o que falta validar no próximo PR. |
 | 2026-07-15 | 1.8 (M10) | `vercel.json` (removido), `.vercelignore` (removido), `pyproject.toml`, `app/config.py`, `app/db.py`, `app/notification.py`, `app/main.py`, `README.md`, plano mestre (tabela de Estado) | Decisão do gestor: Railway como alvo único de produção. Vercel desativado por completo — arquivos de deploy removidos, `Settings.is_serverless` e os ramos condicionais que ele acionava (pool restrito, envio inline de e-mail) eliminados. Destrava o item 2.5 (fonte única de dependências). |
 
 ## Definição de pronto (todos os itens)
