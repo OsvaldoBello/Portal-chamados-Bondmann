@@ -4,7 +4,7 @@
 # Estágio 1 — build do CSS com Tailwind CLI (Seção 0.4 / C3)
 # CSS compilado e purgado; servido como asset estático (sem CDN em prod).
 # ============================================================
-FROM node:22-slim AS css
+FROM node:26-slim AS css
 WORKDIR /build
 COPY package.json ./
 RUN npm install --no-audit --no-fund
