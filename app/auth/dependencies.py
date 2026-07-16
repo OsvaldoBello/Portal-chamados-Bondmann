@@ -15,7 +15,7 @@ from fastapi import Depends, HTTPException, Request, status
 
 from app.auth.session import ACCESS_COOKIE, REFRESH_COOKIE, SessionTokens, set_session
 from app.db import rls_connection
-from app.security.jwt import TokenInvalido, get_verifier
+from app.security.jwt_verifier import TokenInvalido, get_verifier
 
 log = logging.getLogger("app.auth")
 

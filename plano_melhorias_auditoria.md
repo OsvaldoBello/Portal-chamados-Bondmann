@@ -313,12 +313,19 @@
 - [ ] Decisão + execução; medir `/portal` antes/depois (meta: < 600ms).
 - **Aceite:** dashboard abaixo de ~600ms em produção.
 
-### 2.5 · M8 — Fonte única de dependências + atualização gerida 🟢
-- [ ] Eliminar a duplicação `requirements.txt` × `pyproject.toml` (gerar um do outro, ou
+### 2.5 · M8 — Fonte única de dependências + atualização gerida 🟢 ✅ **Concluído 2026-07-15**
+- [x] Eliminar a duplicação `requirements.txt` × `pyproject.toml` (gerar um do outro, ou
       só `pyproject` + lock se o alvo único de deploy — item 1.8 — permitir).
-- [ ] Ativar Dependabot/Renovate (agrupado, mensal) — versões pinadas sem processo
+- [x] Ativar Dependabot/Renovate (agrupado, mensal) — versões pinadas sem processo
       acumulam CVEs silenciosamente.
 - **Aceite:** um único lugar define versões; PRs automáticos de atualização chegando.
+- **Notas de execução:** `pyproject.toml [project.dependencies]` era um espelho morto —
+  sem `[build-system]` no arquivo, `pip` nunca instalou a partir dali (Dockerfile e o job
+  `pytest` do CI sempre usaram `requirements.txt`/`requirements-dev.txt`). Removida a lista
+  duplicada, substituída por um comentário apontando `requirements.txt` como única fonte —
+  zero mudança de comportamento em Docker/CI. `.github/dependabot.yml` novo: 4 ecossistemas
+  (`pip`, `npm`, `docker`, `github-actions`), agrupados, mensal, limite de 5 PRs abertos por
+  ecossistema.
 
 ### 2.6 · Observabilidade — Sentry + uptime + métricas 🟡
 - [ ] Sentry (ou similar) para exceções não tratadas, com `request_id` no contexto.
@@ -327,12 +334,31 @@
       (endpoint `/metrics` ou métricas do Railway).
 - **Aceite:** critério de go-live "48h sem 5xx" verificável sem grep manual de log.
 
-### 2.7 · B4 — Higiene documental 🟢
-- [ ] Extrair o changelog do plano mestre para `docs/CHANGELOG.md`.
-- [ ] Decisões grandes viram ADRs (`docs/adr/NNN-titulo.md`) linkados do plano.
-- [ ] Reescrever a matriz de permissões da Seção 3.2 no modelo vigente
+### 2.7 · B4 — Higiene documental 🟢 ✅ **Concluído 2026-07-15**
+- [x] Extrair o changelog do plano mestre para `docs/CHANGELOG.md`.
+- [x] Decisões grandes viram ADRs (`docs/adr/NNN-titulo.md`) linkados do plano.
+- [x] Reescrever a matriz de permissões da Seção 3.2 no modelo vigente
       (0020/0027/0028/0038/0042) — hoje está marcada como desatualizada.
 - **Aceite:** plano mestre navegável; matriz de permissões confiável para onboarding.
+- **Notas de execução:**
+  - Changelog de 24 entradas (2026-06-26→2026-07-15) movido pra `docs/CHANGELOG.md`;
+    Seção 7 do plano mestre (protocolo de atualização) repontada pra registrar lá, linha
+    mais nova no topo. O plano mestre ganhou uma nota curta linkando pro arquivo em vez da
+    tabela inteira.
+  - 6 ADRs novos em `docs/adr/` (índice em `docs/adr/README.md`), cobrindo as decisões
+    genuinamente estruturais (não incrementos de feature — esses continuam só no
+    changelog): RLS via `SET LOCAL`+claims em vez de `service_role` (0001), pooling
+    Supavisor transaction mode (0002), pivô pra sistema interno por departamento (0003),
+    SLA em horário comercial (0004), Railway como alvo único de deploy (0005), cache/rate
+    limit local-por-processo com gatilho de Redis (0006).
+  - Matriz da Seção 3.2 reescrita: o eixo deixou de ser "TI = acesso total, resto = só o
+    setor" (modelo `0010`, incorreto desde a `0020` em 2026-07-06) e passa a refletir as
+    três dimensões reais — setor de destino, setor de origem de quem olha, e se o setor
+    tem `autoatendimento`. Nova coluna explícita para "ADMIN líder de setor sem fila"
+    (`0028`, só leitura) e linha de autoatendimento (`0038`/`0042`). A tabela antiga
+    chegou a induzir um bug real (bypass incondicional do TI na tela de atendimento,
+    changelog de 2026-07-08) — nota no rodapé da tabela nova aponta as policies SQL da
+    Seção 3.3 como fonte de verdade em caso de dúvida futura.
 
 ### 2.8 · B6 — Autenticação reforçada 🟡
 - [ ] Executar o plano de hashing já redigido: revisar parâmetros do GoTrue e definir
@@ -340,14 +366,33 @@
 - [ ] Avaliar MFA para contas staff/ADMIN (maior privilégio primeiro).
 - **Aceite:** decisões registradas no plano mestre; MFA de staff avaliado com prazo.
 
-### 2.9 · Itens menores (B1, B2, B3, B5) 🟢
-- [ ] **B1:** checklist de scale-out no plano mestre (réplicas > 1 ⇒ Redis para cache +
+### 2.9 · Itens menores (B1, B2, B3, B5) 🟢 ✅ **Concluído 2026-07-15**
+- [x] **B1:** checklist de scale-out no plano mestre (réplicas > 1 ⇒ Redis para cache +
       rate limit) — item de infra, não de código.
-- [ ] **B2:** manter decisão do bucket público de avatares registrada; reavaliar se a
+- [x] **B2:** manter decisão do bucket público de avatares registrada; reavaliar se a
       sensibilidade mudar.
-- [ ] **B3:** desfazer a auto-referência de import em `app/security/jwt.py`.
-- [ ] **B5:** teste unitário de claims adversariais (aspas/escape/unicode) em
+- [x] **B3:** desfazer a auto-referência de import em `app/security/jwt.py`.
+- [x] **B5:** teste unitário de claims adversariais (aspas/escape/unicode) em
       `_apply_rls_claims`.
+- **Notas de execução:**
+  - **B1:** nova Seção 2.5 no plano mestre ("Checklist de scale-out") consolidando os
+    gatilhos de migração pra Redis já mencionados em 2.3 (cache) e 2.4 (rate limit), mais
+    o redimensionamento do pool `asyncpg` por réplica — checklist, não executado agora
+    (1 réplica hoje não bloqueia nada).
+  - **B2:** nova Seção 3.9.1 registrando explicitamente que `avatares` é público **por
+    decisão**, em contraste com `chamados-anexos` (privado) — com o gatilho de
+    reavaliação se a sensibilidade do dado mudar.
+  - **B3:** `app/security/jwt.py` → `app/security/jwt_verifier.py` (`git mv`, preserva
+    histórico). 3 call sites atualizados: `app/auth/dependencies.py`, `app/main.py`,
+    `tests/test_jwt.py`. Nenhum outro arquivo referenciava o módulo pelo nome antigo
+    (`app/security/__init__.py` não reexporta). Suíte de `test_jwt.py` verde após o rename.
+  - **B5:** `tests/test_db_rls_claims.py` novo, 9 casos parametrizados (aspas simples,
+    aspas duplicadas, tentativa de fechar o literal SQL cedo com `'; DROP TABLE...`,
+    aspas duplas, backslash, unicode/emoji/CJK/árabe, separadores de linha, dict aninhado
+    com listas) + 1 teste de sanity do `SET LOCAL ROLE`. Não abre conexão real — captura a
+    SQL final via um `_FakeConnection.execute` e decodifica pelas regras de literal do
+    Postgres (`''` → `'`, único escape sob `standard_conforming_strings`), confirmando
+    round-trip exato do claims original. 15 testes, suíte verde.
 
 ---
 
@@ -375,6 +420,9 @@
 | 2026-07-15 | 1.6 (M7) | `.dockerignore`, `prototipos/README.md` | Confirmado que Dockerfile/vercel.json não referenciam `prototipos/`; pasta mantida (não branch órfã) e documentada como arquivada/fora do escopo de ferramentas de análise. |
 | 2026-07-15 | 1.7 (M9) | `supabase/config.toml`, `tests/e2e/conftest.py`, `tests/e2e/test_rls_matrix.py`, `tests/e2e/README.md`, `.github/workflows/e2e-rls.yml`, `pyproject.toml` | Suíte e2e (10 testes) contra Supabase local real cobrindo a matriz de visibilidade (autor, staff RH/Marketing, líder de setor 0028, TI pós-0020, autoatendimento Marketing/RH 0038/0042, nota interna, avatar 0037); reusa `app.db._apply_rls_claims` de produção para simular persona. Job de CI separado (`e2e-rls.yml`, só em paths de `supabase/`/`app/repositories/`). Sem Docker neste ambiente de execução — não rodada de ponta a ponta aqui; ver nota de execução do item para o que falta validar no próximo PR. |
 | 2026-07-15 | 1.8 (M10) | `vercel.json` (removido), `.vercelignore` (removido), `pyproject.toml`, `app/config.py`, `app/db.py`, `app/notification.py`, `app/main.py`, `README.md`, plano mestre (tabela de Estado) | Decisão do gestor: Railway como alvo único de produção. Vercel desativado por completo — arquivos de deploy removidos, `Settings.is_serverless` e os ramos condicionais que ele acionava (pool restrito, envio inline de e-mail) eliminados. Destrava o item 2.5 (fonte única de dependências). |
+| 2026-07-15 | 2.5 (M8) | `pyproject.toml`, `.github/dependabot.yml` | `pyproject.toml [project.dependencies]` (espelho morto, nunca instalado por `pip`) removido; `requirements.txt` confirmado como única fonte real (Dockerfile + CI). Dependabot novo: pip/npm/docker/github-actions, agrupado, mensal. |
+| 2026-07-15 | 2.7 (B4) | `docs/CHANGELOG.md` (novo), `docs/adr/` (novo, 6 ADRs + índice), `plano_mestre_desenvolvimento.md` (Seções 3.2, 7, Changelog) | Changelog de 24 entradas extraído do plano mestre; 6 ADRs cobrindo as decisões estruturais (RLS/claims, pooling, pivô departamental, SLA comercial, Railway único, cache/rate-limit local); matriz de permissões da Seção 3.2 reescrita no modelo `0020`/`0027`/`0028`/`0038`/`0042` (a tabela antiga estava incorreta desde 2026-07-06 e já tinha induzido um bug real). |
+| 2026-07-15 | 2.9 (B1/B2/B3/B5) | `plano_mestre_desenvolvimento.md` (Seções 2.5, 3.9.1 novas), `app/security/jwt.py`→`jwt_verifier.py`, `app/auth/dependencies.py`, `app/main.py`, `tests/test_jwt.py`, `tests/test_db_rls_claims.py` (novo) | B1: checklist de scale-out consolidado. B2: decisão do bucket público de avatares registrada explicitamente. B3: módulo `jwt.py` renomeado (desfaz a auto-referência de nome com o pacote `jwt` importado dentro dele). B5: 9 testes adversariais novos contra `_apply_rls_claims` (aspas/backslash/unicode/tentativa de fechar o literal SQL cedo), validando o round-trip via decodificação das regras de literal do Postgres. |
 
 ## Definição de pronto (todos os itens)
 

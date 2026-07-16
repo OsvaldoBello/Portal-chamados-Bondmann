@@ -3,27 +3,12 @@ name = "portal-chamados-bondmann"
 version = "0.1.0"
 description = "Portal de Chamados Bondmann Química — Help Desk multi-tenant (FastAPI + Supabase)"
 requires-python = ">=3.12"
-# Espelho de requirements.txt — duplicação pendente de eliminar (Sprint 2 /
-# item 2.5, M8). Manter em sincronia enquanto isso não roda.
-dependencies = [
-  "fastapi==0.115.6",
-  "uvicorn[standard]==0.34.0",
-  "supabase==2.11.0",
-  "jinja2==3.1.5",
-  "pydantic==2.10.4",
-  "pydantic-settings==2.7.1",
-  "asyncpg==0.30.0",
-  "slowapi==0.1.9",
-  "python-multipart==0.0.20",
-  "python-magic==0.4.27",
-  "python-magic-bin==0.4.14 ; sys_platform == 'win32'",
-  "itsdangerous==2.2.0",
-  "httpx==0.27.2",
-  "pyjwt[crypto]==2.10.1",
-  "tzdata==2024.2",
-  "holidays==0.100",
-  "Pillow==12.3.0",
-]
+# Sprint 2 / item 2.5 (M8): `requirements.txt` é a ÚNICA fonte de versões de
+# runtime (é o que o Dockerfile e o job `pytest` do CI instalam de fato). Este
+# [project] table não tem [build-system] — pip nunca instala a partir daqui —
+# então não duplicamos a lista de dependências aqui para não haver dois lugares
+# para manter em sincronia. Ver `requirements.txt` (runtime) e
+# `requirements-dev.txt` (+ testes/lint).
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

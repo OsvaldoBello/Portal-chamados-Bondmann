@@ -35,7 +35,7 @@ from app.routes.workspace import register_workspace_routes
 from app.security.csrf import init_csrf
 from app.storage import close_storage, init_storage
 from app.security.headers import SecurityHeadersMiddleware
-from app.security.jwt import init_verifier
+from app.security.jwt_verifier import init_verifier
 
 log = logging.getLogger("app")
 

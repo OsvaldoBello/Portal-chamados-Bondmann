@@ -6,7 +6,7 @@ import jwt
 import pytest
 
 from app.config import Settings
-from app.security.jwt import EXPECTED_AUD, JWTVerifier, TokenInvalido
+from app.security.jwt_verifier import EXPECTED_AUD, JWTVerifier, TokenInvalido
 
 _URL = "https://projeto.supabase.co"
 _SECRET = "segredo-de-teste-hs256"
