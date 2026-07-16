@@ -36,7 +36,7 @@ jobs:
       - name: Instalar dependências (runtime + dev)
         run: pip install -r requirements-dev.txt
 
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@v3
         with:
           version: latest
 
