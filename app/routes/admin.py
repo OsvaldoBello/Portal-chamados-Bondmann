@@ -40,6 +40,7 @@ from app.repositories.chamados import (
     get_chamados_repo,
 )
 from app.security.csrf import get_csrf
+from app.security.password_policy import SENHA_MIN_CHARS
 from app.services.admin import AdminService
 from app.templating import render
 
@@ -439,7 +440,6 @@ async def editar_plano(
 _PAPEIS = {"CLIENTE", "OPERADOR", "ADMIN"}
 # Rótulos amigáveis (o papel interno CLIENTE aparece como "Funcionário" na UI).
 _PAPEL_LABEL = {"CLIENTE": "Funcionário", "OPERADOR": "Operador", "ADMIN": "Admin de setor"}
-_SENHA_MIN = 8
 
 
 async def _emails_por_id() -> dict[str, str]:
@@ -522,8 +522,8 @@ async def criar_usuario(
     papel = papel.strip().upper()
     if papel not in _PAPEIS:
         papel = "CLIENTE"
-    if len(senha) < _SENHA_MIN:
-        return _volta(erro=f"A senha deve ter ao menos {_SENHA_MIN} caracteres.")
+    if len(senha) < SENHA_MIN_CHARS:
+        return _volta(erro=f"A senha deve ter ao menos {SENHA_MIN_CHARS} caracteres.")
     # Setor de origem obrigatório pra qualquer papel (0028) — inclusive
     # Funcionário: é o que permite o líder do setor ver os chamados da equipe.
     # Só OPERADOR exige setor com fila (é quem atende, 0028).

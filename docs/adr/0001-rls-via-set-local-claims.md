@@ -50,3 +50,14 @@ ativo).
   helper de produção (`_apply_rls_claims`) para trocar de persona nos testes,
   em vez de reimplementar a técnica à parte — garante que o teste valida o
   mecanismo real, não uma cópia que pode divergir.
+- Rede de segurança complementar: produção tem um event trigger
+  (`ensure_rls`, ON `ddl_command_end`) que roda `ENABLE ROW LEVEL SECURITY`
+  automaticamente em toda tabela nova de `public` (função
+  `rls_auto_enable()`), pego por introspecção durante a reconstrução da
+  migration `0015` (achado da auditoria, item 0.1). Achado fora de qualquer
+  migration até então — mesmo tipo de drift que causou a perda da própria
+  `0015` e da RLS de `marketing_midia_regional` (`0045`). Formalizado em
+  `supabase/migrations/0046_document_rls_auto_enable_trigger.sql` para que
+  uma base aplicada do zero reproduza a mesma defesa: RLS habilitada por
+  padrão mesmo se uma migration futura esquecer o `ENABLE ROW LEVEL
+  SECURITY` explícito.

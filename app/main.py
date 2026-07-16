@@ -11,6 +11,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import sentry_sdk
 from fastapi import FastAPI, HTTPException, Request, status
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.gzip import GZipMiddleware
@@ -23,7 +24,7 @@ from app.auth.session import SessionRefreshMiddleware
 from app.auth.supabase_client import init_supabase
 from app.config import get_settings
 from app.db import close_pool, init_pool
-from app.observability import RequestContextMiddleware, configure_logging
+from app.observability import RequestContextMiddleware, configure_logging, configure_sentry
 from app.ratelimit import limiter
 from app.routes.health import router as health_router
 from app.routes.admin import register_admin_routes
@@ -46,6 +47,7 @@ _STATIC_DIR = Path(__file__).parent / "static"
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings.log_level)
+    configure_sentry(settings)
 
     init_csrf(settings)
     init_verifier(settings)
@@ -198,6 +200,13 @@ def _http_exception_handler(request: Request, exc: HTTPException):
 def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     request_id = getattr(request.state, "request_id", None)
     log.exception("unhandled_exception", extra={"request_id": request_id})
+    # Sprint 2 / item 2.6: manda para o Sentry (no-op se SENTRY_DSN não estiver
+    # configurada). ``Scope()`` isolado — não um `configure_scope`/`push_scope`
+    # global — para não vazar a tag `request_id` entre requests concorrentes
+    # (o app roda várias corrotinas no mesmo processo).
+    scope = sentry_sdk.Scope()
+    scope.set_tag("request_id", request_id)
+    scope.capture_exception(exc)
     return JSONResponse(
         {"detail": "Erro interno.", "request_id": request_id}, status_code=500
     )

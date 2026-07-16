@@ -383,6 +383,44 @@ Helpers para as policies (SECURITY DEFINER, evitam recursão de RLS ao ler `perf
 - **Expiração:** access token conforme config do Supabase (ex.: 1h); sessão de aplicação expira com o refresh token. Inatividade prolongada → re-login.
 - **🔁 Cadastro (sistema interno):** **não há signup público**. Colaboradores são criados **direto no Supabase** (Authentication > Users); `handle_new_user` gera o perfil `CLIENTE` vinculado à org interna; a promoção a `OPERADOR`/`ADMIN` e a atribuição de **departamento** são feitas por SQL (`supabase/registro_usuarios.sql`). Não existe rota `/cadastro`.
 
+### 3.4.1 Política de senha e MFA (Sprint 2 / item 2.8, B6)
+
+**Hashing:** delegado por completo ao GoTrue (Supabase Auth) — bcrypt gerenciado pela
+plataforma, sem parâmetro de custo/algoritmo exposto do nosso lado. Não há ação de código
+a tomar aqui além de manter essa delegação (é a própria decisão, não uma lacuna).
+
+**Política de senha — DECISÃO (2026-07-16):** mínimo de **8 caracteres**, sem exigência de
+composição (maiúscula/símbolo/dígito obrigatórios) — segue **NIST 800-63B** (comprimento é
+mais eficaz que regras de composição arbitrárias, que na prática induzem padrões
+previsíveis tipo "Senha123!"). Já era o comportamento real da aplicação nos dois pontos que
+criam/trocam senha; consolidado em `app/security/password_policy.py::SENHA_MIN_CHARS` (fonte
+única — antes `app/auth/routes.py` e `app/routes/admin.py` redefiniam a mesma constante `8`
+cada um por conta própria, a mesma classe de duplicação já corrigida noutros itens deste
+plano). **`[AÇÃO DO GESTOR PENDENTE]`:** replicar o mesmo mínimo no painel do Supabase
+(Authentication → Policies → *Password minimum length*, hoje no default `6` do projeto
+hospedado) — o GoTrue é a única barreira real para quem chamar a Auth API diretamente, fora
+do nosso formulário; não há Management API exposta via MCP para automatizar esse ajuste.
+
+**MFA — avaliação (não implementado nesta sessão):**
+- GoTrue já suporta MFA nativo (TOTP via app autenticador) sem trocar de provedor —
+  `[auth.mfa]`/`[auth.mfa.totp]` no `supabase/config.toml` local espelha o mesmo mecanismo do
+  projeto hospedado.
+- O custo real de implementação está no nosso lado: tela de enrollment (QR code + código de
+  verificação), desafio de MFA no fluxo de `/login` (hoje single-step,
+  `sign_in_with_password` direto pro Workspace/Portal), fluxo de recovery codes, e decidir
+  obrigatoriedade por papel.
+- **Recomendação de faseamento** (maior privilégio primeiro): `ADMIN`/`OPERADOR` (staff —
+  RLS mais permissiva, acesso a dados de outros usuários) antes de `CLIENTE` (funcionário
+  comum, só os próprios chamados).
+  - **Fase 1 (alvo: Sprint 3):** habilitar TOTP no projeto Supabase + telas de
+    enrollment/challenge no login para staff, **opcional** na 1ª rodada (nudge, não bloqueio
+    — evita travar quem esquece de configurar antes de ter suporte formado).
+  - **Fase 2 (alvo: Sprint 4, condicionada à adoção da Fase 1):** obrigatório para `ADMIN`;
+    reavaliar `OPERADOR`/`CLIENTE` conforme sensibilidade dos dados de RH/Financeiro
+    trafegados no portal.
+- **Aceite deste item:** avaliação registrada com prazo (acima) — a *implementação* da
+  feature de MFA fica para os sprints indicados, fora do escopo do item 2.8.
+
 ### 3.5 CSRF (ausente na spec — **obrigatório**)
 
 - Proteção CSRF em **todas as mutações** HTMX (`POST/PUT/PATCH/DELETE`).
@@ -856,6 +894,8 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | **Admin de departamento (papéis por setor)** | ✅ Implementado | 4 | `/admin` agora entra p/ **TI** (tudo + gestão) **e ADMIN de setor** (role `ADMIN`+`departamento_id`, ex.: gestor RH) — vê indicadores **só do seu setor** (CSAT/SLA/rapidez/avaliações; RLS escopa). OPERADOR/CLIENTE = 403. Gestão de catálogos só TI. `registro_usuarios.sql` documenta OPERADOR×ADMIN + exemplo de gestor RH. Testado (`test_admin`). |
 | **Sino de notificações em tempo real** | ✅ Implementado + **validado ao vivo** | 4 | `notificacoes.js` assina Realtime de `chamados`+`mensagens` (RLS na entrega) e acende/toca o sino + recarrega a lista a cada mudança significativa. Migration `0016_realtime_chamados` (publicação = `chamados, mensagens`). Rota `/realtime/config` (JWT do usuário). Fluxo depto→visibilidade revalidado (RH só vê RH). |
 | **Redefinição de senha (OTP por e-mail)** | ✅ Implementado | 5 | `/esqueci-senha`→`reset_password_for_email`; `/redefinir-senha`→`verify_otp` (recovery) + `update_user`; cliente Supabase isolado por request; rate limit 5/min; link no login. ⚠️ requer template de e-mail com `{{ .Token }}`. Testado (validação). |
+| Política de senha (mínimo 8, fonte única) | ✅ Implementado | Sprint 2 / 2.8 | `app/security/password_policy.py::SENHA_MIN_CHARS` (Seção 3.4.1) — antes duplicada em `app/auth/routes.py`/`app/routes/admin.py`. `[AÇÃO DO GESTOR PENDENTE]`: mesmo mínimo no painel Supabase (hoje default 6). |
+| MFA (staff/ADMIN) | 🟡 Avaliado, não implementado | Sprint 2 / 2.8 | Ver Seção 3.4.1 — faseamento recomendado (TOTP opcional pro staff na Fase 1, alvo Sprint 3; obrigatório pro ADMIN na Fase 2, alvo Sprint 4). |
 | **Páginas de erro 403/404** | ✅ Implementado | 5 | `erro.html` via handler central (registrado na `StarletteHTTPException`); só em navegação HTML. Testado. |
 | **Animações fluidas** | ✅ Implementado | 5 | `app/static/css/anim.css` (entrada de página/cartões, stagger, sino, barra de SLA suave, `prefers-reduced-motion`). CSS estático CSP-safe, sem rebuild do Tailwind. |
 | **Teste de carga (uso em grande escala)** | ✅ Scripts prontos | 5 | `tests/load/locustfile.py` (100 CCU, rotas autenticadas, taxa de 304) + `tests/load/smoke_carga.py` (rajada bruta + percentis). Rodar contra ambiente de teste (nunca produção). |
@@ -866,7 +906,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | Rate limiting (slowapi) | ✅ Implementado | pré-deploy | `app/ratelimit.py`: `/login` (5/min) + abertura de chamado (15/min); IP real via X-Forwarded-For. In-memory; Redis se >1 réplica. |
 | ETag/304 no polling da fila | ✅ Implementado | perf | `/workspace/fila/fragmento`: assinatura leve (count+max updated_at) → 304 quando nada muda. |
 | Performance: 1 conexão RLS/request + GZip | ✅ Implementado | perf | Holder lazy por request (contextvar) reusa a conexão; `SET LOCAL ROLE`+`set_config` em 1 round-trip; GZip. Piso restante = latência ao banco remoto (~320ms/query); fluidez local plena exige DB local. |
-| Observabilidade (logs estruturados + request-id) | Planejado | 1+ | Critério go-live: 48h sem 5xx. |
+| Observabilidade (Sentry + métricas mínimas) | ✅ Implementado | Sprint 2 / 2.6 | Logs JSON + request-id já cobertos na linha acima (Fase 1). **Sentry** (`app/observability.py::configure_sentry`) opcional via `SENTRY_DSN` vazia = desligado; exceção não tratada capturada em `app/main.py::_unhandled_exception_handler` com a tag `request_id` (`sentry_sdk.Scope()` isolado por chamada — sem vazar entre requests concorrentes). **`GET /metrics`** (`app/metrics.py`, mesmo gate de token de `/health/ready`): contagem de status/5xx, p95 de latência por rota (janela de 500 amostras), taxa de 304 do polling da fila, saturação do pool asyncpg (`app/db.py::pool_stats`). Critério de go-live "48h sem 5xx" agora verificável em `/metrics` sem grep manual de log. **Uptime check externo pendente** — `[DECISÃO/AÇÃO DO GESTOR]`, ver item 2.6 do plano de melhorias (assinatura de serviço terceiro, fora do alcance de um PR). |
 
 ---
 

@@ -7,6 +7,9 @@
   de diagnóstico (Sprint 1 / item 1.2, M3).
 - ``/health/config``: diagnóstico **sem segredos** — apenas booleanos de quais
   variáveis de ambiente chegaram. Mesma exigência de token em produção.
+- ``/metrics``: métricas mínimas em memória do processo (Sprint 2 / item 2.6)
+  — contagem de status/5xx, p95 de latência por rota, taxa de 304 do polling
+  e saturação do pool asyncpg. Mesma exigência de token em produção.
 """
 
 from __future__ import annotations
@@ -18,8 +21,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app import __version__
+from app import metrics
 from app.config import get_settings
-from app.db import _ensure_pool
+from app.db import _ensure_pool, pool_stats
 
 log = logging.getLogger("app.routes.health")
 
@@ -62,6 +66,18 @@ async def ready(request: Request) -> JSONResponse:
             corpo["db_error"] = f"{type(exc).__name__}: {exc}"
         return JSONResponse(corpo, status_code=503)
     return JSONResponse({"status": "ready"})
+
+
+@router.get("/metrics")
+async def metrics_endpoint(request: Request) -> JSONResponse:
+    """Snapshot das métricas do processo — critério de go-live "48h sem 5xx"
+    verificável aqui, sem grep manual de log (Sprint 2 / item 2.6)."""
+    if not _diagnostico_autorizado(request):
+        return JSONResponse({"error": "Não autorizado"}, status_code=403)
+    corpo = metrics.snapshot()
+    corpo["db_pool"] = pool_stats()
+    corpo["sentry_enabled"] = bool(get_settings().sentry_dsn)
+    return JSONResponse(corpo)
 
 
 @router.get("/health/config")

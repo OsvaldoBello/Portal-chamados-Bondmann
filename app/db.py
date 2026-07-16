@@ -128,6 +128,19 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
+def pool_stats() -> dict[str, int] | None:
+    """Ocupação do pool asyncpg (Sprint 2 / item 2.6) — ``None`` se ainda não
+    inicializado (modo limitado, ver ``lifespan`` em app/main.py)."""
+    if _pool is None:
+        return None
+    return {
+        "size": _pool.get_size(),
+        "idle": _pool.get_idle_size(),
+        "min_size": _pool.get_min_size(),
+        "max_size": _pool.get_max_size(),
+    }
+
+
 async def _ensure_pool() -> asyncpg.Pool:
     """Garante o pool mesmo se chamado antes do lifespan rodar.
 

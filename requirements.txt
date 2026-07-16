@@ -32,3 +32,7 @@ holidays==0.100
 # Recorte automático da foto de perfil em quadrado (Fase 7 — app/avatar_storage.py):
 # qualquer proporção enviada vira um PNG quadrado centralizado antes do upload.
 Pillow==12.3.0
+# Observabilidade — exceções não tratadas (Sprint 2 / item 2.6). Só ativo se
+# SENTRY_DSN estiver configurada (app/config.py); sem DSN, sentry_sdk.init()
+# nunca é chamado e capture_exception() vira no-op.
+sentry-sdk==2.19.0

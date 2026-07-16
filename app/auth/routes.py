@@ -16,9 +16,8 @@ from app.auth.dependencies import CurrentUser, get_optional_user
 from app.auth.session import REFRESH_COOKIE, SessionTokens, clear_session, set_session
 from app.auth.supabase_client import create_isolated_client, ensure_supabase
 from app.security.csrf import get_csrf
+from app.security.password_policy import SENHA_MIN_CHARS
 from app.templating import render
-
-SENHA_MIN = 8
 
 router = APIRouter(tags=["auth"])
 
@@ -163,8 +162,8 @@ def register_auth_routes(app, limiter: Limiter) -> None:
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        if len(senha) < SENHA_MIN:
-            return _erro(f"A nova senha deve ter ao menos {SENHA_MIN} caracteres.")
+        if len(senha) < SENHA_MIN_CHARS:
+            return _erro(f"A nova senha deve ter ao menos {SENHA_MIN_CHARS} caracteres.")
         if senha != senha2:
             return _erro("As senhas não coincidem.")
         if not codigo:

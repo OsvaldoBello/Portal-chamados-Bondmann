@@ -63,10 +63,20 @@ class Settings(BaseSettings):
     cookie_secure: bool = Field(default=True)
 
     # --- Diagnóstico (Sprint 1 / item 1.2) ---
-    # Token exigido em produção para acessar /health/ready e /health/config
-    # (header X-Diagnostics-Token). Vazio ⇒ rotas negadas em produção (não há
-    # como liberar por omissão — fail-closed).
+    # Token exigido em produção para acessar /health/ready, /health/config e
+    # /metrics (header X-Diagnostics-Token). Vazio ⇒ rotas negadas em produção
+    # (não há como liberar por omissão — fail-closed).
     diagnostics_token: str = Field(default="")
+
+    # --- Observabilidade (Sprint 2 / item 2.6) ---
+    # DSN do Sentry (ou compatível). Vazia ⇒ integração desligada por completo
+    # (sentry_sdk.init() nunca roda; capture_exception() vira no-op).
+    sentry_dsn: str = Field(default="")
+    # Fração de requisições com tracing de performance (0.0–1.0). Erros são
+    # sempre capturados independente deste valor; 0 é o padrão consciente de
+    # custo (só liga tracing quando houver necessidade concreta de investigar
+    # latência via Sentry, em vez do /metrics local).
+    sentry_traces_sample_rate: float = Field(default=0.0)
 
     # --- SMTP / E-mail (Notificações — fallback quando Mailgun não está ativo) ---
     smtp_host: str = Field(default="")

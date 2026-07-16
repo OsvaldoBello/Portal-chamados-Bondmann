@@ -178,7 +178,13 @@ enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts
 enable_manual_linking = false
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
-minimum_password_length = 6
+# Sprint 2 / item 2.8 (B6, política de senha): 8 caracteres, sem regra de
+# composição — segue NIST 800-63B (comprimento > complexidade arbitrária) e
+# acompanha `app/security/password_policy.py::SENHA_MIN_CHARS`, único ponto
+# real de aplicação (esta config só vale para a stack Supabase LOCAL; o
+# projeto hospedado precisa do mesmo ajuste manual no painel — ver Seção 3.4.1
+# do plano mestre).
+minimum_password_length = 8
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
 password_requirements = ""

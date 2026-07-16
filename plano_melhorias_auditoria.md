@@ -51,9 +51,16 @@
     tabela, via uma função `rls_auto_enable()` que existe em produção mas nunca
     passou por nenhuma migration (mesmo tipo de drift que causou a perda da
     `0015`). Fechado com a nova migration `supabase/migrations/0045_fix_marketing_midia_regional_rls_enable.sql`
-    (idempotente). **Pendência:** a função `rls_auto_enable()` em si (o mecanismo
-    que auto-habilita RLS em produção) continua fora de qualquer migration —
-    vale investigar e capturar formalmente num item futuro de higiene (2.7/B4).
+    (idempotente). **Pendência (fechada 2026-07-16):** a função
+    `rls_auto_enable()` em si (o mecanismo que auto-habilita RLS em produção)
+    foi investigada por introspecção via MCP do Supabase — é um event trigger
+    `ensure_rls` (ON `ddl_command_end`, tags `CREATE TABLE`/`CREATE TABLE
+    AS`/`SELECT INTO`) que roda `ENABLE ROW LEVEL SECURITY` em toda tabela
+    nova de `public`, owner `postgres`, SECURITY DEFINER. Formalizado em
+    `supabase/migrations/0046_document_rls_auto_enable_trigger.sql`
+    (idempotente; validado com `BEGIN`/`ROLLBACK` direto contra produção, sem
+    erro) e documentado como rede de segurança complementar na ADR-0001
+    (`docs/adr/0001-rls-via-set-local-claims.md`).
 
 ### 0.2 · A3 — Fail-fast de segredos default em produção 🟢 ✅ **Concluído 2026-07-14**
 - [x] Em `app/main.py` (ou validador no `Settings`): se `is_production` e
@@ -525,12 +532,27 @@
     nas outras duas (mesmo código, sem relação com esta mudança); não deve
     reproduzir no CI (`ubuntu-latest`).
 
-### 2.4 · M6 — `[DECISÃO DO GESTOR]` Colocalizar app e banco 🟡
+### 2.4 · M6 — `[DECISÃO DO GESTOR]` Colocalizar app e banco 🟡 ✅ **Decisão tomada e executada 2026-07-16**
 - Piso atual de ~320ms/query é latência até us-east-2. Opções: **(a)** deploy do app na
   mesma região do Supabase (Railway us-east) · **(b)** migrar o projeto Supabase para
   região próxima do app (mais invasivo).
-- [ ] Decisão + execução; medir `/portal` antes/depois (meta: < 600ms).
-- **Aceite:** dashboard abaixo de ~600ms em produção.
+- [x] Decisão + execução: opção **(a)** — Osvaldo configurou manualmente a região do
+      serviço Railway para `us-east`, alinhando com o Supabase (`iurlzlhbnoemkzgexcfk`,
+      confirmado via MCP em `us-east-2`). Ajuste de infra feito direto no painel do
+      Railway (fora do escopo de PR/código).
+- [ ] Medir `/portal` antes/depois em produção (meta: < 600ms) — **pendente**: ainda sem
+      números registrados do antes/depois pós-mudança de região.
+- **Aceite:** dashboard abaixo de ~600ms em produção — decisão e execução da colocalização
+  concluídas; falta só a medição para fechar o critério de aceite numérico.
+- **Notas de execução:**
+  - Confirmado via MCP do Supabase (`list_projects`) que o projeto de produção está em
+    `us-east-2` (AWS Ohio), `status=ACTIVE_HEALTHY`.
+  - Consulta ao MCP do Railway (`list-projects`) não retornou nenhum projeto acessível
+    nesta conta/token — não foi possível verificar programaticamente o serviço/região via
+    MCP; a mudança foi confirmada diretamente pelo Osvaldo, feita manualmente no painel do
+    Railway.
+  - Pendência remanescente: medir `/portal` em produção após a mudança de região e
+    registrar o número aqui para fechar o critério de aceite (meta < 600ms).
 
 ### 2.5 · M8 — Fonte única de dependências + atualização gerida 🟢 ✅ **Concluído 2026-07-15**
 - [x] Eliminar a duplicação `requirements.txt` × `pyproject.toml` (gerar um do outro, ou
@@ -546,12 +568,69 @@
   (`pip`, `npm`, `docker`, `github-actions`), agrupados, mensal, limite de 5 PRs abertos por
   ecossistema.
 
-### 2.6 · Observabilidade — Sentry + uptime + métricas 🟡
-- [ ] Sentry (ou similar) para exceções não tratadas, com `request_id` no contexto.
-- [ ] Uptime check externo no `/health`.
-- [ ] Métricas mínimas: taxa de 304 no polling, saturação do pool asyncpg, p95 por rota
+### 2.6 · Observabilidade — Sentry + uptime + métricas 🟡 ✅ **Concluído 2026-07-16** (uptime externo pendente — ver nota)
+- [x] Sentry (ou similar) para exceções não tratadas, com `request_id` no contexto.
+- [ ] Uptime check externo no `/health`. **`[DECISÃO/AÇÃO DO GESTOR]`** — assinatura de
+      serviço terceiro (UptimeRobot, Better Stack, Pingdom...), fora do alcance de um PR;
+      ver nota de execução.
+- [x] Métricas mínimas: taxa de 304 no polling, saturação do pool asyncpg, p95 por rota
       (endpoint `/metrics` ou métricas do Railway).
-- **Aceite:** critério de go-live "48h sem 5xx" verificável sem grep manual de log.
+- **Aceite:** critério de go-live "48h sem 5xx" verificável sem grep manual de log — atendido
+  via `GET /metrics` (ver nota).
+- **Notas de execução:**
+  - **Sentry** (`app/observability.py::configure_sentry`, chamado no `lifespan` de
+    `app/main.py`): liga só se `SENTRY_DSN` estiver configurada — DSN vazia (default) é
+    integração totalmente desligada, `sentry_sdk.init()` nunca roda e
+    `capture_exception()` vira no-op (confirmado isoladamente: chamar sem `init()` não
+    levanta erro, só retorna `None`). Mesmo padrão de integração opcional já usado para
+    Mailgun/WhatsApp neste repo (campo de config vazio = desligado, sem flag redundante).
+    Nova config `sentry_traces_sample_rate` (default `0.0` — só erros, sem tracing de
+    performance, que tem custo de armazenamento no Sentry; ligar sob demanda).
+  - `_unhandled_exception_handler` (`app/main.py`) captura a exceção com
+    `sentry_sdk.Scope().set_tag("request_id", ...).capture_exception(exc)` — um `Scope()`
+    **isolado por chamada**, não `configure_scope`/`push_scope` mutando estado global, para
+    não vazar a tag `request_id` entre requests concorrentes (o processo serve várias
+    corrotinas ao mesmo tempo). O handler central já existia (Seção 6.3); só ganhou a
+    chamada ao Sentry, sem mudar a resposta ao cliente (`{"detail": "Erro interno.",
+    "request_id": ...}`, 500).
+  - **Métricas** (`app/metrics.py`, novo módulo): contadores em memória por-processo, sem
+    Prometheus/backend externo — mesmo espírito do cache (`app/cache.py`) e do rate limit
+    (`app/ratelimit.py`) locais já existentes (ressalva idêntica: não soma entre réplicas,
+    migrar para Redis se `>1` réplica, já coberto pelo checklist de scale-out da Seção 2.5
+    do plano mestre). `registrar_request(path, status, duration_ms, is_polling=...)` chamado
+    uma vez por request dentro do `RequestContextMiddleware` (`app/observability.py`) — o
+    mesmo ponto que já loga `duration_ms`, sem round-trip extra. `is_polling` marca só
+    `/workspace/fila/fragmento` (única rota com ETag/304 real, Seção 2.2); os fragmentos de
+    chat fazem polling sem 304 (Realtime cobre o tempo real; polling é só fallback), então
+    não entram na taxa de 304 para não distorcer o número.
+  - `GET /metrics` (`app/routes/health.py`): mesmo gate `_diagnostico_autorizado` de
+    `/health/ready`/`/health/config` (livre fora de produção; exige
+    `X-Diagnostics-Token` em produção — fail-closed sem o token). Corpo: `requests_total`,
+    `requests_5xx_total` (o critério de go-live em si — 48h sem 5xx vira "esse número não
+    sobe" em vez de grep de log), `status_counts`, `latency_p95_ms_por_rota` (janela de até
+    500 amostras por rota — `deque(maxlen=...)`, sem crescer sem limite), `polling_304`
+    (`total`/`hits`/`taxa`), `db_pool` (via novo `app/db.py::pool_stats()` — `size`/`idle`/
+    `min_size`/`max_size` do pool asyncpg, `None` se o pool ainda não foi inicializado,
+    ex.: modo limitado) e `sentry_enabled` (booleano — diagnóstico rápido de config sem
+    expor a DSN).
+  - **Uptime externo — não implementável em código:** monitorar `/health` de **fora** do
+    processo (para detectar o cenário em que o processo/host inteiro está fora do ar, não
+    só uma exceção interna) exige uma conta num serviço terceiro batendo periodicamente na
+    URL pública e alertando (e-mail/Slack/SMS) — não há nada para commitar num PR, mesmo
+    padrão de pendência já registrado nos itens 0.4 (branch protection) e 2.4 (região do
+    Railway). Recomendação registrada aqui para quando o gestor decidir: UptimeRobot ou
+    Better Stack (ambos têm free tier), monitor HTTP a cada 5 min em
+    `https://<domínio-produção>/health`, esperando `200` e `{"status":"ok"}`; alertar após
+    2 falhas consecutivas (evita alarme falso por hiccup de rede pontual).
+  - Suíte pytest completa (exceto `tests/e2e`, que exige Docker) verde: `tests/test_metrics.py`
+    (novo, 5 casos puros — contagem de status/5xx, p95, taxa de 304 isolada por
+    `is_polling`, janela limitada de amostras) e 6 casos novos em `tests/test_health.py`
+    (`/metrics` livre fora de produção e refletindo o snapshot; negado em produção sem
+    token; liberado com token certo; `sentry_enabled` true/false conforme DSN; captura no
+    Sentry com `request_id` — mock de `sentry_sdk.Scope.capture_exception`, sem bater numa
+    conta real). `ruff check app/` limpo.
+  - Dependência nova: `sentry-sdk==2.19.0` em `requirements.txt` (única fonte de versões,
+    item 2.5/M8) — instalada e validada localmente contra o `.venv` do projeto.
 
 ### 2.7 · B4 — Higiene documental 🟢 ✅ **Concluído 2026-07-15**
 - [x] Extrair o changelog do plano mestre para `docs/CHANGELOG.md`.
@@ -579,11 +658,45 @@
     changelog de 2026-07-08) — nota no rodapé da tabela nova aponta as policies SQL da
     Seção 3.3 como fonte de verdade em caso de dúvida futura.
 
-### 2.8 · B6 — Autenticação reforçada 🟡
-- [ ] Executar o plano de hashing já redigido: revisar parâmetros do GoTrue e definir
+### 2.8 · B6 — Autenticação reforçada 🟡 ✅ **Concluído 2026-07-16** (ação de painel Supabase pendente — ver nota)
+- [x] Executar o plano de hashing já redigido: revisar parâmetros do GoTrue e definir
       política de senha.
-- [ ] Avaliar MFA para contas staff/ADMIN (maior privilégio primeiro).
+- [x] Avaliar MFA para contas staff/ADMIN (maior privilégio primeiro).
 - **Aceite:** decisões registradas no plano mestre; MFA de staff avaliado com prazo.
+- **Notas de execução:**
+  - **Hashing:** confirmado que é delegado por completo ao GoTrue (bcrypt gerenciado pela
+    plataforma, sem parâmetro de custo exposto do nosso lado) — "o plano de hashing já
+    redigido" citado no achado da auditoria é essa própria delegação, não um documento
+    separado a escrever; registrado explicitamente na Seção 3.4.1 (nova) do plano mestre
+    para não ficar implícito.
+  - **Política de senha — decisão:** mínimo de 8 caracteres, sem exigência de composição
+    (segue NIST 800-63B — comprimento > regra de composição arbitrária). Já era o
+    comportamento real nos dois pontos que criam/trocam senha (`/redefinir-senha` e
+    `/admin/usuarios`), cada um com sua própria constante `8` duplicada — consolidado em
+    `app/security/password_policy.py::SENHA_MIN_CHARS` (novo módulo, fonte única),
+    reaproveitado por `app/auth/routes.py` e `app/routes/admin.py`. `supabase/config.toml`
+    (stack local) alinhado (`minimum_password_length` 6→8) para documentar a mesma decisão
+    também na config Supabase, ainda que essa config local não seja hoje exercida por
+    nenhum teste (os testes de senha usam TestClient/mocks, não o GoTrue local de verdade).
+  - **`[AÇÃO DO GESTOR PENDENTE]`:** o projeto Supabase **hospedado** (produção) segue com
+    `minimum_password_length` no default `6` — não há Management API exposta via MCP do
+    Supabase para automatizar esse ajuste; precisa ser feito manualmente no painel
+    (Authentication → Policies), mesmo padrão de pendência dos itens 0.4 (branch protection)
+    e 2.4 (região do Railway). Enquanto isso não acontece, o mínimo de 8 continua garantido
+    pela própria aplicação (as duas rotas que criam/trocam senha), só não pela API do GoTrue
+    caso algo a chame diretamente por fora do nosso formulário.
+  - **MFA — avaliação, não implementação:** GoTrue já suporta TOTP nativo, sem trocar de
+    provedor; o custo real está nas telas de enrollment/challenge que teríamos que construir
+    (hoje `/login` é single-step). Faseamento recomendado e registrado na Seção 3.4.1 do
+    plano mestre: Fase 1 (alvo Sprint 3) TOTP opcional para staff (`ADMIN`/`OPERADOR`); Fase
+    2 (alvo Sprint 4, condicionada à adoção da Fase 1) obrigatório para `ADMIN`. Cumpre o
+    aceite do item ("MFA de staff avaliado com prazo") sem implementar a feature agora —
+    escopo maior (telas novas, fluxo de recovery codes) do que cabe num item 🟡 do Sprint 2.
+  - Suíte pytest completa (exceto `tests/e2e`) verde — em particular
+    `test_redefinir_senha_curta` (`tests/test_fase4_fase5.py`) e os testes de criação de
+    usuário com senha curta (`tests/test_admin.py`), que exercitam o caminho agora
+    consolidado, sem mudança de comportamento (valor do mínimo inalterado, só a fonte).
+    `ruff check app/` limpo.
 
 ### 2.9 · Itens menores (B1, B2, B3, B5) 🟢 ✅ **Concluído 2026-07-15**
 - [x] **B1:** checklist de scale-out no plano mestre (réplicas > 1 ⇒ Redis para cache +
@@ -647,6 +760,9 @@
 | 2026-07-16 | 2.2 (M2, fase workspace) | `app/services/__init__.py`, `app/services/atendimento.py` (novos), `app/routes/workspace.py`, `app/templates/workspace/kanban.html`, `tests/test_atendimento_service.py` (novo) | `AtendimentoService` centraliza `dept_bate`/`eh_autor`/`eh_autoatendimento`/`bloqueado_por_autoria`/`pode_reivindicar`/`pode_atender`, hoje espalhados entre `_carregar_atendimento` (workspace.py) e o Jinja de `kanban.html`, que recomputava `dept_bate` por conta própria — a mesma classe de duplicação que originou o bug da migration `0028`. `kanban()` agora anota `dept_bate` por cartão via serviço antes de renderizar; `_carregar_atendimento` chama `AtendimentoService.permissoes(...)` em vez de recalcular inline. Zero mudança de comportamento — suíte completa (226 testes) e `ruff` verdes. Admin/portal (2ª e 3ª fases do item) e a troca do `dep.nome == 'Marketing'` por flag de comportamento ficam para PRs seguintes (ver notas de execução do item). |
 | 2026-07-16 | 2.2 (M2, fases admin + portal) | `app/services/admin.py`, `app/services/portal.py` (novos), `app/routes/admin.py`, `app/routes/portal.py`, `tests/test_admin_service.py`, `tests/test_portal_service.py` (novos), `tests/test_admin.py`, `tests/test_portal.py` | Fecha o item 2.2. `AdminService`: unifica `_depto_valido`/`_depto_perfil_valido` (duas validações quase-idênticas de departamento) em `departamento_valido(exigir_fila=...)`; extrai a orquestração de dual-write de papel de `mudar_papel` (grava `perfis` → espelha `app_metadata.role` → relê os dois lados → decide mensagem) para `promover_papel()`. `PortalService`: move `pode_avaliar`; unifica a busca do departamento "Marketing" por nome, antes duplicada entre `_render_form` e `criar_chamado` (achado equivalente ao bug do Kanban); extrai a regra do fluxo por demanda do Marketing (prioridade forçada + prazo mínimo de 48h) para `regras_marketing()` — gap de teste fechado com 5 casos novos de rota, sem cobertura antes. Zero mudança de comportamento (mesmas mensagens/regras, só movidas), exceto a assimetria pré-existente entre `mudar_papel` (relê pra confirmar) e `criar_usuario` (não relê) — mapeada e conscientemente deixada como estava (orquestrações estruturalmente diferentes). Suíte completa (253 testes) e `ruff app/` verdes; `build:css` sem diff. |
 | 2026-07-16 | 1.7 (M9) — fecha a pendência de validação | `tests/e2e/conftest.py`, `tests/e2e/test_rls_matrix.py` | O push do item 2.2 disparou o job `e2e-rls` pela primeira vez de verdade contra Docker/Supabase local no CI (`gh` instalado nesta sessão para acompanhar). Achou 2 bugs só na suíte de teste (nenhum em produção): (1) fixture `seed` travava em 100% dos testes — trigger `perfis_self_so_avatar` (0033) bloqueava a promoção de role/departamento do seed por rodar sem claims de RLS; fix desliga o trigger só nessa UPDATE, dentro da mesma transação nunca comitada; (2) o único teste que esperava um erro de RLS (`test_ti_sem_flag_autoatendimento_nao_pode_se_autoatender`) derrubava a transação inteira no cleanup do `as_user()`; fix isola a operação num SAVEPOINT (`conn.transaction()` aninhado). 11/11 testes verdes no CI após os dois commits (`fc61f41`, `ba6991d`). |
+| 2026-07-16 | 0.1 (A1) — fecha a pendência do `rls_auto_enable()` | `supabase/migrations/0046_document_rls_auto_enable_trigger.sql`, `docs/adr/0001-rls-via-set-local-claims.md` | Investigação via MCP do Supabase (introspecção de `pg_proc`/`pg_event_trigger` em produção): o mecanismo é o event trigger `ensure_rls` (ON `ddl_command_end`) + função `rls_auto_enable()`, que habilita RLS automaticamente em toda tabela nova de `public` — nunca esteve em nenhuma migration (mesmo drift que causou a perda da 0015/RLS da `marketing_midia_regional`). Migration `0046` formaliza função + event trigger (idempotente); validada com `BEGIN`/`ROLLBACK` direto contra produção (sem erro, nenhuma mudança persistida — o mecanismo já existe lá). ADR-0001 ganhou um bullet documentando a rede de segurança complementar. |
+| 2026-07-16 | 2.6 (Observabilidade) | `app/metrics.py` (novo), `app/observability.py`, `app/main.py`, `app/db.py`, `app/routes/health.py`, `requirements.txt`, `.env.example`, `app/config.py`, `tests/test_metrics.py` (novo), `tests/test_health.py` | Sentry opcional (`SENTRY_DSN` vazia = desligado) captura exceção não tratada em `_unhandled_exception_handler` com tag `request_id` via `Scope()` isolado por chamada (sem vazar entre requests concorrentes). Novo `GET /metrics` (mesmo gate de token de `/health/ready`): status/5xx totais, p95 de latência por rota, taxa de 304 do polling da fila, saturação do pool asyncpg. Uptime check externo fica pendente — decisão/ação do gestor (assinatura de serviço terceiro), recomendação registrada na nota de execução do item. Suíte verde, `ruff` limpo. |
+| 2026-07-16 | 2.8 (B6) | `app/security/password_policy.py` (novo), `app/auth/routes.py`, `app/routes/admin.py`, `supabase/config.toml`, plano mestre (Seção 3.4.1, Estado) | Hashing confirmado como delegado ao GoTrue (nada a mudar em código). Política de senha: mínimo 8 caracteres sem exigência de composição (NIST 800-63B), consolidado em `SENHA_MIN_CHARS` (fonte única — antes duplicado em `auth/routes.py`/`routes/admin.py`); `supabase/config.toml` local alinhado. Ajuste equivalente no painel do projeto Supabase hospedado (hoje default 6) fica como `[AÇÃO DO GESTOR PENDENTE]` (sem Management API via MCP). MFA avaliado (não implementado): faseamento TOTP opcional pro staff (Sprint 3) → obrigatório pro ADMIN (Sprint 4), registrado na Seção 3.4.1. Suíte verde, `ruff` limpo. |
 
 ## Definição de pronto (todos os itens)
 
