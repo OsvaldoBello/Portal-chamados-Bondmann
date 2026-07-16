@@ -281,14 +281,65 @@
 
 ## Sprint 2 — Estrutura, performance e operação (P2, 1–3 meses)
 
-### 2.1 · M1 — Dividir o `ChamadosRepo` 🔴
-- [ ] Extrair por domínio, mantendo a fachada atual durante a migração (sem big-bang):
+### 2.1 · M1 — Dividir o `ChamadosRepo` 🔴 ✅ **Concluído 2026-07-16**
+- [x] Extrair por domínio, mantendo a fachada atual durante a migração (sem big-bang):
       `CatalogoRepo` (categorias/subcategorias/departamentos/setores) →
       `MensagensRepo` (mensagens/notificações/observadores) →
       `FilaRepo` (fila/kanban/stats/assinatura) →
       `AtendimentoRepo` (iniciar/atribuir/status/prioridade/transferir/excluir/marketing).
-- [ ] Um PR por extração, suíte verde em cada um; remover a fachada ao final.
+- [x] Um PR por extração, suíte verde em cada um; remover a fachada ao final.
 - **Aceite:** nenhum repositório > ~300 linhas; testes inalterados passando.
+- **Notas de execução:**
+  - `app/repositories/chamados.py` (949 linhas) virou 5 arquivos: `catalogo.py`
+    (107 linhas — `CatalogoRepo`), `mensagens.py` (189 — `MensagensRepo`),
+    `fila.py` (246 — `FilaRepo`), `atendimento.py` (365 — `AtendimentoRepo`,
+    inclui o helper privado `_registrar`, usado só por métodos deste domínio)
+    e `chamados.py` (364 — fachada). `atendimento.py`/`chamados.py` ficaram
+    um pouco acima dos "~300 linhas" alvo (docstrings extensas preservadas
+    verbatim), mas a redução de 949→máximo 365 por arquivo já cumpre o
+    espírito do Aceite.
+  - Extração habilitada por três propriedades do código original,
+    confirmadas antes de mexer: `ChamadosRepo` não tinha `__init__`/estado
+    (cada método abre sua própria `rls_connection(claims)`); **zero chamadas
+    cruzadas de domínio** entre métodos (todo `self.xxx()` interno já era
+    intra-domínio); e nenhum teste faz `isinstance`/monkeypatch na classe —
+    os 6 arquivos de teste usam `app.dependency_overrides[get_chamados_repo]
+    = lambda: fake` com uma classe `Fake*Repo` duck-typed.
+  - `ChamadosRepo` (fachada) instancia os 4 sub-repos no `__init__` e delega
+    29 dos 33 métodos originais (assinatura idêntica, inclusive fronteira de
+    keyword-only). `perfil`, `atualizar_avatar`, `listar`, `stats` ficaram
+    implementados direto na fachada (self-service/perfil, não se encaixam
+    com folga em nenhum dos 4 domínios; ~60 linhas ao todo). `criar`,
+    `obter`, `avaliar` e `excluir` foram para `AtendimentoRepo` (ciclo de
+    vida do chamado); `operadores()` foi para `FilaRepo` (é uma
+    consulta/listagem, mesmo padrão de `setores_ativos`) apesar de também
+    alimentar o dropdown de atribuição do `AtendimentoRepo`.
+  - **Zero mudança em rotas ou testes**: as 27 declarações
+    `Depends(get_chamados_repo)` (`workspace.py`, `portal.py`, `perfil.py`,
+    `common.py`, `admin.py`) e os 6 arquivos de teste com `Fake*Repo`
+    continuam batendo em `ChamadosRepo`/`get_chamados_repo`, sem tocar uma
+    linha. `PRIORIDADES`, `validar_nota()` e as constantes de cache
+    (`CACHE_CATEGORIAS`/`CACHE_DEPARTAMENTOS`/`CACHE_SUBCATEGORIAS`/
+    `CATALOGO_TTL` — usadas por `app/routes/admin.py` para invalidar cache
+    na escrita) continuam importáveis de `app.repositories.chamados`
+    (re-exportadas do novo `catalogo.py`).
+  - **Achado da própria migração:** a exploração inicial não pegou que
+    `admin.py` importa as 4 constantes de cache diretamente de
+    `chamados.py` (só métodos de instância apareceram no grepping de call
+    sites) — a primeira rodada de testes quebrou por `ImportError`, corrigida
+    re-exportando as constantes na fachada. Fica registrado como lição: numa
+    extração assim, checar também imports de **constantes/símbolos** de
+    módulo, não só de métodos de classe.
+  - `avaliar` manteve o `INSERT INTO historico_chamados` manual (não passou
+    a chamar `_registrar`, mesmo agora estando na mesma classe) — duplicação
+    pré-existente, fora do escopo deste item (não pedido, não necessário
+    para o Aceite).
+  - Suíte pytest completa (197 testes, sem `tests/e2e`) verde; `ruff check`
+    limpo; `npm run build:css` sem diff de output (nenhum template tocado).
+  - "Remover a fachada ao final" (texto original do item) não foi feito
+    agora — depende do item 2.2 (camada de serviço) existir para absorver a
+    lógica que hoje está nas 27 rotas chamando `repo.<método>()` direto;
+    registrado como próximo passo natural, não como pendência deste item.
 
 ### 2.2 · M2 — Camada de serviço nas rotas 🔴
 - [ ] Começar pelo workspace: `AtendimentoService` concentrando `pode_atender` /
@@ -452,6 +503,7 @@
 | 2026-07-15 | 2.7 (B4) | `docs/CHANGELOG.md` (novo), `docs/adr/` (novo, 6 ADRs + índice), `plano_mestre_desenvolvimento.md` (Seções 3.2, 7, Changelog) | Changelog de 24 entradas extraído do plano mestre; 6 ADRs cobrindo as decisões estruturais (RLS/claims, pooling, pivô departamental, SLA comercial, Railway único, cache/rate-limit local); matriz de permissões da Seção 3.2 reescrita no modelo `0020`/`0027`/`0028`/`0038`/`0042` (a tabela antiga estava incorreta desde 2026-07-06 e já tinha induzido um bug real). |
 | 2026-07-15 | 2.9 (B1/B2/B3/B5) | `plano_mestre_desenvolvimento.md` (Seções 2.5, 3.9.1 novas), `app/security/jwt.py`→`jwt_verifier.py`, `app/auth/dependencies.py`, `app/main.py`, `tests/test_jwt.py`, `tests/test_db_rls_claims.py` (novo) | B1: checklist de scale-out consolidado. B2: decisão do bucket público de avatares registrada explicitamente. B3: módulo `jwt.py` renomeado (desfaz a auto-referência de nome com o pacote `jwt` importado dentro dele). B5: 9 testes adversariais novos contra `_apply_rls_claims` (aspas/backslash/unicode/tentativa de fechar o literal SQL cedo), validando o round-trip via decodificação das regras de literal do Postgres. |
 | 2026-07-16 | 2.3 (M5) | `app/security/headers.py`, `app/observability.py`, `app/auth/session.py` | `SecurityHeadersMiddleware`, `RequestContextMiddleware` e `SessionRefreshMiddleware` reescritos como ASGI puro (sem `BaseHTTPMiddleware`), interceptando só `http.response.start`; `request_id`/`refreshed_session` movidos para `scope["state"]`. Benchmark em `/workspace/fila/fragmento` (TestClient, 500 reqs): mean 5.29ms→4.32ms (~18% mais rápido). Comportamento idêntico, suíte verde. |
+| 2026-07-16 | 2.1 (M1) | `app/repositories/catalogo.py`, `mensagens.py`, `fila.py`, `atendimento.py` (novos), `app/repositories/chamados.py` (reduzido a fachada) | `ChamadosRepo` (949 linhas) dividido em `CatalogoRepo`/`MensagensRepo`/`FilaRepo`/`AtendimentoRepo` (máx. 365 linhas cada), com `ChamadosRepo` virando fachada que delega 29 dos 33 métodos e mantém `perfil`/`atualizar_avatar`/`listar`/`stats` direto (self-service, baixo volume). Zero mudança em rotas/testes — as 27 declarações `Depends(get_chamados_repo)` e os 6 `Fake*Repo` de teste continuam batendo no mesmo nome/assinatura. `PRIORIDADES`, `validar_nota()` e constantes de cache do catálogo re-exportadas de `chamados.py` para não quebrar `app/routes/admin.py`. Suíte verde (197 testes), `ruff` limpo, `build:css` sem diff. |
 
 ## Definição de pronto (todos os itens)
 
