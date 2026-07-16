@@ -797,7 +797,39 @@
     ambiente), `ruff check .` limpo, `mypy` sem erros nos módulos cobertos,
     `build:css` sem diff.
 
-### 3.2 · Fechar pendências de gestor (branch protection + política de senha) 🟢 ⏳ **A executar**
+### 3.2 · Fechar pendências de gestor (branch protection + política de senha) 🟢 ✅ **Artefato entregue 2026-07-16** — `[AÇÃO DO GESTOR]` para executar
+- [x] Criar `docs/runbook_hardening_gestor.md` com o passo a passo exato de:
+  - **(a) Branch Protection em `claude/develop`** (default branch; não há `main`):
+    exigir CI verde + 1 revisão + sem force-push/deleção. Inclui o comando
+    `gh api -X PUT .../branches/claude/develop/protection` (para quem tem admin+token)
+    **e** o caminho pela UI (Settings → Branches) como fallback.
+  - **(b) Política de senha do Supabase hospedado:** mínimo 6 → 8, alinhando ao
+    `SENHA_MIN_CHARS`/NIST e ao `supabase/config.toml` local. Caminho no dashboard
+    (Authentication → Password → Minimum password length).
+- [ ] **`[AÇÃO DO GESTOR]` — (a) aplicar branch protection** (ver runbook). Só o
+      gestor com admin executa; não alterado nesta sessão sem confirmação.
+- [ ] **`[AÇÃO DO GESTOR]` — (b) ajustar mínimo de senha no painel Supabase** (ver
+      runbook). Sem Management API via MCP; ação manual no dashboard.
+- **Aceite:** runbook completo e acionável; nada de segredo ou permissão alterado sem
+  o gestor no comando. **Atendido** — o artefato (runbook) está entregue; a execução
+  das duas ações fica com o gestor.
+- **Notas de execução:**
+  - **Realidade confirmada nesta sessão** (via `gh`, autenticado como `OsvaldoBello`,
+    dono do repo = admin, escopos `repo`/`workflow`): repositório **público**, default
+    branch **`claude/develop`**, **sem** branch protection hoje
+    (`gh api .../protection` → `404 Branch not protected`). Como o repo é público, a
+    proteção clássica está disponível sem plano pago.
+  - **`gh` admin disponível ⇒ oferta registrada:** o comando `gh api` do runbook pode
+    ser aplicado nesta máquina. Por decisão de segurança (alterar configuração de
+    repositório é ação de plataforma) **não foi executado sem confirmação do gestor** —
+    o comando está no runbook, pronto, com a variante recomendada para mantenedor solo
+    (CI obrigatório + no-force-push, revisão obrigatória opcional para não travar o
+    self-merge de um time de 1 pessoa) e o `gh api -X DELETE` de reversão.
+  - **Checks de CI a exigir** (nomes pós-item 3.1): `Suíte pytest + cobertura`,
+    `Build Tailwind`, `Numeração de migrations`, `Lint (ruff)`, `Type-check (mypy,
+    gradual)`. O `Matriz de RLS (Supabase local)` (`e2e-rls.yml`) **não** deve ser
+    required — só roda em `paths` específicos e travaria PRs que não os tocam.
+  - Sem código tocado ⇒ suíte inalterada (a base deste PR é o item 3.1, verde).
 
 ### 3.3 · MFA (TOTP) com enforcement para ADMIN 🔴 ⏳ **A executar** (Fase 1 da Seção 3.4.1)
 
@@ -839,6 +871,7 @@
 | 2026-07-16 | 2.6 (Observabilidade) | `app/metrics.py` (novo), `app/observability.py`, `app/main.py`, `app/db.py`, `app/routes/health.py`, `requirements.txt`, `.env.example`, `app/config.py`, `tests/test_metrics.py` (novo), `tests/test_health.py` | Sentry opcional (`SENTRY_DSN` vazia = desligado) captura exceção não tratada em `_unhandled_exception_handler` com tag `request_id` via `Scope()` isolado por chamada (sem vazar entre requests concorrentes). Novo `GET /metrics` (mesmo gate de token de `/health/ready`): status/5xx totais, p95 de latência por rota, taxa de 304 do polling da fila, saturação do pool asyncpg. Uptime check externo fica pendente — decisão/ação do gestor (assinatura de serviço terceiro), recomendação registrada na nota de execução do item. Suíte verde, `ruff` limpo. |
 | 2026-07-16 | 2.8 (B6) | `app/security/password_policy.py` (novo), `app/auth/routes.py`, `app/routes/admin.py`, `supabase/config.toml`, plano mestre (Seção 3.4.1, Estado) | Hashing confirmado como delegado ao GoTrue (nada a mudar em código). Política de senha: mínimo 8 caracteres sem exigência de composição (NIST 800-63B), consolidado em `SENHA_MIN_CHARS` (fonte única — antes duplicado em `auth/routes.py`/`routes/admin.py`); `supabase/config.toml` local alinhado. Ajuste equivalente no painel do projeto Supabase hospedado (hoje default 6) fica como `[AÇÃO DO GESTOR PENDENTE]` (sem Management API via MCP). MFA avaliado (não implementado): faseamento TOTP opcional pro staff (Sprint 3) → obrigatório pro ADMIN (Sprint 4), registrado na Seção 3.4.1. Suíte verde, `ruff` limpo. |
 | 2026-07-16 | 3.1 (CI) | `pyproject.toml`, `requirements-dev.txt`, `.github/workflows/ci.yml`, `app/routes/admin.py`, `app/routes/workspace.py`, `app/security/csrf.py`, `app/repositories/{atendimento,fila,chamados}.py` + ~20 arquivos de lint automático | Gate de CI endurecido em adoção gradual. **Cobertura:** `pytest-cov`, medida em **71.57%**, floor `fail_under = 69` (~2 pts abaixo) no job `pytest`. **ruff:** `select` alargado p/ `["E9","F","I","UP","DTZ"]` sem ignore; ~65 violações corrigidas no mesmo PR (F821/UP037 `"date | None"` → import `date` + desaspar; DTZ `utcnow()`/`now()` → `now(UTC)` preservando comportamento; UP031 ETag → f-string). **mypy:** gradual, só `app/security`/`db.py`/`config.py`/`auth` (sem `--strict`, `follow_imports=silent`), job próprio; 1 erro real corrigido (`csrf.get_or_issue` narrowing). Nenhum template/JS tocado ⇒ `build:css` sem diff. `263 passed, 11 skipped`; `ruff check .` e `mypy` verdes. |
+| 2026-07-16 | 3.2 (gestor) `[AÇÃO DO GESTOR]` | `docs/runbook_hardening_gestor.md` (novo) | Runbook acionável para as duas travas que só o gestor executa: **(a)** branch protection em `claude/develop` (default; sem `main`) — comando `gh api -X PUT .../protection` com os 5 checks required pós-3.1 + variante para mantenedor solo + reversão, e o caminho pela UI; **(b)** política de senha do Supabase hospedado (6 → 8, dashboard Authentication → Password). Confirmado via `gh`: repo público, default `claude/develop`, sem proteção hoje (404). `gh` admin disponível ⇒ oferta de aplicar (a) registrada, mas **não executada sem confirmação** (alterar config de repo é ação de plataforma). Sem código ⇒ suíte inalterada. Ver [runbook](docs/runbook_hardening_gestor.md). |
 
 ## Definição de pronto (todos os itens)
 
