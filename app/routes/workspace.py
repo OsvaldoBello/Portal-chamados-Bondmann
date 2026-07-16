@@ -23,6 +23,7 @@ from app.domain.sla_visual import estado_sla
 from app.repositories.chamados import PRIORIDADES, ChamadosRepo, get_chamados_repo
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
+from app.services.atendimento import AtendimentoService
 from app.templating import render
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -289,6 +290,11 @@ async def kanban(
         data_ate=f["data_ate"],
     )
     chamados = _aplicar_sla(chamados, f["sla"])
+    # dept_bate calculado uma única vez aqui (AtendimentoService) e consumido
+    # pelo Kanban via c.dept_bate — antes o template recomputava a mesma
+    # fórmula por conta própria (ver histórico do item 2.2, M2).
+    for c in chamados:
+        c["dept_bate"] = AtendimentoService.dept_bate(c, ctx.perfil)
     colunas = {s: [c for c in chamados if c["status"] == s] for s in status_list}
     if is_marketing:
         # Coluna "Concluídos" foge da ordenação padrão da fila (por data de
@@ -339,14 +345,13 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
     # "Em cópia" (Fase 8) — só leitura aqui; gerenciar (adicionar/remover) é no
     # Portal (/portal/chamados/{id}), acessível a qualquer staff que veja o chamado.
     observadores = await repo.observadores(ctx.user.claims, chamado_id)
-    eh_autor = str(chamado.get("cliente_id") or "") == str(ctx.user.id)
-    # Departamentos com autoatendimento (`departamentos.autoatendimento` —
-    # Marketing e RH, migrations 0038/0042) são a exceção da segregação de
-    # função (0029): o setor não é suporte (alguém de fora abre, o setor
-    # atende) — é o próprio time que cria e gerencia as demandas, quadro
-    # estilo Trello. Lá o autor PODE ser o responsável pela própria demanda;
-    # nos demais setores, nunca.
-    eh_autoatendimento = bool(chamado.get("autoatendimento"))
+    # Permissões de UI (dept_bate/eh_autor/autoatendimento/pode_reivindicar/
+    # pode_atender) centralizadas em AtendimentoService (item 2.2, M2) — regra
+    # de segregação de função (0029) + exceção de autoatendimento (0038/0042)
+    # + gate de setor do líder (0028), num único lugar em vez de espalhadas
+    # entre rota e template.
+    perm = AtendimentoService.permissoes(chamado, ctx.perfil, ctx.user.id)
+    eh_autor = perm.eh_autor
     # Responsáveis atribuíveis = staff do departamento do chamado (mesmo setor),
     # exceto o próprio autor (autor nunca é o responsável pelo próprio chamado) —
     # exceto nos departamentos com autoatendimento, onde o autor entra na lista
@@ -354,7 +359,7 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
     operadores = await repo.operadores(
         ctx.user.claims,
         departamento_id=str(chamado.get("departamento_id") or "") or None,
-        excluir_id=None if eh_autoatendimento else (str(chamado.get("cliente_id") or "") or None),
+        excluir_id=None if perm.eh_autoatendimento else (str(chamado.get("cliente_id") or "") or None),
     )
     # Líder de setor (0028) enxerga chamados abertos pela própria equipe mesmo
     # fora da fila do seu departamento — mas só ACOMPANHA: quem atende (muda
@@ -368,13 +373,8 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
     # pessoa do setor (exceto o autor) pode responder/alterar. O autor NUNCA
     # responde/assume como staff o próprio chamado, mesmo sendo do mesmo setor —
     # ele acompanha e responde como solicitante em "Meus chamados" (Fase 1).
-    dept_bate = str(chamado.get("departamento_id") or "") == str(
-        ctx.perfil.get("departamento_id") or ""
-    ) and bool(ctx.perfil.get("departamento_id"))
-    ja_assumido = chamado.get("operador_id") is not None
-    bloqueado_por_autoria = eh_autor and not eh_autoatendimento
-    pode_reivindicar = dept_bate and not bloqueado_por_autoria and not ja_assumido
-    pode_atender = dept_bate and not bloqueado_por_autoria and ja_assumido
+    pode_reivindicar = perm.pode_reivindicar
+    pode_atender = perm.pode_atender
     # Repasse de departamento é exclusivo do TI (RLS reforça); só então buscamos a lista.
     # Só entram setores que RECEBEM chamado (têm fila) — repassar para um setor sem
     # staff de atendimento não faz sentido (0027).

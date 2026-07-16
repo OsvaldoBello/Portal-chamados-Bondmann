@@ -341,14 +341,57 @@
     lógica que hoje está nas 27 rotas chamando `repo.<método>()` direto;
     registrado como próximo passo natural, não como pendência deste item.
 
-### 2.2 · M2 — Camada de serviço nas rotas 🔴
-- [ ] Começar pelo workspace: `AtendimentoService` concentrando `pode_atender` /
+### 2.2 · M2 — Camada de serviço nas rotas 🔴 (fase workspace concluída 2026-07-16 — admin/portal pendentes)
+- [x] Começar pelo workspace: `AtendimentoService` concentrando `pode_atender` /
       `pode_reivindicar` / exceções do Marketing (hoje espalhadas — origem do bug da 0028).
 - [ ] Na sequência: admin (gestão de usuários/dual-write) e portal (abertura de chamado).
 - [ ] Aproveitar para trocar a comparação por string `dep.nome = 'Marketing'` por flag de
       comportamento na tabela `departamentos` (ex.: coluna `autoatendimento boolean`) —
       migration própria.
 - **Aceite:** regra de permissão de UI definida num único lugar por feature.
+- **Notas de execução (fase workspace):**
+  - Novo pacote `app/services/` com `AtendimentoService` (`app/services/atendimento.py`):
+    `dept_bate()` (setor do chamado bate com o setor do staff logado) e
+    `permissoes()` (`PermissoesAtendimento` — `dept_bate`/`eh_autor`/
+    `eh_autoatendimento`/`bloqueado_por_autoria`/`pode_reivindicar`/`pode_atender`).
+    Classe stateless (sem repositório/estado), chamada direto pela rota — não
+    virou dependência FastAPI (`Depends`) por não ter nada a injetar.
+  - **Achado real da auditoria, não só hipotético:** `kanban.html` recomputava
+    `dept_bate` no próprio Jinja (`{% set dept_bate = c.departamento_id and
+    perfil.departamento_id and ... %}`), com a mesma fórmula copiada à mão da
+    rota `_carregar_atendimento` em `workspace.py`. As duas cópias já tinham
+    divergido de forma sutil (uma delas dependia implicitamente de
+    `perfil.departamento_id` truthy vs. `bool(...)` explícito) — exatamente o
+    tipo de duplicação que originou o bug da migration `0028` (bypass de TI
+    enxergando chamado de outro setor como atendível). Corrigido: a rota
+    `kanban()` agora anota `c["dept_bate"] = AtendimentoService.dept_bate(c,
+    ctx.perfil)` em cada chamado antes de montar as colunas, e o template só
+    lê `c.dept_bate` — uma fonte única.
+  - `_carregar_atendimento()` (tela de atendimento) passou a chamar
+    `AtendimentoService.permissoes(chamado, ctx.perfil, ctx.user.id)` em vez de
+    recalcular `eh_autor`/`eh_autoatendimento`/`dept_bate`/`ja_assumido`/
+    `bloqueado_por_autoria`/`pode_reivindicar`/`pode_atender` inline. Zero
+    mudança de comportamento (mesma fórmula, só movida) — suíte
+    `tests/test_workspace.py` (38 testes) verde sem alterar nenhuma asserção.
+  - Testes novos e puros (sem banco) em `tests/test_atendimento_service.py` (8
+    casos): `dept_bate` true/false/perfil-sem-setor, reivindicar vs. atender
+    conforme `ja_assumido`, bloqueio por autoria e a exceção de
+    autoatendimento — inclusive o cenário específico do bug `0028` (setor
+    diferente não deve nunca "bater").
+  - **Escopo intencionalmente deixado de fora desta fase:** os `dep.nome ==
+    'Marketing'`/`chamado.departamento == 'Marketing'` restantes em
+    `workspace.py`/`atendimento.html` (rótulos de status, colunas extras do
+    Kanban `A_FAZER`/`AGUARDANDO_TERCEIROS`, formulário de meta do Marketing)
+    **não** são regra de permissão — são feature flag de exibição, e não dá
+    para reaproveitar a coluna `autoatendimento` (migration 0042) para isso:
+    ela cobre Marketing **e** RH, enquanto essas colunas/campos extras são
+    Marketing-only (migrations 0024/0043). Trocar por uma flag própria
+    (ex.: `departamentos.fluxo_estendido`) exige migration e decisão de
+    produto dedicadas — registrado como pendência do 3º bullet deste item,
+    não resolvido aqui.
+  - Admin (dual-write de papel) e Portal (abertura de chamado) ficam para as
+    próximas fases deste mesmo item, como o texto original já previa
+    ("Começar pelo workspace... Na sequência...").
 
 ### 2.3 · M5 — Middlewares ASGI puros 🟡 ✅ **Concluído 2026-07-16**
 - [x] Reescrever `SecurityHeadersMiddleware`, `SessionRefreshMiddleware` e
@@ -504,6 +547,7 @@
 | 2026-07-15 | 2.9 (B1/B2/B3/B5) | `plano_mestre_desenvolvimento.md` (Seções 2.5, 3.9.1 novas), `app/security/jwt.py`→`jwt_verifier.py`, `app/auth/dependencies.py`, `app/main.py`, `tests/test_jwt.py`, `tests/test_db_rls_claims.py` (novo) | B1: checklist de scale-out consolidado. B2: decisão do bucket público de avatares registrada explicitamente. B3: módulo `jwt.py` renomeado (desfaz a auto-referência de nome com o pacote `jwt` importado dentro dele). B5: 9 testes adversariais novos contra `_apply_rls_claims` (aspas/backslash/unicode/tentativa de fechar o literal SQL cedo), validando o round-trip via decodificação das regras de literal do Postgres. |
 | 2026-07-16 | 2.3 (M5) | `app/security/headers.py`, `app/observability.py`, `app/auth/session.py` | `SecurityHeadersMiddleware`, `RequestContextMiddleware` e `SessionRefreshMiddleware` reescritos como ASGI puro (sem `BaseHTTPMiddleware`), interceptando só `http.response.start`; `request_id`/`refreshed_session` movidos para `scope["state"]`. Benchmark em `/workspace/fila/fragmento` (TestClient, 500 reqs): mean 5.29ms→4.32ms (~18% mais rápido). Comportamento idêntico, suíte verde. |
 | 2026-07-16 | 2.1 (M1) | `app/repositories/catalogo.py`, `mensagens.py`, `fila.py`, `atendimento.py` (novos), `app/repositories/chamados.py` (reduzido a fachada) | `ChamadosRepo` (949 linhas) dividido em `CatalogoRepo`/`MensagensRepo`/`FilaRepo`/`AtendimentoRepo` (máx. 365 linhas cada), com `ChamadosRepo` virando fachada que delega 29 dos 33 métodos e mantém `perfil`/`atualizar_avatar`/`listar`/`stats` direto (self-service, baixo volume). Zero mudança em rotas/testes — as 27 declarações `Depends(get_chamados_repo)` e os 6 `Fake*Repo` de teste continuam batendo no mesmo nome/assinatura. `PRIORIDADES`, `validar_nota()` e constantes de cache do catálogo re-exportadas de `chamados.py` para não quebrar `app/routes/admin.py`. Suíte verde (197 testes), `ruff` limpo, `build:css` sem diff. |
+| 2026-07-16 | 2.2 (M2, fase workspace) | `app/services/__init__.py`, `app/services/atendimento.py` (novos), `app/routes/workspace.py`, `app/templates/workspace/kanban.html`, `tests/test_atendimento_service.py` (novo) | `AtendimentoService` centraliza `dept_bate`/`eh_autor`/`eh_autoatendimento`/`bloqueado_por_autoria`/`pode_reivindicar`/`pode_atender`, hoje espalhados entre `_carregar_atendimento` (workspace.py) e o Jinja de `kanban.html`, que recomputava `dept_bate` por conta própria — a mesma classe de duplicação que originou o bug da migration `0028`. `kanban()` agora anota `dept_bate` por cartão via serviço antes de renderizar; `_carregar_atendimento` chama `AtendimentoService.permissoes(...)` em vez de recalcular inline. Zero mudança de comportamento — suíte completa (226 testes) e `ruff` verdes. Admin/portal (2ª e 3ª fases do item) e a troca do `dep.nome == 'Marketing'` por flag de comportamento ficam para PRs seguintes (ver notas de execução do item). |
 
 ## Definição de pronto (todos os itens)
 

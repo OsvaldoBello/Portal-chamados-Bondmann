@@ -101,11 +101,14 @@
     <div class="kanban-col flex-1 min-h-0 overflow-y-auto p-2 space-y-2" data-status="{{ s }}">
       {% for c in colunas[s] %}
       {# Gate de permissão (Sprint 1 / item 1.4, M11): mesmo critério de
-         `dept_bate` da tela de atendimento (app/routes/workspace.py). Fora do
-         setor do usuário (ex.: TI acompanhando via 0028), o cartão fica
-         só-leitura na UI — a RLS já bloqueava a mutação no servidor, mas
-         oferecer drag/exclusão que o banco ia recusar é uma armadilha de UX. #}
-      {% set dept_bate = c.departamento_id and perfil.departamento_id and (c.departamento_id|string) == (perfil.departamento_id|string) %}
+         `dept_bate` da tela de atendimento. Fora do setor do usuário (ex.:
+         TI acompanhando via 0028), o cartão fica só-leitura na UI — a RLS já
+         bloqueava a mutação no servidor, mas oferecer drag/exclusão que o
+         banco ia recusar é uma armadilha de UX. `dept_bate` vem pronto de
+         `AtendimentoService` (app/services/atendimento.py, item 2.2, M2) —
+         antes o Jinja recomputava a mesma fórmula por conta própria, um
+         lugar a mais para divergir se a regra mudasse. #}
+      {% set dept_bate = c.dept_bate %}
       <article class="kanban-card relative bg-white rounded-lg border border-line/60 p-3 shadow-soft {{ 'cursor-grab' if dept_bate else 'kanban-card-locked cursor-default' }}"
                data-id="{{ c.id }}" {% if not dept_bate %}title="Fora do seu setor — somente leitura"{% endif %}>
         {% if dept_bate %}
