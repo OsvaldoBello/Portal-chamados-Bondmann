@@ -341,13 +341,16 @@
     lógica que hoje está nas 27 rotas chamando `repo.<método>()` direto;
     registrado como próximo passo natural, não como pendência deste item.
 
-### 2.2 · M2 — Camada de serviço nas rotas 🔴 (fase workspace concluída 2026-07-16 — admin/portal pendentes)
+### 2.2 · M2 — Camada de serviço nas rotas 🔴 ✅ **Concluído 2026-07-16**
 - [x] Começar pelo workspace: `AtendimentoService` concentrando `pode_atender` /
       `pode_reivindicar` / exceções do Marketing (hoje espalhadas — origem do bug da 0028).
-- [ ] Na sequência: admin (gestão de usuários/dual-write) e portal (abertura de chamado).
-- [ ] Aproveitar para trocar a comparação por string `dep.nome = 'Marketing'` por flag de
+- [x] Na sequência: admin (gestão de usuários/dual-write) e portal (abertura de chamado).
+- [~] Aproveitar para trocar a comparação por string `dep.nome = 'Marketing'` por flag de
       comportamento na tabela `departamentos` (ex.: coluna `autoatendimento boolean`) —
-      migration própria.
+      migration própria. **Parcial/deferido** — ver nota de execução (fase admin/portal):
+      os pontos que restam comparando por nome são feature-flag de exibição Marketing-only,
+      não reaproveitáveis pela coluna `autoatendimento` (que cobre Marketing **e** RH) sem uma
+      migration/decisão de produto dedicada, fora do escopo deste item.
 - **Aceite:** regra de permissão de UI definida num único lugar por feature.
 - **Notas de execução (fase workspace):**
   - Novo pacote `app/services/` com `AtendimentoService` (`app/services/atendimento.py`):
@@ -392,6 +395,83 @@
   - Admin (dual-write de papel) e Portal (abertura de chamado) ficam para as
     próximas fases deste mesmo item, como o texto original já previa
     ("Começar pelo workspace... Na sequência...").
+- **Notas de execução (fases admin + portal, mesmo dia):**
+  - **`PortalService`** (`app/services/portal.py`): `pode_avaliar()` movida de
+    `app/routes/portal.py` sem mudança (autor + `RESOLVIDO`). Achado real
+    equivalente ao bug do Kanban (fase workspace): `_render_form` e
+    `criar_chamado` reimplementavam, cada uma por conta própria, a mesma
+    fórmula "achar o id do departamento Marketing pelo nome" — uma sobre a
+    lista já filtrada por `recebe_chamados`, a outra sobre `setores_ativos`
+    sem esse filtro. Unificado em `PortalService.marketing_dep_id()`. A regra
+    de negócio do fluxo por demanda do Marketing (prioridade forçada +
+    prazo mínimo de 48h / "sem prazo determinado", antes só dentro de
+    `criar_chamado`) virou `PortalService.regras_marketing()`, retornando um
+    `RegrasMarketing` (dataclass) que a rota só interpreta (erro → re-render
+    do form; senão aplica prioridade/data/sem_prazo). Zero mudança de
+    comportamento nas mensagens de erro/sucesso.
+  - **Gap de teste encontrado e fechado:** a regra do Marketing (prazo 48h)
+    não tinha nenhum teste de rota antes desta fase — só existia
+    implicitamente no código. `tests/test_portal.py` ganhou 5 testes novos
+    (sem data nem "sem prazo" → 400; data abaixo do mínimo → 400; data válida
+    força `MEDIA`; "sem prazo" força `BAIXA`; fora do Marketing preserva a
+    prioridade escolhida) e `tests/test_portal_service.py` (novo, 12 casos)
+    testa `PortalService` isolado, sem banco — mesmo padrão de
+    `test_atendimento_service.py`.
+  - **`AdminService`** (`app/services/admin.py`): duas funções quase-idênticas
+    da rota (`_depto_valido`, só para categoria — sempre exige fila; e
+    `_depto_perfil_valido`, para papel/setor — só exige fila se `papel ==
+    "OPERADOR"`) viraram um único `departamento_valido(departamentos, dep_id,
+    *, exigir_fila)`. A rota agora busca `repo.departamentos(claims)` uma vez
+    e passa a lista — função pura, testável sem repo/claims.
+  - A orquestração de dual-write de papel (gravar `perfis` → espelhar
+    `app_metadata.role` via Admin API → reler os dois lados → decidir a
+    mensagem — item 1.5/M12), que vivia inteira dentro da rota `mudar_papel`
+    e não tinha nenhuma parte no `AdminRepo`, virou
+    `AdminService.promover_papel()` (retorna `ResultadoPapel(sucesso,
+    mensagem)`; a rota só decide `ok=`/`erro=` a partir de `sucesso`). Mesmas
+    3 mensagens de saída (sucesso limpo / aviso de divergência no JWT / erro
+    de divergência no banco), mesmos logs — só movidos.
+  - **Assimetria encontrada e conscientemente NÃO alterada:** `criar_usuario`
+    também faz dual-write (Admin API grava `app_metadata.role` na criação da
+    conta, depois `repo.atualizar_papel` grava `perfis`), mas nunca relia os
+    dois lados como `mudar_papel` passou a fazer no item 1.5 — é uma
+    orquestração estruturalmente diferente (criação de conta nova vs.
+    promoção de conta existente), então não foi forçada a compartilhar
+    `promover_papel()`; alinhar as duas exigiria decidir se vale a pena
+    confirmar por releitura logo na criação da conta, o que é escopo novo,
+    não uma extração. Registrado aqui para não se perder, não resolvido.
+  - `_require_ti(ctx)` e a resolução de `is_ti`/`is_admin_dep`/`escopo` em
+    `admin_context` **não** foram movidos para o serviço: são um único ponto
+    de definição já (13 rotas chamam a mesma função; não há duplicação),
+    então a extração não tinha o mesmo valor que a unificação de
+    `_depto_valido`/`_depto_perfil_valido` ou do dual-write.
+  - `app/routes/admin.py` perdeu o `import logging`/`log` de módulo (só
+    existiam para os `log.error`/`log.warning` do dual-write, que migraram
+    junto para o serviço).
+  - Testes novos e puros em `tests/test_admin_service.py` (10 casos):
+    `departamento_valido` (vazio, inexistente, inativo, com/sem exigir fila)
+    e `promover_papel` (sucesso limpo, divergência no banco, divergência só
+    no JWT, falha ao espelhar no Admin API sem quebrar a releitura de
+    `perfis`) — usando fakes mínimos (`_FakeRepo`/`_FakeClient`), sem
+    reaproveitar o `FakeAdmin` de `test_admin.py` (interfaces diferentes:
+    aqui só a superfície que `AdminService` toca).
+  - Suíte pytest completa (253 testes, exceto `tests/e2e`) verde — confirmado
+    via `--junit-xml` (0 falhas/erros/skips) depois que a saída de texto do
+    pytest, por alguma peculiaridade deste terminal Windows, parou de
+    imprimir a linha de resumo final ("N passed"). `ruff check app/` limpo;
+    `npm run build:css` sem diff (hash do CSS compilado idêntico antes/depois
+    — nenhum template foi tocado nesta fase).
+  - Com isso, o item 2.2 (M2) está concluído nas 3 fases previstas
+    (workspace → admin → portal). O 3º bullet original ("trocar `dep.nome ==
+    'Marketing'` por flag") fica **parcial**: a duplicação Python↔Python foi
+    eliminada (fonte única em `PortalService`/`AtendimentoService`), mas a
+    comparação por nome em si permanece em 3 pontos que são feature-flag de
+    exibição, não permissão — `admin.py:136` (`escopo == "Marketing"`, decide
+    qual dashboard renderizar), e os usos internos de
+    `PortalService.marketing_dep_id()`/`AtendimentoService` equivalentes no
+    workspace — nenhum reaproveitável pela coluna `autoatendimento` (cobre
+    Marketing **e** RH) sem uma coluna/decisão de produto nova, mesma
+    conclusão já registrada na fase workspace.
 
 ### 2.3 · M5 — Middlewares ASGI puros 🟡 ✅ **Concluído 2026-07-16**
 - [x] Reescrever `SecurityHeadersMiddleware`, `SessionRefreshMiddleware` e
@@ -548,6 +628,7 @@
 | 2026-07-16 | 2.3 (M5) | `app/security/headers.py`, `app/observability.py`, `app/auth/session.py` | `SecurityHeadersMiddleware`, `RequestContextMiddleware` e `SessionRefreshMiddleware` reescritos como ASGI puro (sem `BaseHTTPMiddleware`), interceptando só `http.response.start`; `request_id`/`refreshed_session` movidos para `scope["state"]`. Benchmark em `/workspace/fila/fragmento` (TestClient, 500 reqs): mean 5.29ms→4.32ms (~18% mais rápido). Comportamento idêntico, suíte verde. |
 | 2026-07-16 | 2.1 (M1) | `app/repositories/catalogo.py`, `mensagens.py`, `fila.py`, `atendimento.py` (novos), `app/repositories/chamados.py` (reduzido a fachada) | `ChamadosRepo` (949 linhas) dividido em `CatalogoRepo`/`MensagensRepo`/`FilaRepo`/`AtendimentoRepo` (máx. 365 linhas cada), com `ChamadosRepo` virando fachada que delega 29 dos 33 métodos e mantém `perfil`/`atualizar_avatar`/`listar`/`stats` direto (self-service, baixo volume). Zero mudança em rotas/testes — as 27 declarações `Depends(get_chamados_repo)` e os 6 `Fake*Repo` de teste continuam batendo no mesmo nome/assinatura. `PRIORIDADES`, `validar_nota()` e constantes de cache do catálogo re-exportadas de `chamados.py` para não quebrar `app/routes/admin.py`. Suíte verde (197 testes), `ruff` limpo, `build:css` sem diff. |
 | 2026-07-16 | 2.2 (M2, fase workspace) | `app/services/__init__.py`, `app/services/atendimento.py` (novos), `app/routes/workspace.py`, `app/templates/workspace/kanban.html`, `tests/test_atendimento_service.py` (novo) | `AtendimentoService` centraliza `dept_bate`/`eh_autor`/`eh_autoatendimento`/`bloqueado_por_autoria`/`pode_reivindicar`/`pode_atender`, hoje espalhados entre `_carregar_atendimento` (workspace.py) e o Jinja de `kanban.html`, que recomputava `dept_bate` por conta própria — a mesma classe de duplicação que originou o bug da migration `0028`. `kanban()` agora anota `dept_bate` por cartão via serviço antes de renderizar; `_carregar_atendimento` chama `AtendimentoService.permissoes(...)` em vez de recalcular inline. Zero mudança de comportamento — suíte completa (226 testes) e `ruff` verdes. Admin/portal (2ª e 3ª fases do item) e a troca do `dep.nome == 'Marketing'` por flag de comportamento ficam para PRs seguintes (ver notas de execução do item). |
+| 2026-07-16 | 2.2 (M2, fases admin + portal) | `app/services/admin.py`, `app/services/portal.py` (novos), `app/routes/admin.py`, `app/routes/portal.py`, `tests/test_admin_service.py`, `tests/test_portal_service.py` (novos), `tests/test_admin.py`, `tests/test_portal.py` | Fecha o item 2.2. `AdminService`: unifica `_depto_valido`/`_depto_perfil_valido` (duas validações quase-idênticas de departamento) em `departamento_valido(exigir_fila=...)`; extrai a orquestração de dual-write de papel de `mudar_papel` (grava `perfis` → espelha `app_metadata.role` → relê os dois lados → decide mensagem) para `promover_papel()`. `PortalService`: move `pode_avaliar`; unifica a busca do departamento "Marketing" por nome, antes duplicada entre `_render_form` e `criar_chamado` (achado equivalente ao bug do Kanban); extrai a regra do fluxo por demanda do Marketing (prioridade forçada + prazo mínimo de 48h) para `regras_marketing()` — gap de teste fechado com 5 casos novos de rota, sem cobertura antes. Zero mudança de comportamento (mesmas mensagens/regras, só movidas), exceto a assimetria pré-existente entre `mudar_papel` (relê pra confirmar) e `criar_usuario` (não relê) — mapeada e conscientemente deixada como estava (orquestrações estruturalmente diferentes). Suíte completa (253 testes) e `ruff app/` verdes; `build:css` sem diff. |
 
 ## Definição de pronto (todos os itens)
 

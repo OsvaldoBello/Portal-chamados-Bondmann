@@ -10,18 +10,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
-
-# Marketing trabalha por demanda: a data de entrega deve respeitar um mínimo de
-# 48h (2 dias) para início de desenvolvimento.
-_TZ_BR = ZoneInfo("America/Sao_Paulo")
-_ENTREGA_MIN_DIAS = 2
-
-
-def _data_entrega_min() -> date:
-    """Menor data de entrega permitida (hoje + 48h, no fuso de Brasília)."""
-    return datetime.now(_TZ_BR).date() + timedelta(days=_ENTREGA_MIN_DIAS)
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status, BackgroundTasks
 from fastapi.responses import RedirectResponse
@@ -45,6 +33,7 @@ from app.anexos import (
 )
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
+from app.services.portal import PortalService
 from app.templating import portal_base_template, render
 
 log = logging.getLogger("app.portal")
@@ -84,14 +73,6 @@ async def portal_context(
 
 async def _csrf_guard(request: Request) -> None:
     await get_csrf().validate(request)
-
-
-def pode_avaliar(chamado: dict, user_id: str) -> bool:
-    """Regra de UI: autor + RESOLVIDO podem avaliar (RLS reforça no banco)."""
-    return (
-        chamado.get("status") == "RESOLVIDO"
-        and str(chamado.get("cliente_id")) == str(user_id)
-    )
 
 
 def _stats_de(chamados: list[dict]) -> dict[str, int]:
@@ -169,10 +150,7 @@ async def _render_form(
         subcategorias = await repo.subcategorias_ativas(ctx.user.claims, form["categoria_id"])
     # Id do departamento "Marketing" — o front usa para exibir o aviso de prazo (48h)
     # e o texto de ajuda específico da descrição (ver novo_chamado.js).
-    marketing_dep_id = next(
-        (str(d["id"]) for d in departamentos if (d.get("nome") or "").strip().lower() == "marketing"),
-        "",
-    )
+    marketing_dep_id = PortalService.marketing_dep_id(departamentos)
     usuarios_copia = await repo.usuarios_para_copia(ctx.user.claims, excluir_id=ctx.user.id)
     return render(
         request,
@@ -184,7 +162,7 @@ async def _render_form(
             "subcategorias": subcategorias,
             "marketing_dep_id": marketing_dep_id,
             "prioridades": PRIORIDADES,
-            "data_entrega_min": _data_entrega_min().isoformat(),
+            "data_entrega_min": PortalService.data_entrega_min().isoformat(),
             "form": form,
             "erro": erro,
             "setores": [d["nome"] for d in setores_ativos],
@@ -296,39 +274,21 @@ async def criar_chamado(
         return await _erro("Setor selecionado inválido.")
 
     # Marketing trabalha por DEMANDA: em vez de prioridade, exige uma DATA DE
-    # ENTREGA com no mínimo 48h (2 dias). Para os demais setores, mantém a prioridade.
-    marketing_id = next(
-        (str(d["id"]) for d in setores_ativos if (d.get("nome") or "").strip().lower() == "marketing"),
-        "",
+    # ENTREGA com no mínimo 48h (2 dias). Para os demais setores, mantém a
+    # prioridade. Regra centralizada em PortalService — antes duplicada aqui
+    # e em `_render_form` (mesma fórmula de "achar o Marketing pelo nome").
+    marketing = PortalService.regras_marketing(
+        departamento_id=departamento_id,
+        setores_ativos=setores_ativos,
+        prioridade=prioridade,
+        sem_prazo_marcado=sem_prazo_marcado,
+        data_entrega=data_entrega,
     )
-    is_marketing = bool(marketing_id) and departamento_id == marketing_id
-    data_entrega_val: date | None = None
-    sem_prazo_val = False
-    if is_marketing:
-        prioridade = "MEDIA"  # não usada no fluxo por demanda
-        if sem_prazo_marcado:
-            # Demanda sem urgência nem prazo determinado — feita quando sobrar
-            # tempo (0040). Prioridade BAIXA: não entra na escalada automática
-            # de prioridade do Marketing (0031), que só olha data_entrega.
-            sem_prazo_val = True
-            prioridade = "BAIXA"
-        else:
-            if not data_entrega:
-                return await _erro(
-                    "Informe a data de entrega desejada (mínimo de 48h) ou marque "
-                    "\"Sem data limite\"."
-                )
-            try:
-                escolhida = date.fromisoformat(data_entrega)
-            except ValueError:
-                return await _erro("Data de entrega inválida.")
-            minimo = _data_entrega_min()
-            if escolhida < minimo:
-                return await _erro(
-                    "A data de entrega deve ser a partir de "
-                    f"{minimo.strftime('%d/%m/%Y')} — mínimo de 48h para início do desenvolvimento."
-                )
-            data_entrega_val = escolhida
+    if marketing.erro:
+        return await _erro(marketing.erro)
+    prioridade = marketing.prioridade
+    data_entrega_val = marketing.data_entrega
+    sem_prazo_val = marketing.sem_prazo
     if not categoria_id:
         return await _erro("Selecione a categoria do chamado.")
     # A categoria precisa pertencer ao departamento escolhido (0019 — defesa em
@@ -448,7 +408,7 @@ async def detalhe_chamado(
             "perfil": ctx.perfil,
             "chamado": chamado,
             "mensagens": mensagens,
-            "pode_avaliar": pode_avaliar(chamado, ctx.user.id),
+            "pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id),
             "observadores": observadores,
             "usuarios_copia": usuarios_copia,
             # Config do Realtime no browser (Seção 6.1): anon key + JWT do usuário.
@@ -605,12 +565,12 @@ async def avaliar_chamado(
     except ValueError as exc:
         if is_htmx:
             return fragmento(
-                {"pode_avaliar": pode_avaliar(chamado, ctx.user.id), "erro": str(exc)},
+                {"pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id), "erro": str(exc)},
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         return redir
 
-    if not pode_avaliar(chamado, ctx.user.id):
+    if not PortalService.pode_avaliar(chamado, ctx.user.id):
         if is_htmx:
             return fragmento(
                 {"pode_avaliar": False,
@@ -624,7 +584,7 @@ async def avaliar_chamado(
     )
     chamado = {**chamado, **(atualizado or {})}
     if is_htmx:
-        return fragmento({"pode_avaliar": pode_avaliar(chamado, ctx.user.id)})
+        return fragmento({"pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id)})
     return redir
 
 

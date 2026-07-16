@@ -323,6 +323,87 @@ def test_criar_com_setor_invalido_retorna_400():
     assert repo.criados == []
 
 
+# --------------------------------------------------------------------------
+# Marketing: fluxo por demanda (prioridade forçada + prazo mínimo de 48h)
+# --------------------------------------------------------------------------
+def test_criar_marketing_sem_data_nem_sem_prazo_retorna_400():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(departamento_id="d3", setor="Financeiro", data_entrega="")
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "48h" in resp.text or "data limite" in resp.text.lower()
+    assert repo.criados == []
+
+
+def test_criar_marketing_data_abaixo_do_minimo_retorna_400():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(
+            departamento_id="d3", setor="Financeiro", data_entrega="2020-01-01",
+        )
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "48h" in resp.text
+    assert repo.criados == []
+
+
+def test_criar_marketing_com_data_valida_forca_prioridade_media():
+    from app.services.portal import PortalService
+
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(
+            departamento_id="d3", setor="Financeiro", prioridade="ALTA",
+            data_entrega=PortalService.data_entrega_min().isoformat(),
+        )
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert len(repo.criados) == 1
+    assert repo.criados[0]["prioridade"] == "MEDIA"
+    assert repo.criados[0]["sem_prazo"] is False
+
+
+def test_criar_marketing_sem_prazo_marcado_forca_prioridade_baixa():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(
+            departamento_id="d3", setor="Financeiro", prioridade="ALTA", sem_prazo="on",
+        )
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert len(repo.criados) == 1
+    assert repo.criados[0]["prioridade"] == "BAIXA"
+    assert repo.criados[0]["sem_prazo"] is True
+    assert repo.criados[0]["data_entrega"] is None
+
+
+def test_criar_fora_do_marketing_preserva_prioridade_escolhida():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(prioridade="ALTA")  # d2 = RH
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert repo.criados[0]["prioridade"] == "ALTA"
+
 
 def test_criar_sem_categoria_retorna_400():
     repo = FakeRepo()

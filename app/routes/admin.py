@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import csv
 import io
-import logging
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -41,9 +40,8 @@ from app.repositories.chamados import (
     get_chamados_repo,
 )
 from app.security.csrf import get_csrf
+from app.services.admin import AdminService
 from app.templating import render
-
-log = logging.getLogger("app.routes.admin")
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -333,7 +331,10 @@ async def criar_categoria(
     _require_ti(ctx)
     nome = nome.strip()
     # Categorias pertencem a um departamento (0019); valida o setor informado.
-    dep_id = await _depto_valido(repo, ctx.user.claims, departamento_id)
+    # Categoria só faz sentido num setor com fila de atendimento (0027).
+    dep_id = AdminService.departamento_valido(
+        await repo.departamentos(ctx.user.claims), departamento_id, exigir_fila=True
+    )
     if nome and dep_id:
         await repo.criar_categoria(ctx.user.claims, nome, descricao.strip() or None, dep_id)
         cache.invalidate_prefix(CACHE_CATEGORIAS)
@@ -458,40 +459,6 @@ async def _emails_por_id() -> dict[str, str]:
     return {str(u.id): (getattr(u, "email", None) or "") for u in itens}
 
 
-async def _depto_valido(repo: AdminRepo, claims: dict, dep_id: str) -> str | None:
-    """Retorna o id do departamento se existir, estiver ativo e RECEBER chamado
-    (tem fila/staff); senão ``None``. Usado só para vincular CATEGORIAS — uma
-    categoria só faz sentido num setor com fila de atendimento (0027)."""
-    dep_id = (dep_id or "").strip()
-    if not dep_id:
-        return None
-    for d in await repo.departamentos(claims):
-        if str(d["id"]) == dep_id and d.get("ativo") and d.get("recebe_chamados"):
-            return dep_id
-    return None
-
-
-async def _depto_perfil_valido(
-    repo: AdminRepo, claims: dict, dep_id: str, *, papel: str
-) -> str | None:
-    """Retorna o id do departamento se existir e estiver ativo; senão ``None``.
-
-    Toda conta tem um setor de origem (0028) — inclusive Funcionário/CLIENTE, que
-    é como o líder do setor sabe quem é da sua equipe. OPERADOR é a única exceção:
-    só faz sentido num setor que RECEBE chamado (é ele quem atende a fila) —
-    atribuí-lo a um setor sem fila deixaria a conta sem nada pra fazer."""
-    dep_id = (dep_id or "").strip()
-    if not dep_id:
-        return None
-    for d in await repo.departamentos(claims):
-        if str(d["id"]) != dep_id or not d.get("ativo"):
-            continue
-        if papel == "OPERADOR" and not d.get("recebe_chamados"):
-            return None
-        return dep_id
-    return None
-
-
 @router.get("/usuarios")
 async def usuarios(
     request: Request,
@@ -559,7 +526,10 @@ async def criar_usuario(
         return _volta(erro=f"A senha deve ter ao menos {_SENHA_MIN} caracteres.")
     # Setor de origem obrigatório pra qualquer papel (0028) — inclusive
     # Funcionário: é o que permite o líder do setor ver os chamados da equipe.
-    dep_id = await _depto_perfil_valido(repo, ctx.user.claims, departamento_id, papel=papel)
+    # Só OPERADOR exige setor com fila (é quem atende, 0028).
+    dep_id = AdminService.departamento_valido(
+        await repo.departamentos(ctx.user.claims), departamento_id, exigir_fila=(papel == "OPERADOR")
+    )
     if dep_id is None:
         return _volta(erro="Selecione o departamento do usuário.")
 
@@ -643,61 +613,20 @@ async def mudar_papel(
     papel = papel.strip().upper()
     if papel not in _PAPEIS:
         return _volta(erro="Papel inválido.")
-    dep_id = await _depto_perfil_valido(repo, ctx.user.claims, departamento_id, papel=papel)
+    dep_id = AdminService.departamento_valido(
+        await repo.departamentos(ctx.user.claims), departamento_id, exigir_fila=(papel == "OPERADOR")
+    )
     if dep_id is None:
         return _volta(erro="Selecione o departamento do usuário.")
 
-    await repo.atualizar_papel(ctx.user.claims, user_id, role=papel, departamento_id=dep_id)
-
-    # Espelha o papel no JWT (app_metadata) — senão o app trata pelo papel antigo.
     client = await ensure_admin_client()
-    if client is not None:
-        try:
-            await client.auth.admin.update_user_by_id(user_id, {"app_metadata": {"role": papel}})
-        except Exception as exc:  # noqa: BLE001 — perfis já atualizado; confirmado abaixo
-            log.error(
-                "Dual-write de papel: falha ao atualizar app_metadata.role (user_id=%s alvo=%s): %s",
-                user_id, papel, exc,
-            )
-    else:
-        log.error(
-            "Dual-write de papel: service_role não configurada — app_metadata.role não "
-            "pôde ser sincronizado (user_id=%s alvo=%s).",
-            user_id, papel,
-        )
-
-    # Sprint 1 / item 1.5 (M12): relê os dois lados da escrita dupla (perfis e
-    # o JWT) em vez de assumir sucesso — hoje a etapa 2 podia falhar em
-    # silêncio e a divergência só aparecia num incidente de permissão depois.
-    papel_no_banco = await repo.obter_papel(ctx.user.claims, user_id)
-    papel_no_jwt = None
-    if client is not None:
-        try:
-            res = await client.auth.admin.get_user_by_id(user_id)
-            u = getattr(res, "user", res)
-            papel_no_jwt = (getattr(u, "app_metadata", None) or {}).get("role")
-        except Exception as exc:  # noqa: BLE001 — não bloqueia a resposta, só perde a confirmação
-            log.warning("Não foi possível reler app_metadata.role para confirmar (user_id=%s): %s", user_id, exc)
-
-    if papel_no_banco != papel:
-        log.error(
-            "Divergência de papel após promoção: perfis.role=%r ≠ alvo=%r (user_id=%s).",
-            papel_no_banco, papel, user_id,
-        )
-        return _volta(erro="Falha ao gravar o papel no banco. Tente novamente.")
-    if client is not None and papel_no_jwt is not None and papel_no_jwt != papel:
-        log.error(
-            "Divergência de papel após promoção: app_metadata.role=%r ≠ alvo=%r (user_id=%s).",
-            papel_no_jwt, papel, user_id,
-        )
-        return _volta(
-            ok=(
-                "Papel atualizado no banco, mas o JWT (app_metadata) ficou com um valor "
-                "diferente — peça para o usuário deslogar e logar de novo; se persistir, "
-                "verifique manualmente."
-            )
-        )
-    return _volta(ok="Papel atualizado. A mudança vale no próximo login do usuário.")
+    resultado = await AdminService.promover_papel(
+        repo=repo, claims=ctx.user.claims, user_id=user_id, papel=papel,
+        departamento_id=dep_id, client=client,
+    )
+    if not resultado.sucesso:
+        return _volta(erro=resultado.mensagem)
+    return _volta(ok=resultado.mensagem)
 
 
 @router.post("/usuarios/{user_id}/excluir")
