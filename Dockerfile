@@ -21,7 +21,7 @@ RUN npx tailwindcss -i ./app/static/src/input.css -o ./app/static/css/app.css --
 # Estágio 2 — runtime Python 3.12 (Seção 0.2)
 # Inclui libmagic (python-magic, Seção 3.9). Uvicorn na porta 8080 (Railway).
 # ============================================================
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
