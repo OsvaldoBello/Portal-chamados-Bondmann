@@ -8,9 +8,8 @@ import sys
 import time
 import uuid
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 REQUEST_ID_HEADER = "X-Request-ID"
 
@@ -38,41 +37,61 @@ def configure_logging(level: str) -> None:
     root.setLevel(level.upper())
 
 
-class RequestContextMiddleware(BaseHTTPMiddleware):
-    """Atribui request-id, mede duração e loga ponta a ponta."""
+class RequestContextMiddleware:
+    """Atribui request-id, mede duração e loga ponta a ponta.
 
-    def __init__(self, app) -> None:
-        super().__init__(app)
+    Middleware ASGI puro (Seção 2.3/M5 do plano de melhorias) — sem
+    ``BaseHTTPMiddleware``. ``request_id`` vai em ``scope["state"]`` (mesmo
+    dict que ``Request.state`` lê), visível para as rotas e para o handler de
+    exceção não tratada em ``app/main.py``.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
         self._log = logging.getLogger("request")
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        request_id = request.headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex
-        request.state.request_id = request_id
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = Headers(scope=scope)
+        request_id = headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex
+        scope.setdefault("state", {})["request_id"] = request_id
+        method = scope["method"]
+        path = scope["path"]
+        status_code: int | None = None
+
+        async def send_wrapper(message: Message) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+                MutableHeaders(scope=message)[REQUEST_ID_HEADER] = request_id
+            await send(message)
+
         start = time.perf_counter()
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_wrapper)
         except Exception:
             duration = round((time.perf_counter() - start) * 1000, 2)
             self._log.exception(
                 "request_error",
                 extra={
                     "request_id": request_id,
-                    "method": request.method,
-                    "path": request.url.path,
+                    "method": method,
+                    "path": path,
                     "duration_ms": duration,
                 },
             )
             raise
         duration = round((time.perf_counter() - start) * 1000, 2)
-        response.headers[REQUEST_ID_HEADER] = request_id
         self._log.info(
             "request",
             extra={
                 "request_id": request_id,
-                "method": request.method,
-                "path": request.url.path,
-                "status": response.status_code,
+                "method": method,
+                "path": path,
+                "status": status_code,
                 "duration_ms": duration,
             },
         )
-        return response

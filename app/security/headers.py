@@ -7,9 +7,8 @@ projeto Supabase (REST e Realtime wss) para o ``supabase-js`` do chat.
 
 from __future__ import annotations
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import Settings
 
@@ -40,24 +39,37 @@ def build_csp(settings: Settings) -> str:
     return "; ".join(directives)
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, settings: Settings) -> None:
-        super().__init__(app)
+class SecurityHeadersMiddleware:
+    """Middleware ASGI puro (Seção 2.3/M5 do plano de melhorias — sem
+    ``BaseHTTPMiddleware``, que serializa a resposta inteira em memória antes
+    de repassar; aqui só interceptamos o evento ``http.response.start``)."""
+
+    def __init__(self, app: ASGIApp, settings: Settings) -> None:
+        self.app = app
         self._csp = build_csp(settings)
         self._is_prod = settings.is_production
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        response = await call_next(request)
-        headers = response.headers
-        headers.setdefault("Content-Security-Policy", self._csp)
-        headers.setdefault("X-Frame-Options", "DENY")
-        headers.setdefault("X-Content-Type-Options", "nosniff")
-        headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-        # HSTS só faz sentido sob HTTPS (produção).
-        if self._is_prod:
-            headers.setdefault(
-                "Strict-Transport-Security",
-                "max-age=63072000; includeSubDomains; preload",
-            )
-        return response
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers.setdefault("Content-Security-Policy", self._csp)
+                headers.setdefault("X-Frame-Options", "DENY")
+                headers.setdefault("X-Content-Type-Options", "nosniff")
+                headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+                headers.setdefault(
+                    "Permissions-Policy", "geolocation=(), microphone=(), camera=()"
+                )
+                # HSTS só faz sentido sob HTTPS (produção).
+                if self._is_prod:
+                    headers.setdefault(
+                        "Strict-Transport-Security",
+                        "max-age=63072000; includeSubDomains; preload",
+                    )
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)

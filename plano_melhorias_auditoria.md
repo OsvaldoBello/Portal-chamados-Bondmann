@@ -299,12 +299,40 @@
       migration própria.
 - **Aceite:** regra de permissão de UI definida num único lugar por feature.
 
-### 2.3 · M5 — Middlewares ASGI puros 🟡
-- [ ] Reescrever `SecurityHeadersMiddleware`, `SessionRefreshMiddleware` e
+### 2.3 · M5 — Middlewares ASGI puros 🟡 ✅ **Concluído 2026-07-16**
+- [x] Reescrever `SecurityHeadersMiddleware`, `SessionRefreshMiddleware` e
       `RequestContextMiddleware` como middleware ASGI puro (sem `BaseHTTPMiddleware`);
       manter o `GZipMiddleware` nativo.
-- [ ] Benchmark antes/depois numa rota de polling (fila) para registrar o ganho.
+- [x] Benchmark antes/depois numa rota de polling (fila) para registrar o ganho.
 - **Aceite:** comportamento idêntico (headers, refresh de cookie, request-id) com suíte verde.
+- **Notas de execução:**
+  - As 3 classes viraram callables ASGI puros (`__init__(self, app, ...)` +
+    `async def __call__(self, scope, receive, send)`), interceptando só o evento
+    `http.response.start` via `MutableHeaders(scope=message)` — em vez de
+    `BaseHTTPMiddleware`, que reconstrói a resposta inteira em memória (via
+    `StreamingResponse`/task group) a cada request. `request_id` e
+    `refreshed_session` passam a viver em `scope["state"]` (mesmo dict que
+    `Request.state` já lia — nenhuma rota/dependency mudou). Ordem de
+    `add_middleware` em `app/main.py` inalterada (mesma pilha: GZip → contexto →
+    refresh de sessão → headers → router).
+  - `app.add_middleware` aceita middleware ASGI puro do mesmo jeito que
+    `BaseHTTPMiddleware` (só chama `cls(app, **options)`), então `app/main.py`
+    não precisou de nenhuma mudança.
+  - **Benchmark:** `GET /workspace/fila/fragmento` via `TestClient`, dependências
+    trocadas por fakes (sem banco), 500 requisições após 50 de aquecimento,
+    comparando o mesmo código com `git stash` (antes/depois isolados no mesmo
+    processo/máquina): **antes** (BaseHTTPMiddleware) mean 5.29ms / p50 5.10ms /
+    p95 6.04ms; **depois** (ASGI puro) mean 4.32ms / p50 4.16ms / p95 5.12ms —
+    ganho de ~18% no tempo médio de resposta nessa rota (custo do próprio
+    `BaseHTTPMiddleware`, que roda cada camada numa `anyio` task separada com
+    stream intermediário).
+  - Suíte pytest completa (exceto `tests/e2e`, que exige Docker) rodou 100% verde
+    neste ambiente Windows, com uma exceção conhecida e documentada no item
+    0.4: crash intermitente "access violation" no carregamento do
+    `libmagic.dll` (via `python-magic-bin`, dependência só de Windows) nos
+    testes de upload/avatar — reproduziu numa das execuções desta sessão e não
+    nas outras duas (mesmo código, sem relação com esta mudança); não deve
+    reproduzir no CI (`ubuntu-latest`).
 
 ### 2.4 · M6 — `[DECISÃO DO GESTOR]` Colocalizar app e banco 🟡
 - Piso atual de ~320ms/query é latência até us-east-2. Opções: **(a)** deploy do app na
@@ -423,6 +451,7 @@
 | 2026-07-15 | 2.5 (M8) | `pyproject.toml`, `.github/dependabot.yml` | `pyproject.toml [project.dependencies]` (espelho morto, nunca instalado por `pip`) removido; `requirements.txt` confirmado como única fonte real (Dockerfile + CI). Dependabot novo: pip/npm/docker/github-actions, agrupado, mensal. |
 | 2026-07-15 | 2.7 (B4) | `docs/CHANGELOG.md` (novo), `docs/adr/` (novo, 6 ADRs + índice), `plano_mestre_desenvolvimento.md` (Seções 3.2, 7, Changelog) | Changelog de 24 entradas extraído do plano mestre; 6 ADRs cobrindo as decisões estruturais (RLS/claims, pooling, pivô departamental, SLA comercial, Railway único, cache/rate-limit local); matriz de permissões da Seção 3.2 reescrita no modelo `0020`/`0027`/`0028`/`0038`/`0042` (a tabela antiga estava incorreta desde 2026-07-06 e já tinha induzido um bug real). |
 | 2026-07-15 | 2.9 (B1/B2/B3/B5) | `plano_mestre_desenvolvimento.md` (Seções 2.5, 3.9.1 novas), `app/security/jwt.py`→`jwt_verifier.py`, `app/auth/dependencies.py`, `app/main.py`, `tests/test_jwt.py`, `tests/test_db_rls_claims.py` (novo) | B1: checklist de scale-out consolidado. B2: decisão do bucket público de avatares registrada explicitamente. B3: módulo `jwt.py` renomeado (desfaz a auto-referência de nome com o pacote `jwt` importado dentro dele). B5: 9 testes adversariais novos contra `_apply_rls_claims` (aspas/backslash/unicode/tentativa de fechar o literal SQL cedo), validando o round-trip via decodificação das regras de literal do Postgres. |
+| 2026-07-16 | 2.3 (M5) | `app/security/headers.py`, `app/observability.py`, `app/auth/session.py` | `SecurityHeadersMiddleware`, `RequestContextMiddleware` e `SessionRefreshMiddleware` reescritos como ASGI puro (sem `BaseHTTPMiddleware`), interceptando só `http.response.start`; `request_id`/`refreshed_session` movidos para `scope["state"]`. Benchmark em `/workspace/fila/fragmento` (TestClient, 500 reqs): mean 5.29ms→4.32ms (~18% mais rápido). Comportamento idêntico, suíte verde. |
 
 ## Definição de pronto (todos os itens)
 
