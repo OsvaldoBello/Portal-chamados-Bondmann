@@ -85,12 +85,24 @@ async def _criar_usuario(
         nome,
     )
     # handle_new_user (trigger) já criou a linha em `perfis` com role=CLIENTE — promove.
-    await conn.execute(
-        "UPDATE perfis SET role = $2::papel_usuario, departamento_id = $3 WHERE id = $1",
-        uid,
-        role,
-        departamento_id,
-    )
+    # Esta UPDATE roda na conexão de superusuário, sem claims de RLS (auth.uid() é NULL
+    # aqui) — o trigger `perfis_self_so_avatar` (migration 0033) só libera colunas além
+    # de avatar_path quando `auth_is_ti()` é true, o que exige um auth.uid() válido
+    # apontando pra um staff já promovido no setor TI. No bootstrap do seed isso nunca
+    # existe (o próprio primeiro usuário está sendo criado agora), então o trigger
+    # bloquearia até esta promoção "de admin". Desliga só para este UPDATE — mesma
+    # transação, nunca comitada, e sempre re-habilitado antes de qualquer `as_user()`
+    # trocar de persona, então não mascara nada do que a suíte realmente testa.
+    await conn.execute("ALTER TABLE perfis DISABLE TRIGGER perfis_self_so_avatar")
+    try:
+        await conn.execute(
+            "UPDATE perfis SET role = $2::papel_usuario, departamento_id = $3 WHERE id = $1",
+            uid,
+            role,
+            departamento_id,
+        )
+    finally:
+        await conn.execute("ALTER TABLE perfis ENABLE TRIGGER perfis_self_so_avatar")
     return uid
 
 
