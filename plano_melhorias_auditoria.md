@@ -240,18 +240,35 @@
   - Marker `rls` registrado em `pyproject.toml`; sem `RLS_DATABASE_URL` a suíte
     inteira é pulada via `pytest_collection_modifyitems` (não quebra `pytest`
     default de quem não tem Docker local).
-  - **Pendência de validação:** este ambiente de execução não tem Docker
-    disponível (`docker: command not found`), então a suíte foi escrita e
-    revisada linha a linha contra o estado real das 45 migrations (policies
-    finais confirmadas por leitura direta, não por suposição) mas **não foi
-    rodada de ponta a ponta contra um Postgres local**. A suíte pytest
-    principal (sem Docker) roda normal e pula os novos testes de forma limpa —
-    confirmado nesta sessão. Primeira execução real acontece no CI (job
-    `e2e-rls`, `ubuntu-latest` tem Docker) no próximo PR que toque
-    `supabase/`/`app/repositories/`; recomendo rodar `supabase start` +
-    `pytest tests/e2e -m rls -v` localmente (quem tiver Docker) antes do merge
-    para pegar qualquer detalhe de sintaxe/schema que só aparece com o banco
-    de pé.
+  - **Pendência de validação — fechada em 2026-07-16:** o push do item 2.2
+    (que toca `app/repositories/`) disparou o job `e2e-rls.yml` pela primeira
+    vez de verdade (`ubuntu-latest`, Docker disponível). Achou 2 bugs reais na
+    suíte — nunca pegos porque nunca tinha rodado contra um Postgres de fato —
+    corrigidos no mesmo dia, ambos só em `tests/e2e/` (nenhum em código de
+    produção):
+    1. **Fixture `seed` travava em TODOS os 11 testes** (`_criar_usuario` em
+       `conftest.py`): a promoção de `role`/`departamento_id` rodava na conexão
+       de superusuário do seed, sem claims de RLS (`auth.uid()` NULL ali). O
+       trigger `perfis_self_so_avatar` (migration 0033) só libera essas colunas
+       quando `auth_is_ti()` é true — exige um `auth.uid()` válido apontando pra
+       um staff já no setor TI, que no bootstrap do seed ainda não existe (o
+       próprio primeiro usuário está sendo criado). Fix: desliga o trigger só
+       para essa UPDATE (mesma transação nunca comitada, reabilitado antes de
+       qualquer `as_user()`).
+    2. **`test_ti_sem_flag_autoatendimento_nao_pode_se_autoatender`** (o único
+       teste que esperava um erro do Postgres via `pytest.raises`): a RLS
+       rejeitava certinho (`InsufficientPrivilegeError`), mas qualquer erro do
+       Postgres aborta a transação inteira — o cleanup de `as_user()` (`RESET
+       ROLE`) tentava rodar mais SQL nela logo depois e quebrava com
+       `InFailedSQLTransactionError`, mascarando o sucesso real do teste. Fix:
+       `async with conn.transaction():` em volta do UPDATE que deve falhar —
+       aninhado dentro da transação do fixture `conn`, vira `SAVEPOINT`
+       automático (padrão asyncpg) e absorve o erro esperado sem derrubar o
+       resto da transação.
+    - **11/11 testes verdes** no job `e2e-rls` após os dois fixes
+      (`ba6991d`). Nenhuma policy/trigger de produção foi alterada — os dois
+      bugs eram só na infraestrutura do teste (fixture de seed e isolamento de
+      transação), não na RLS que a suíte valida.
 
 ### 1.8 · M10 — `[DECISÃO DO GESTOR]` Alvo canônico de deploy 🟡 ✅ **Decidido e executado 2026-07-15**
 - Opções: **(a) Railway como produção única** (recomendação da auditoria e do próprio
@@ -629,6 +646,7 @@
 | 2026-07-16 | 2.1 (M1) | `app/repositories/catalogo.py`, `mensagens.py`, `fila.py`, `atendimento.py` (novos), `app/repositories/chamados.py` (reduzido a fachada) | `ChamadosRepo` (949 linhas) dividido em `CatalogoRepo`/`MensagensRepo`/`FilaRepo`/`AtendimentoRepo` (máx. 365 linhas cada), com `ChamadosRepo` virando fachada que delega 29 dos 33 métodos e mantém `perfil`/`atualizar_avatar`/`listar`/`stats` direto (self-service, baixo volume). Zero mudança em rotas/testes — as 27 declarações `Depends(get_chamados_repo)` e os 6 `Fake*Repo` de teste continuam batendo no mesmo nome/assinatura. `PRIORIDADES`, `validar_nota()` e constantes de cache do catálogo re-exportadas de `chamados.py` para não quebrar `app/routes/admin.py`. Suíte verde (197 testes), `ruff` limpo, `build:css` sem diff. |
 | 2026-07-16 | 2.2 (M2, fase workspace) | `app/services/__init__.py`, `app/services/atendimento.py` (novos), `app/routes/workspace.py`, `app/templates/workspace/kanban.html`, `tests/test_atendimento_service.py` (novo) | `AtendimentoService` centraliza `dept_bate`/`eh_autor`/`eh_autoatendimento`/`bloqueado_por_autoria`/`pode_reivindicar`/`pode_atender`, hoje espalhados entre `_carregar_atendimento` (workspace.py) e o Jinja de `kanban.html`, que recomputava `dept_bate` por conta própria — a mesma classe de duplicação que originou o bug da migration `0028`. `kanban()` agora anota `dept_bate` por cartão via serviço antes de renderizar; `_carregar_atendimento` chama `AtendimentoService.permissoes(...)` em vez de recalcular inline. Zero mudança de comportamento — suíte completa (226 testes) e `ruff` verdes. Admin/portal (2ª e 3ª fases do item) e a troca do `dep.nome == 'Marketing'` por flag de comportamento ficam para PRs seguintes (ver notas de execução do item). |
 | 2026-07-16 | 2.2 (M2, fases admin + portal) | `app/services/admin.py`, `app/services/portal.py` (novos), `app/routes/admin.py`, `app/routes/portal.py`, `tests/test_admin_service.py`, `tests/test_portal_service.py` (novos), `tests/test_admin.py`, `tests/test_portal.py` | Fecha o item 2.2. `AdminService`: unifica `_depto_valido`/`_depto_perfil_valido` (duas validações quase-idênticas de departamento) em `departamento_valido(exigir_fila=...)`; extrai a orquestração de dual-write de papel de `mudar_papel` (grava `perfis` → espelha `app_metadata.role` → relê os dois lados → decide mensagem) para `promover_papel()`. `PortalService`: move `pode_avaliar`; unifica a busca do departamento "Marketing" por nome, antes duplicada entre `_render_form` e `criar_chamado` (achado equivalente ao bug do Kanban); extrai a regra do fluxo por demanda do Marketing (prioridade forçada + prazo mínimo de 48h) para `regras_marketing()` — gap de teste fechado com 5 casos novos de rota, sem cobertura antes. Zero mudança de comportamento (mesmas mensagens/regras, só movidas), exceto a assimetria pré-existente entre `mudar_papel` (relê pra confirmar) e `criar_usuario` (não relê) — mapeada e conscientemente deixada como estava (orquestrações estruturalmente diferentes). Suíte completa (253 testes) e `ruff app/` verdes; `build:css` sem diff. |
+| 2026-07-16 | 1.7 (M9) — fecha a pendência de validação | `tests/e2e/conftest.py`, `tests/e2e/test_rls_matrix.py` | O push do item 2.2 disparou o job `e2e-rls` pela primeira vez de verdade contra Docker/Supabase local no CI (`gh` instalado nesta sessão para acompanhar). Achou 2 bugs só na suíte de teste (nenhum em produção): (1) fixture `seed` travava em 100% dos testes — trigger `perfis_self_so_avatar` (0033) bloqueava a promoção de role/departamento do seed por rodar sem claims de RLS; fix desliga o trigger só nessa UPDATE, dentro da mesma transação nunca comitada; (2) o único teste que esperava um erro de RLS (`test_ti_sem_flag_autoatendimento_nao_pode_se_autoatender`) derrubava a transação inteira no cleanup do `as_user()`; fix isola a operação num SAVEPOINT (`conn.transaction()` aninhado). 11/11 testes verdes no CI após os dois commits (`fc61f41`, `ba6991d`). |
 
 ## Definição de pronto (todos os itens)
 
