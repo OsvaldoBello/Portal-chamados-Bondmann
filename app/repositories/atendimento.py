@@ -8,6 +8,7 @@ partes do domínio: cada método abre uma transação curta via
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 
 from app.db import rls_connection
@@ -59,7 +60,7 @@ class AtendimentoRepo:
         descricao: str,
         prioridade: str,
         setor: str,
-        data_entrega: "date | None" = None,
+        data_entrega: date | None = None,
         volume: int = 1,
         origem_demanda: str = "Solicitação",
         sem_prazo: bool = False,

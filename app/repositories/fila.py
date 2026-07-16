@@ -7,6 +7,7 @@ partes do domínio: cada método abre uma transação curta via
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from app.db import rls_connection
@@ -52,8 +53,8 @@ class FilaRepo:
         prioridade: str | None = None,
         operador_id: str | None = None,
         setor: str | None = None,
-        data_de: "date | None" = None,
-        data_ate: "date | None" = None,
+        data_de: date | None = None,
+        data_ate: date | None = None,
         limite: int = 200,
     ) -> list[dict[str, Any]]:
         """Fila/Kanban (a atender): chamados do MEU setor abertos por alguém que

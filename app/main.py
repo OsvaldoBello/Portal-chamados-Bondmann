@@ -13,11 +13,11 @@ from pathlib import Path
 
 import sentry_sdk
 from fastapi import FastAPI, HTTPException, Request, status
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.auth.routes import register_auth_routes
 from app.auth.session import SessionRefreshMiddleware
@@ -26,17 +26,17 @@ from app.config import get_settings
 from app.db import close_pool, init_pool
 from app.observability import RequestContextMiddleware, configure_logging, configure_sentry
 from app.ratelimit import limiter
-from app.routes.health import router as health_router
 from app.routes.admin import register_admin_routes
 from app.routes.common import register_common_routes
+from app.routes.health import router as health_router
 from app.routes.perfil import register_perfil_routes
 from app.routes.portal import register_portal_routes
 from app.routes.whatsapp import register_whatsapp_routes
 from app.routes.workspace import register_workspace_routes
 from app.security.csrf import init_csrf
-from app.storage import close_storage, init_storage
 from app.security.headers import SecurityHeadersMiddleware
 from app.security.jwt_verifier import init_verifier
+from app.storage import close_storage, init_storage
 
 log = logging.getLogger("app")
 

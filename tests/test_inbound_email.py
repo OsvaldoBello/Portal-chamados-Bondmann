@@ -1,11 +1,11 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app.routes.common import extrair_resposta_email
-from app.notification import gerar_token_resposta, validar_token_resposta
 from app.config import Settings
+from app.main import app
+from app.notification import gerar_token_resposta, validar_token_resposta
+from app.routes.common import extrair_resposta_email
 
 _INBOUND_SECRET = "segredo-dedicado-de-teste-nao-e-session-secret"
 

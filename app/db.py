@@ -21,9 +21,10 @@ A ``service_role`` NUNCA é usada aqui para servir dados de usuário.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import Any, AsyncIterator
+from typing import Any
 
 import asyncpg
 
@@ -90,7 +91,7 @@ class _RLSHolder:
             self.conn = None
 
 
-_request_holder: ContextVar["_RLSHolder | None"] = ContextVar("_request_holder", default=None)
+_request_holder: ContextVar[_RLSHolder | None] = ContextVar("_request_holder", default=None)
 
 
 async def init_pool(settings: Settings) -> asyncpg.Pool:

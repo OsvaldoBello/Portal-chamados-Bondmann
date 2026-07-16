@@ -126,7 +126,7 @@ class Settings(BaseSettings):
         return self.environment.lower() == "production"
 
     @model_validator(mode="after")
-    def _fail_fast_segredos_default_em_producao(self) -> "Settings":
+    def _fail_fast_segredos_default_em_producao(self) -> Settings:
         """Sprint 0 / item 0.2 (auditoria 2026-07-14): impossível subir produção
         com SESSION_SECRET/CSRF_SECRET no valor default de desenvolvimento —
         aborta o boot em vez de servir sessões/CSRF assinados com um segredo

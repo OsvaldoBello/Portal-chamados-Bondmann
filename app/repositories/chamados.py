@@ -22,6 +22,7 @@ nenhum caller precisa mudar.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from app.db import rls_connection
@@ -225,8 +226,8 @@ class ChamadosRepo:
         prioridade: str | None = None,
         operador_id: str | None = None,
         setor: str | None = None,
-        data_de: "date | None" = None,
-        data_ate: "date | None" = None,
+        data_de: date | None = None,
+        data_ate: date | None = None,
         limite: int = 200,
     ) -> list[dict[str, Any]]:
         return await self._fila.fila(
@@ -297,7 +298,7 @@ class ChamadosRepo:
         descricao: str,
         prioridade: str,
         setor: str,
-        data_entrega: "date | None" = None,
+        data_entrega: date | None = None,
         volume: int = 1,
         origem_demanda: str = "Solicitação",
         sem_prazo: bool = False,

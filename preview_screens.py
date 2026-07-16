@@ -12,7 +12,7 @@ Arquivo descartável — pode apagar quando terminar o acabamento visual.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -24,7 +24,7 @@ from app.templating import templates
 
 _ENV = templates.env
 _STATIC = Path(__file__).parent / "app" / "static"
-_NOW = datetime.now(timezone.utc)
+_NOW = datetime.now(UTC)
 
 STATUS_VALIDOS = ["NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO"]
 PRIORIDADES = ["BAIXA", "MEDIA", "ALTA", "URGENTE"]

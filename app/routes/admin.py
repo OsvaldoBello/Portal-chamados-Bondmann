@@ -23,7 +23,7 @@ from __future__ import annotations
 import csv
 import io
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
@@ -248,7 +248,7 @@ async def job_sincronizar_feriados(
 
     from app.domain.feriados import feriados_nacionais, proximos_anos
 
-    anos = proximos_anos(datetime.now().year)
+    anos = proximos_anos(datetime.now(UTC).year)
     novos = await repo.sincronizar_feriados(ctx.user.claims, feriados_nacionais(anos))
     return RedirectResponse(f"/admin/gestao?feriados_ok={novos}", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -717,7 +717,7 @@ async def export_csv(
                 for k, v in r.items()
             }
         )
-    nome = f"chamados_{datetime.utcnow():%Y%m%d}.csv"
+    nome = f"chamados_{datetime.now(UTC):%Y%m%d}.csv"
     # BOM UTF-8: sem ele o Excel (padrão pt-BR) lê acentos como lixo (mojibake).
     # ";" como delimitador é o padrão de CSV que o Excel pt-BR abre já separado
     # em colunas (o separador decimal "," do locale conflita com "," de campo).

@@ -7,13 +7,12 @@ isolamento multi-tenant e é resolvido a partir do banco sob RLS.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import logging
+from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, status
 
-from app.auth.session import ACCESS_COOKIE, REFRESH_COOKIE, SessionTokens, set_session
+from app.auth.session import ACCESS_COOKIE, REFRESH_COOKIE, SessionTokens
 from app.db import rls_connection
 from app.security.jwt_verifier import TokenInvalido, get_verifier
 

@@ -9,7 +9,7 @@ contra o Supabase local (Seção 4.2).
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -86,7 +86,7 @@ class FakeRepo:
             {
                 "id": "aaa", "codigo": "BOND-2026-00001", "titulo": "Vazamento na linha 3",
                 "status": "NOVO", "prioridade": "ALTA",
-                "created_at": datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc),
+                "created_at": datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
                 "limite_resolucao": None, "avaliacao_nota": None, "categoria": "Logística / Entrega",
             }
         ]
@@ -126,14 +126,14 @@ class FakeRepo:
         self.avaliacoes.append({"nota": nota, "comentario": comentario})
         return {
             "id": chamado_id, "avaliacao_nota": nota, "avaliacao_comentario": comentario,
-            "avaliacao_em": datetime(2026, 6, 30, 15, 0, tzinfo=timezone.utc),
+            "avaliacao_em": datetime(2026, 6, 30, 15, 0, tzinfo=UTC),
         }
 
     async def adicionar_mensagem(self, claims, chamado_id, *, remetente_id, conteudo, anexos=None):
         self.mensagens_criadas.append(
             {"chamado_id": chamado_id, "conteudo": conteudo, "anexos": anexos or []}
         )
-        return {"id": "m1", "created_at": datetime.now(timezone.utc)}
+        return {"id": "m1", "created_at": datetime.now(UTC)}
 
     async def usuarios_para_copia(self, claims, *, excluir_id=None):
         return [{"id": "u9", "nome": "Zeca Financeiro", "departamento": "Financeiro"}]
@@ -154,7 +154,7 @@ def _chamado(status="RESOLVIDO", cliente_id=UID, **extra):
         "descricao": "Detalhes...", "status": status, "prioridade": "ALTA",
         "cliente_id": cliente_id, "categoria": "Logística / Entrega",
         "cliente_nome": "Cliente Teste",
-        "created_at": datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
         "limite_resposta": None, "limite_resolucao": None, "resolvido_em": None,
         "avaliacao_nota": None, "avaliacao_comentario": None, "avaliacao_em": None,
     }
@@ -511,7 +511,7 @@ def test_dashboard_mostra_chamados_do_departamento_para_lider_admin():
         chamados_colegas=[{
             "id": "c9", "codigo": "BOND-2026-00009", "titulo": "Solicitação de férias",
             "status": "NOVO", "prioridade": "MEDIA", "departamento": "RH",
-            "created_at": datetime(2026, 7, 9, 10, 0, tzinfo=timezone.utc),
+            "created_at": datetime(2026, 7, 9, 10, 0, tzinfo=UTC),
             "limite_resolucao": None, "respondido_em": None, "resolvido_em": None,
             "cliente_nome": "Giordano Burtet", "cliente_avatar_path": None,
             "cliente_avatar_atualizado_em": None, "operador_nome": None,
@@ -558,7 +558,7 @@ def test_avaliacao_oculta_quando_nao_resolvido():
 def test_avaliacao_ja_registrada_e_somente_leitura():
     chamado = _chamado(
         status="RESOLVIDO", avaliacao_nota=5, avaliacao_comentario="Excelente",
-        avaliacao_em=datetime(2026, 6, 30, 15, 0, tzinfo=timezone.utc),
+        avaliacao_em=datetime(2026, 6, 30, 15, 0, tzinfo=UTC),
     )
     repo = FakeRepo(chamado=chamado)
     with portal_client(repo) as client:

@@ -21,7 +21,7 @@ from app.config import Settings
 
 log = logging.getLogger("app.storage")
 
-_storage: "AnexosStorage | None" = None
+_storage: AnexosStorage | None = None
 
 
 class StorageError(RuntimeError):
@@ -106,7 +106,7 @@ def get_storage() -> AnexosStorage:
     return _storage
 
 
-async def ensure_storage() -> "AnexosStorage | None":
+async def ensure_storage() -> AnexosStorage | None:
     """Garante o storage mesmo sem lifespan (serverless). Retorna None se o
     Supabase não estiver configurado (uploads/anexos degradam graciosamente)."""
     if _storage is None:

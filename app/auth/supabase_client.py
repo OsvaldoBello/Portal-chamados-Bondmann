@@ -6,9 +6,8 @@ anon key. Dados de domínio NÃO passam por aqui (vão por asyncpg, ver db.py).
 
 from __future__ import annotations
 
-from supabase import AsyncClient, acreate_client
-
 from app.config import Settings
+from supabase import AsyncClient, acreate_client
 
 _client: AsyncClient | None = None
 _admin_client: AsyncClient | None = None

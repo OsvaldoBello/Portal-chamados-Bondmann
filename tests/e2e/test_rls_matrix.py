@@ -12,8 +12,6 @@ verde com o comportamento real do banco divergente (caso 0028/chamados_departame
 
 from __future__ import annotations
 
-import uuid
-
 import asyncpg
 import pytest
 

@@ -14,8 +14,7 @@ em UTC (timezone-aware). A fração é sobre a janela `created_at → limite_res
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 # Status em que o trigger sla_pausa_aguardando (migrations 0017/0044) congela o
 # prazo: `limite_resolucao` só é corrigido (empurrado pra frente) quando o
@@ -63,13 +62,13 @@ def humanizar_delta(segundos: int) -> str:
 
 
 def estado_sla(
-    created_at: Optional[datetime],
-    limite_resolucao: Optional[datetime],
-    resolvido_em: Optional[datetime] = None,
-    agora: Optional[datetime] = None,
-    status: Optional[str] = None,
+    created_at: datetime | None,
+    limite_resolucao: datetime | None,
+    resolvido_em: datetime | None = None,
+    agora: datetime | None = None,
+    status: str | None = None,
 ) -> EstadoSLA:
-    agora = agora or datetime.now(timezone.utc)
+    agora = agora or datetime.now(UTC)
 
     if resolvido_em is not None:
         return EstadoSLA("resolvido", "Resolvido", False)
@@ -93,18 +92,18 @@ def estado_sla(
 
 
 def barra_sla(
-    created_at: Optional[datetime],
-    limite_resolucao: Optional[datetime],
-    resolvido_em: Optional[datetime] = None,
-    agora: Optional[datetime] = None,
-    status: Optional[str] = None,
+    created_at: datetime | None,
+    limite_resolucao: datetime | None,
+    resolvido_em: datetime | None = None,
+    agora: datetime | None = None,
+    status: str | None = None,
 ) -> BarraSLA:
     """Barra de progresso do prazo de resolução (verde→amarelo na metade→vermelho).
 
     ``pct`` é a fração já decorrida (0–100); a cor vem da fração **restante**:
     verde enquanto sobra > 50%, amarelo entre 10% e 50%, vermelho abaixo de 10%
     ou vencido (piscando)."""
-    agora = agora or datetime.now(timezone.utc)
+    agora = agora or datetime.now(UTC)
 
     if resolvido_em is not None:
         return BarraSLA("resolvido", 100, "Resolvido", False)

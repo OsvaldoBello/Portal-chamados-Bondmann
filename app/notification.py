@@ -1,14 +1,16 @@
 import asyncio
+import hashlib
+import hmac
 import logging
 import smtplib
-import hmac
-import hashlib
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 import httpx
 from fastapi import BackgroundTasks
-from app.config import get_settings
+
 from app.auth.supabase_client import ensure_admin_client
+from app.config import get_settings
 
 log = logging.getLogger("app.notification")
 

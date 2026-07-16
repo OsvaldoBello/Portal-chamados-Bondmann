@@ -728,6 +728,81 @@
 
 ---
 
+## Sprint 3 — Endurecimento de CI, pendências de gestor e MFA (P1/P2)
+
+> Três melhorias entregues como PRs pequenos, separados e verificáveis, na ordem
+> **3.1 → 3.2 → 3.3**: primeiro endurecer o gate de CI (a qualidade dos PRs
+> seguintes se beneficia), depois destravar as pendências que só o gestor executa,
+> por fim o MFA de ADMIN (Fase 1 do faseamento registrado na Seção 3.4.1 do plano
+> mestre pelo item 2.8/B6).
+
+### 3.1 · Endurecer o gate de CI (cobertura + ruff + mypy) 🟡 ✅ **Concluído 2026-07-16**
+- [x] **Cobertura:** `pytest-cov` adicionado a `requirements-dev.txt`; cobertura
+      **medida** (71.57%) e floor fixado ~2 pontos abaixo (`fail_under = 69` em
+      `[tool.coverage.report]`) — adoção gradual, nunca um número aspiracional que
+      quebre o build no dia 1. O job `pytest` do CI passa a rodar com `--cov=app` e
+      reprova se a cobertura cair abaixo do piso.
+- [x] **ruff:** `select` alargado de `["E9","F"]` (com `F401`/`F821` ignorados) para
+      `["E9","F","I","UP","DTZ"]` **sem nenhum ignore**. Todas as ~65 violações
+      resultantes corrigidas no mesmo PR (a suíte e `ruff check .` ficam verdes);
+      nenhum `per-file-ignore` foi preciso.
+- [x] **mypy:** adicionado ao dev + job de CI em modo **gradual** — cobre só
+      `app/security/`, `app/db.py`, `app/config.py`, `app/auth/` (`[tool.mypy] files`),
+      sem `--strict` e sem a árvore inteira; `follow_imports = "silent"` para não
+      poluir o gate com dívida de módulos ainda não cobertos. Intenção de alargar
+      documentada no `pyproject.toml` (mesmo comentário-padrão do ruff).
+- [x] **`.github/workflows/ci.yml`:** o floor de cobertura virou step do job `pytest`
+      (um só run faz teste + gate); o mypy virou job próprio.
+- **Aceite:** CI verde com os novos gates ativos; nenhum gate aspiracional-que-já-falha;
+  o PR não virou reformatação de arquivos fora do escopo (só lint/tipos/datetimes).
+- **Notas de execução:**
+  - **Cobertura medida:** `71.57%` (2062/2881 linhas do pacote `app`, suíte completa
+    exceto `tests/e2e`, que é pulada sem `RLS_DATABASE_URL` — mesma condição do job
+    `pytest` do CI). Floor `69` dá ~2.5 pontos de folga contra variação entre
+    ambientes (Windows local × ubuntu do CI). Confirmado que o `pytest-cov` lê o
+    `fail_under` do `pyproject.toml` (rodar um subconjunto pequeno reprova com
+    "Required test coverage of 69.0% not reached", exit 1).
+  - **ruff — o que as ~65 violações eram:** 18 `UP017` (`timezone.utc` → `UTC`), 12
+    `I001` (imports fora de ordem), 10 `UP007` (`Optional[X]`/`Union` → `X | None`),
+    10 `UP037` (anotações entre aspas), 6 `F821`, 5 `F401` (imports não usados), mais
+    `UP035`/`UP031`/`DTZ003`/`DTZ005` (1 cada). A grande maioria foi `ruff check --fix`
+    (fixes seguros); 4 pontos exigiram cuidado manual:
+    - **`F821`/`UP037` (`"date | None"`):** os 3 repositórios (`atendimento.py`,
+      `fila.py`, `chamados.py`) anotavam `data_entrega`/`data_de`/`data_ate` como
+      `"date | None"` **entre aspas** sem importar `date` — a aspa era load-bearing
+      (evitava `NameError`). Adicionado `from datetime import date` a cada um antes de
+      deixar o `--fix` desaspar; F821 (nome não definido, latente) fechado de vez.
+    - **`DTZ003`/`DTZ005` (`app/routes/admin.py`):** `datetime.utcnow()` (nome do CSV
+      de export) e `datetime.now().year` (ano dos feriados) trocados por
+      `datetime.now(UTC)` — tz-aware, **preserva exatamente o comportamento atual**
+      (UTC), mesmo idioma já usado em `app/domain/sla_visual.py`. Era a dívida real
+      apontada no próprio texto do item.
+    - **`UP031` (`app/routes/workspace.py`):** o `'W/"%s"' % ...` do ETag (fix "unsafe"
+      do ruff) reescrito à mão para f-string equivalente.
+    - `combine-as-imports = true` no `[tool.ruff.lint.isort]` para não quebrar os
+      re-exports aliased de `app.anexos` em `portal.py` num bloco por alias.
+  - **mypy — 1 erro real corrigido:** `app/security/csrf.py::get_or_issue` retornava
+    `existing` (`str | None`) numa função `-> str`; mypy não estreitava através de
+    `_unsign()`. Guard explícito `existing is not None` (comportamento idêntico —
+    `_unsign(None)` já retornava `None`). Os demais achados de `follow_imports` estavam
+    em módulos fora do alvo (`app/domain`, `app/avatar_storage`), silenciados pelo
+    `follow_imports = "silent"`. `warn_unused_ignores` deixado **de fora** desta 1ª
+    adoção (flag estrita que forçaria mexer em `# type: ignore` pré-existentes não
+    relacionados a tipo) — documentado que flags strict-* entram depois.
+  - **Escopo:** 30 arquivos tocados, +187/-95, quase tudo lint automático (imports,
+    anotações modernas, `UTC`). Nenhum template/JS mudou ⇒ `npm run build:css` sem
+    diff. `datetime` só ficou tz-aware onde já devia estar; nenhuma regra de negócio
+    alterada.
+  - **Suíte:** `263 passed, 11 skipped` (os 11 são o e2e RLS, sem Docker neste
+    ambiente), `ruff check .` limpo, `mypy` sem erros nos módulos cobertos,
+    `build:css` sem diff.
+
+### 3.2 · Fechar pendências de gestor (branch protection + política de senha) 🟢 ⏳ **A executar**
+
+### 3.3 · MFA (TOTP) com enforcement para ADMIN 🔴 ⏳ **A executar** (Fase 1 da Seção 3.4.1)
+
+---
+
 ## Dependências entre itens
 
 ```
@@ -763,6 +838,7 @@
 | 2026-07-16 | 0.1 (A1) — fecha a pendência do `rls_auto_enable()` | `supabase/migrations/0046_document_rls_auto_enable_trigger.sql`, `docs/adr/0001-rls-via-set-local-claims.md` | Investigação via MCP do Supabase (introspecção de `pg_proc`/`pg_event_trigger` em produção): o mecanismo é o event trigger `ensure_rls` (ON `ddl_command_end`) + função `rls_auto_enable()`, que habilita RLS automaticamente em toda tabela nova de `public` — nunca esteve em nenhuma migration (mesmo drift que causou a perda da 0015/RLS da `marketing_midia_regional`). Migration `0046` formaliza função + event trigger (idempotente); validada com `BEGIN`/`ROLLBACK` direto contra produção (sem erro, nenhuma mudança persistida — o mecanismo já existe lá). ADR-0001 ganhou um bullet documentando a rede de segurança complementar. |
 | 2026-07-16 | 2.6 (Observabilidade) | `app/metrics.py` (novo), `app/observability.py`, `app/main.py`, `app/db.py`, `app/routes/health.py`, `requirements.txt`, `.env.example`, `app/config.py`, `tests/test_metrics.py` (novo), `tests/test_health.py` | Sentry opcional (`SENTRY_DSN` vazia = desligado) captura exceção não tratada em `_unhandled_exception_handler` com tag `request_id` via `Scope()` isolado por chamada (sem vazar entre requests concorrentes). Novo `GET /metrics` (mesmo gate de token de `/health/ready`): status/5xx totais, p95 de latência por rota, taxa de 304 do polling da fila, saturação do pool asyncpg. Uptime check externo fica pendente — decisão/ação do gestor (assinatura de serviço terceiro), recomendação registrada na nota de execução do item. Suíte verde, `ruff` limpo. |
 | 2026-07-16 | 2.8 (B6) | `app/security/password_policy.py` (novo), `app/auth/routes.py`, `app/routes/admin.py`, `supabase/config.toml`, plano mestre (Seção 3.4.1, Estado) | Hashing confirmado como delegado ao GoTrue (nada a mudar em código). Política de senha: mínimo 8 caracteres sem exigência de composição (NIST 800-63B), consolidado em `SENHA_MIN_CHARS` (fonte única — antes duplicado em `auth/routes.py`/`routes/admin.py`); `supabase/config.toml` local alinhado. Ajuste equivalente no painel do projeto Supabase hospedado (hoje default 6) fica como `[AÇÃO DO GESTOR PENDENTE]` (sem Management API via MCP). MFA avaliado (não implementado): faseamento TOTP opcional pro staff (Sprint 3) → obrigatório pro ADMIN (Sprint 4), registrado na Seção 3.4.1. Suíte verde, `ruff` limpo. |
+| 2026-07-16 | 3.1 (CI) | `pyproject.toml`, `requirements-dev.txt`, `.github/workflows/ci.yml`, `app/routes/admin.py`, `app/routes/workspace.py`, `app/security/csrf.py`, `app/repositories/{atendimento,fila,chamados}.py` + ~20 arquivos de lint automático | Gate de CI endurecido em adoção gradual. **Cobertura:** `pytest-cov`, medida em **71.57%**, floor `fail_under = 69` (~2 pts abaixo) no job `pytest`. **ruff:** `select` alargado p/ `["E9","F","I","UP","DTZ"]` sem ignore; ~65 violações corrigidas no mesmo PR (F821/UP037 `"date | None"` → import `date` + desaspar; DTZ `utcnow()`/`now()` → `now(UTC)` preservando comportamento; UP031 ETag → f-string). **mypy:** gradual, só `app/security`/`db.py`/`config.py`/`auth` (sem `--strict`, `follow_imports=silent`), job próprio; 1 erro real corrigido (`csrf.get_or_issue` narrowing). Nenhum template/JS tocado ⇒ `build:css` sem diff. `263 passed, 11 skipped`; `ruff check .` e `mypy` verdes. |
 
 ## Definição de pronto (todos os itens)
 

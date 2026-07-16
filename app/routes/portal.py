@@ -11,9 +11,26 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status, BackgroundTasks
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import RedirectResponse
 
+from app.anexos import (
+    access_token as _access_token,
+    assinar_anexos as _assinar_anexos,
+    enviar_uploads as _enviar_uploads,
+    processar_uploads as _processar_uploads,
+    validar_uploads as _validar_uploads,
+)
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.config import get_settings
 from app.db import rls_request_scope
@@ -23,13 +40,6 @@ from app.repositories.chamados import (
     ChamadosRepo,
     get_chamados_repo,
     validar_nota,
-)
-from app.anexos import (
-    access_token as _access_token,
-    assinar_anexos as _assinar_anexos,
-    enviar_uploads as _enviar_uploads,
-    processar_uploads as _processar_uploads,
-    validar_uploads as _validar_uploads,
 )
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido

@@ -12,7 +12,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status, BackgroundTasks
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app.anexos import assinar_anexos, processar_uploads
@@ -248,7 +258,7 @@ async def fila_fragmento(
     # último poll, responde 304 sem buscar todas as linhas nem re-renderizar. Os
     # filtros entram na chave do ETag (via querystring) para não colidir entre si.
     n, mx = await repo.fila_assinatura(ctx.user.claims, departamento_id=dep_id, status=f["status"])
-    etag = 'W/"%s"' % sha256(f"{_filtros_qs(f)}:{n}:{mx}".encode()).hexdigest()[:16]
+    etag = f'W/"{sha256(f"{_filtros_qs(f)}:{n}:{mx}".encode()).hexdigest()[:16]}"'
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304)  # 304 Not Modified
     chamados = await _buscar_fila(repo, ctx.user.claims, dep_id, f)

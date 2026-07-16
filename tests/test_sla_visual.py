@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.domain.sla_visual import barra_sla, estado_sla, humanizar_delta
 
-BASE = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
 
 
 def test_humanizar_delta():

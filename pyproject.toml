@@ -25,9 +25,53 @@ target-version = "py312"
 extend-exclude = ["prototipos"]
 
 [tool.ruff.lint]
-# Config mínima para o gate de CI (Sprint 0 / item 0.4): só sintaxe real (E9) e
-# pyflakes (F), ignorando as categorias já violadas hoje no código existente
-# (imports não usados, anotação de tipo com nome não importado) para não forçar
-# reformatação fora do escopo desta migration — alargar aos poucos depois.
-select = ["E9", "F"]
-ignore = ["F401", "F821"]
+# Gate de CI, adoção incremental (Sprint 0 / item 0.4 → Sprint 3 / item 3.1).
+# O select começou mínimo (só `E9` sintaxe real + `F` pyflakes, com `F401`/`F821`
+# ignorados) e foi alargado no item 3.1: agora sem nenhum ignore (F401 imports
+# não usados e F821 nomes não definidos passam a falhar) + `I` (ordenação de
+# imports), `UP` (pyupgrade — idiomas de Python moderno) e `DTZ` (datetimes
+# ingênuos, sem timezone — dívida real de fuso). Todas as violações resultantes
+# foram corrigidas neste mesmo item; nenhum gate é aspiracional-que-já-falha.
+# Alargar depois (candidatos: `B` bugbear, `SIM` simplify, `RUF`) segue o mesmo
+# espírito — medir, corrigir no mesmo PR, então ligar.
+select = ["E9", "F", "I", "UP", "DTZ"]
+
+[tool.ruff.lint.isort]
+# Mantém `from x import (a as _a, b as _b)` num único bloco (em vez de uma
+# declaração por alias) — preserva o agrupamento original de imports aliased,
+# ex.: os re-exports de `app.anexos` em `app/routes/portal.py`.
+combine-as-imports = true
+
+[tool.coverage.run]
+# Cobertura de testes — gate de CI (Sprint 3 / item 3.1). Mede o pacote da
+# aplicação; a suíte e2e (Docker) fica de fora do número base porque é pulada
+# sem RLS_DATABASE_URL (mesma condição do job `pytest` do ci.yml).
+source = ["app"]
+omit = ["app/__main__.py"]
+
+[tool.coverage.report]
+# Floor de cobertura — adoção gradual (item 3.1). Medido em 71.57% no PR que
+# introduziu o gate; floor fixado ~2 pontos abaixo (69%) para não quebrar o
+# build por variação pequena entre ambientes (Windows local × ubuntu do CI).
+# Regra do plano: subir junto com a cobertura real, NUNCA como número
+# aspiracional que já falha no dia 1.
+fail_under = 69
+show_missing = true
+
+[tool.mypy]
+# Type-checking gradual — gate de CI (Sprint 3 / item 3.1). Cobre SÓ os módulos
+# onde correção de tipo mais importa (segurança, verificação de JWT, acesso a
+# banco, config e auth) — não a árvore inteira e explicitamente SEM `--strict`.
+# `follow_imports = "silent"` analisa os imports desses módulos para inferir
+# tipos, mas só REPORTA erros nos arquivos abaixo (não polui o gate com dívida
+# de módulos ainda não cobertos, ex.: app/domain, app/avatar_storage).
+# Alargar depois (adicionar módulos a `files`, então ligar flags strict-* aos
+# poucos) segue o mesmo espírito incremental do `ruff.lint.select`.
+python_version = "3.12"
+files = ["app/security", "app/db.py", "app/config.py", "app/auth"]
+follow_imports = "silent"
+ignore_missing_imports = true  # supabase/asyncpg/jwt/pydantic sem stubs publicados
+warn_redundant_casts = true
+# Flags strict-* (disallow_untyped_defs, warn_unused_ignores, etc.) ficam de fora
+# desta 1ª adoção — a checagem default já pega os erros que importam (return-value,
+# arg-type, narrowing None). Ligar aos poucos junto com a ampliação de `files`.

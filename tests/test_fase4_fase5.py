@@ -7,7 +7,7 @@ Fase 5: fluxo de redefinição de senha (validação) e páginas de erro 403/404
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -27,7 +27,7 @@ def _user(role="CLIENTE"):
 
 class FakeNotif:
     async def notificacoes(self, claims, *, limite=6):
-        agora = datetime.now(timezone.utc)
+        agora = datetime.now(UTC)
         return [
             {"id": "a1", "codigo": "BOND-2026-00042", "titulo": "Impressora travando",
              "status": "NOVO", "created_at": agora - timedelta(hours=1),

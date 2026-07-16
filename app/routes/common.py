@@ -17,7 +17,7 @@ import logging
 import re
 from email.utils import parseaddr
 
-from fastapi import APIRouter, Depends, Request, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse
 
 from app.anexos import MAX_ANEXOS
@@ -207,7 +207,7 @@ async def inbound_email(
     de e-mail).
     """
     from app.db import admin_connection
-    from app.notification import validar_token_resposta, notificar_nova_mensagem_email
+    from app.notification import validar_token_resposta
 
     settings = get_settings()
     if not settings.inbound_email_secret:

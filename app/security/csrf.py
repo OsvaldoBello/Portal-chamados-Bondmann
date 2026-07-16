@@ -37,7 +37,7 @@ class CSRFProtect:
         fazia o token do formulário visível divergir do cookie (ex.: página
         restaurada do cache), causando 'CSRF inválido ou ausente' ao submeter."""
         existing = request.cookies.get(CSRF_COOKIE)
-        if self._unsign(existing):
+        if existing is not None and self._unsign(existing):
             return existing
         return self.issue()
 

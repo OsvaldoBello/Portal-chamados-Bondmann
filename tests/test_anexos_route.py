@@ -7,9 +7,8 @@ uploads e devolve signed URLs determinísticas (sem rede/Supabase).
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-import pytest
 from fastapi.testclient import TestClient
 
 import app.storage as storage_mod
@@ -42,7 +41,7 @@ class FakeRepo:
             "id": chamado_id, "codigo": "BOND-2026-00001", "titulo": "T", "descricao": "D",
             "status": "EM_ATENDIMENTO", "prioridade": "ALTA", "cliente_id": UID,
             "categoria": "Suporte", "cliente_nome": "Cliente",
-            "created_at": datetime(2026, 6, 30, tzinfo=timezone.utc),
+            "created_at": datetime(2026, 6, 30, tzinfo=UTC),
             "limite_resposta": None, "limite_resolucao": None, "resolvido_em": None,
             "avaliacao_nota": None, "avaliacao_comentario": None, "avaliacao_em": None,
         }
@@ -60,11 +59,11 @@ class FakeRepo:
         self._msgs.append(
             {
                 "id": "m1", "conteudo": conteudo, "is_interna": False,
-                "created_at": datetime.now(timezone.utc), "anexos": anexos or [],
+                "created_at": datetime.now(UTC), "anexos": anexos or [],
                 "remetente_nome": "Cliente", "remetente_role": "CLIENTE",
             }
         )
-        return {"id": "m1", "created_at": datetime.now(timezone.utc)}
+        return {"id": "m1", "created_at": datetime.now(UTC)}
 
 
 class FakeStorage:

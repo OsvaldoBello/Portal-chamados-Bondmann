@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -12,7 +12,7 @@ from app.main import app
 from app.repositories.chamados import get_chamados_repo
 
 OP = "99999999-9999-9999-9999-999999999999"
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 def _operador() -> CurrentUser:

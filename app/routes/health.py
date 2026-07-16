@@ -20,8 +20,7 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from app import __version__
-from app import metrics
+from app import __version__, metrics
 from app.config import get_settings
 from app.db import _ensure_pool, pool_stats
 

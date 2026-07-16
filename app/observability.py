@@ -13,8 +13,7 @@ import sentry_sdk
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app import __version__
-from app import metrics
+from app import __version__, metrics
 from app.config import Settings
 
 REQUEST_ID_HEADER = "X-Request-ID"

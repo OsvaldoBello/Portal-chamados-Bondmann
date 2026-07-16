@@ -7,7 +7,7 @@ on:
 
 jobs:
   pytest:
-    name: Suíte pytest
+    name: Suíte pytest + cobertura
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,8 +19,11 @@ jobs:
       - name: Instalar dependências (runtime + dev)
         run: pip install -r requirements-dev.txt
 
-      - name: Rodar suíte pytest completa
-        run: python -m pytest
+      # Item 3.1: a suíte completa também mede cobertura; o floor
+      # (`[tool.coverage.report] fail_under` no pyproject.toml) reprova o job se
+      # a cobertura cair abaixo do piso — um só run faz teste + gate de cobertura.
+      - name: Rodar suíte pytest completa (com floor de cobertura)
+        run: python -m pytest --cov=app --cov-report=term-missing
 
   build-css:
     name: Build Tailwind
@@ -67,3 +70,22 @@ jobs:
 
       - name: ruff check
         run: python -m ruff check .
+
+  mypy:
+    name: Type-check (mypy, gradual)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências (runtime + dev)
+        run: pip install -r requirements-dev.txt
+
+      # Item 3.1: type-check gradual — só os módulos em `[tool.mypy] files`
+      # (segurança/auth/config/db), sem --strict. Alvo e escopo vivem no
+      # pyproject.toml; aqui o job só invoca `mypy` (sem args = usa a config).
+      - name: mypy (módulos cobertos)
+        run: python -m mypy

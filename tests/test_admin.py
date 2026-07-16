@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from fastapi.testclient import TestClient
 
@@ -66,7 +66,7 @@ class FakeAdmin:
     async def avaliacoes_recentes(self, claims, *, limite=8, departamento_id=None, todos_setores=False):
         return [{"codigo": "BOND-2026-00001", "titulo": "Impressora", "nota": 5,
                  "comentario": "Ótimo atendimento", "solicitante": "Ana",
-                 "em": datetime(2026, 7, 1, tzinfo=timezone.utc)}]
+                 "em": datetime(2026, 7, 1, tzinfo=UTC)}]
 
     async def departamentos(self, claims):
         # d2 = setor que só ABRE chamado (sem fila) — testa o líder sem atendimento (0028).
@@ -182,9 +182,9 @@ class FakeAdmin:
                  "status": "RESOLVIDO", "prioridade": "ALTA", "departamento": "TI",
                  "categoria": "Suporte", "subcategoria": "Hardware",
                  "solicitante": "Ana", "operador": "Op TI",
-                 "created_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
+                 "created_at": datetime(2026, 7, 1, tzinfo=UTC),
                  "limite_resolucao": None, "respondido_em": None, "resolvido_em": None,
-                 "avaliacao_nota": 5, "avaliacao_em": datetime(2026, 7, 2, tzinfo=timezone.utc),
+                 "avaliacao_nota": 5, "avaliacao_em": datetime(2026, 7, 2, tzinfo=UTC),
                  "avaliacao_comentario": "Resolveu rápido, obrigado"}]
 
 
