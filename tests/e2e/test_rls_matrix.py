@@ -124,12 +124,19 @@ async def test_ti_sem_flag_autoatendimento_nao_pode_se_autoatender(
     """TI nunca ganhou `autoatendimento = true` (0042 só marcou Marketing/RH) — a
     regra geral de segregação de função (0029) continua valendo para o TI."""
     async with as_user(conn, seed.staff_ti):
+        # Qualquer erro do Postgres aborta a transação corrente (não só o statement);
+        # sem um SAVEPOINT, o próximo comando na mesma transação (aqui, o `RESET ROLE`
+        # do cleanup de `as_user`) falharia com `InFailedSQLTransactionError`, mascarando
+        # o sucesso deste teste. `conn.transaction()` aninhado dentro da transação do
+        # fixture `conn` vira SAVEPOINT automaticamente (padrão asyncpg) e absorve o erro
+        # esperado sem derrubar o resto da transação.
         with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
-            await conn.execute(
-                "UPDATE chamados SET operador_id = $1 WHERE id = $2",
-                seed.staff_ti,
-                seed.chamado_ti_sem_auto,
-            )
+            async with conn.transaction():
+                await conn.execute(
+                    "UPDATE chamados SET operador_id = $1 WHERE id = $2",
+                    seed.staff_ti,
+                    seed.chamado_ti_sem_auto,
+                )
 
 
 # ============================================================
