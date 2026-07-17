@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -85,6 +86,52 @@ def fmt_dt(value: datetime | None, fmt: str = "%d/%m/%Y %H:%M") -> str:
     return value.astimezone(_TZ).strftime(fmt)
 
 
+# Marcador de item de lista/tópico no início da linha: "-", "*", "•", "1.", "1)",
+# "a)" etc. Um parágrafo com pelo menos uma linha assim é tratado como lista.
+_MARCADOR_LISTA = re.compile(r"^\s*(?:[-*•‣·]|\d+[.)]|[a-zA-Z][.)])\s+")
+
+
+def paragrafos_mensagem(texto: str | None) -> list[str]:
+    """Quebra o texto de uma mensagem de chat em parágrafos de forma robusta.
+
+    O conteúdo vem de fontes com hábitos diferentes de quebra de linha (1 Enter,
+    vários Enters seguidos, colar de Word/WhatsApp com CRLF ou linhas "em branco"
+    só com espaço) — qualquer sequência de 1+ linhas vazias vira UM separador de
+    parágrafo.
+
+    Dentro de um parágrafo, texto corrido que veio "quebrado na mão" (colado de
+    um documento com largura fixa, uma linha por Enter) é rejuntado com espaço
+    para o navegador reformatar de acordo com a largura real do chat — em vez de
+    manter quebras que só faziam sentido na largura do documento original. Já um
+    parágrafo com marcador de lista/tópico preserva as quebras como estão,
+    porque cada linha é um item distinto (a renderização usa ``whitespace-pre-line``
+    por parágrafo, então quebras preservadas continuam aparecendo como tal).
+    """
+    if not texto:
+        return []
+    linhas = texto.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    blocos: list[str] = []
+    atual: list[str] = []
+
+    def _fechar_bloco() -> None:
+        if not atual:
+            return
+        limpas = [linha.strip() for linha in atual]
+        if any(_MARCADOR_LISTA.match(linha) for linha in atual):
+            blocos.append("\n".join(limpas).strip())
+        else:
+            blocos.append(" ".join(limpas).strip())
+        atual.clear()
+
+    for linha in linhas:
+        if linha.strip() == "":
+            _fechar_bloco()
+        else:
+            atual.append(linha)
+    _fechar_bloco()
+    return blocos
+
+
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 # Jinja2Templates já liga autoescape para .html; reforçado explicitamente.
 templates.env.autoescape = True
@@ -96,6 +143,7 @@ templates.env.globals.update(
     estado_sla=estado_sla,   # indicador visual de SLA (Fase 4)
     barra_sla=barra_sla,     # barra de progresso de SLA (Fase 3 do usuário)
     avatar_url=avatar_public_url,  # bolinha de avatar nos cards (Fase 7)
+    paragrafos_mensagem=paragrafos_mensagem,  # quebra de parágrafo consistente no chat
 )
 
 

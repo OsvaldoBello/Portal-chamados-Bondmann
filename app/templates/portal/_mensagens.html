@@ -13,7 +13,7 @@
       {{ (m.remetente_nome or "?")[:1] | upper }}
     </div>
     {% endif %}
-    <div class="min-w-0">
+    <div class="min-w-0 flex-1">
       <div class="text-xs text-muted">
         <span class="font-semibold text-navy">{{ m.remetente_nome or "Usuário" }}</span>
         · {{ fmt_dt(m.created_at) }}
@@ -22,10 +22,14 @@
         {% endif %}
       </div>
       {% if m.conteudo %}
-      <p class="text-sm text-ink whitespace-pre-line mt-0.5">{{ m.conteudo }}</p>
+      <div class="text-sm text-ink mt-0.5 space-y-2">
+        {% for paragrafo in paragrafos_mensagem(m.conteudo) %}
+        <p class="whitespace-pre-line">{{ paragrafo }}</p>
+        {% endfor %}
+      </div>
       {% endif %}
       {% if m.anexos %}
-      <ul class="mt-2 space-y-1">
+      <ul class="mt-2 flex flex-wrap gap-2">
         {% for a in m.anexos %}
         <li class="text-sm">
           {% if a.url and a.mime and a.mime.startswith('image/') %}
