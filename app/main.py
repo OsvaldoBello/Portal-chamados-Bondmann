@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.auth.dependencies import MfaChallengeRequired
 from app.auth.routes import register_auth_routes
 from app.auth.session import SessionRefreshMiddleware
 from app.auth.supabase_client import init_supabase
@@ -29,6 +30,7 @@ from app.ratelimit import limiter
 from app.routes.admin import register_admin_routes
 from app.routes.common import register_common_routes
 from app.routes.health import router as health_router
+from app.routes.mfa import register_mfa_routes
 from app.routes.perfil import register_perfil_routes
 from app.routes.portal import register_portal_routes
 from app.routes.whatsapp import register_whatsapp_routes
@@ -125,12 +127,16 @@ def create_app() -> FastAPI:
     register_common_routes(app)
     register_perfil_routes(app)
     register_whatsapp_routes(app)
+    register_mfa_routes(app, limiter)
 
     # Tratamento de erro centralizado (Seção 6.3): sem vazar stack/segredos.
     # Registra na base do Starlette para também capturar o 404 de rota inexistente
     # (o router levanta a HTTPException base, não a subclasse do FastAPI).
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(Exception, _unhandled_exception_handler)
+    # Item 3.3: ADMIN com MFA habilitado numa sessão aal1 → leva ao step-up em vez
+    # de devolver erro. Handler dedicado porque HTTPException não redireciona.
+    app.add_exception_handler(MfaChallengeRequired, _mfa_challenge_handler)
 
     # Favicon redirect
     @app.get("/favicon.ico", include_in_schema=False)
@@ -168,6 +174,20 @@ def _quer_html(request: Request) -> bool:
         and "text/html" in request.headers.get("accept", "")
         and not request.headers.get("HX-Request")
     )
+
+
+def _mfa_challenge_handler(request: Request, exc: MfaChallengeRequired):
+    """ADMIN com MFA habilitado numa sessão aal1 → fluxo de verificação (item 3.3).
+
+    Mesmo tratamento do 401 numa navegação: HTMX recebe ``HX-Redirect`` (o
+    fragmento não sabe navegar sozinho), o browser recebe 303. Nunca devolve o
+    conteúdo protegido — o step-up é obrigatório para quem optou pelo MFA.
+    """
+    if request.headers.get("HX-Request"):
+        resp = Response(status_code=204)
+        resp.headers["HX-Redirect"] = "/mfa/verify"
+        return resp
+    return RedirectResponse("/mfa/verify", status_code=status.HTTP_303_SEE_OTHER)
 
 
 def _http_exception_handler(request: Request, exc: HTTPException):

@@ -80,7 +80,11 @@ def register_auth_routes(app, limiter: Limiter) -> None:
             )
 
         role = _role_from_user(result.user)
-        response = RedirectResponse(home_for(role), status_code=status.HTTP_303_SEE_OTHER)
+        # MFA (item 3.3): a sessão recém-criada por senha é aal1. Quem já tem fator
+        # verificado vai direto ao step-up em vez da home — os fatores já vêm na
+        # resposta do login, então isso não custa nenhuma chamada extra ao GoTrue.
+        destino = "/mfa/verify" if _tem_fator_verificado(result.user) else home_for(role)
+        response = RedirectResponse(destino, status_code=status.HTTP_303_SEE_OTHER)
         set_session(
             response,
             SessionTokens(session.access_token, session.refresh_token),
@@ -226,3 +230,13 @@ def _role_from_user(user) -> str:
     meta = getattr(user, "app_metadata", None) or {}
     role = (meta.get("role") or "CLIENTE").upper()
     return role if role in {"ADMIN", "OPERADOR", "CLIENTE"} else "CLIENTE"
+
+
+def _tem_fator_verificado(user) -> bool:
+    """Se o usuário tem um fator MFA já ativado (item 3.3).
+
+    Lê os ``factors`` que o GoTrue devolve no próprio login — fator ``unverified``
+    (enroll começado e abandonado) não conta: só quem concluiu a ativação é levado
+    ao step-up."""
+    fatores = getattr(user, "factors", None) or []
+    return any(getattr(f, "status", None) == "verified" for f in fatores)

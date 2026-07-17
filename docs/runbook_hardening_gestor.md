@@ -183,10 +183,47 @@ de **6** caracteres, enquanto a aplicação e o `supabase/config.toml` local já
 
 ---
 
+## (c) Habilitar MFA/TOTP no Supabase hospedado
+
+**Objetivo:** o item 3.3 (Sprint 3) implementou o MFA por TOTP — telas de ativação
+(`/mfa`), step-up no login e exigência de `aal2` nas rotas do painel ADMIN. O
+GoTrue só aceita `enroll`/`verify` de fatores TOTP se o recurso estiver **ligado no
+projeto**; o `supabase/config.toml` (stack local) já está alinhado, o **hospedado**
+precisa do mesmo ajuste.
+
+> **Sem este passo:** `POST /mfa/enroll` responde **503** com a mensagem
+> "Não foi possível iniciar a ativação do MFA…". Nada quebra para quem não usa MFA
+> — ninguém é bloqueado (Fase 1 é *opcional com aviso*), apenas ninguém consegue
+> ativar.
+
+### Caminho pelo dashboard do Supabase
+
+1. <https://supabase.com/dashboard> → projeto de **produção** (`iurlzlhbnoemkzgexcfk`).
+2. **Authentication** → **Multi-Factor Authentication** (em algumas versões do
+   painel: **Sign In / Providers** → seção **Multi-Factor Authentication**).
+3. Habilitar **TOTP (Authenticator app)** — tanto *enroll* quanto *verify*.
+4. **Save**.
+
+### Verificar
+
+- Entrar no portal com uma conta `ADMIN` → acessar **`/mfa`** → **Ativar verificação
+  em duas etapas**: o QR code deve aparecer (se responder 503, o TOTP ainda não está
+  ligado).
+- Concluir a ativação com o código do autenticador; sair e entrar de novo: o login
+  deve levar direto à tela de verificação (step-up).
+
+> **Ordem sugerida:** faça (c) **antes** de anunciar o MFA ao time — e ative o seu
+> próprio ADMIN primeiro, para validar o fluxo ponta a ponta com o recovery
+> (reset por TI em **Contas de usuário → Resetar MFA**) já disponível como rede de
+> segurança.
+
+---
+
 ## Checklist rápido do gestor
 
 - [ ] (a) Branch protection em `claude/develop` — via UI **ou** `gh api` (escolher a
       variante de revisão conforme tamanho do time; ver ressalva do mantenedor solo).
 - [ ] (b) Supabase hospedado: **Minimum password length** 6 → 8.
-- [ ] Marcar os dois itens como feitos na tabela de progresso do
-      `plano_melhorias_auditoria.md` (linha 3.2).
+- [ ] (c) Supabase hospedado: habilitar **MFA/TOTP** (destrava a ativação do MFA — item 3.3).
+- [ ] Marcar os itens como feitos na tabela de progresso do
+      `plano_melhorias_auditoria.md` (linhas 3.2 e 3.3).

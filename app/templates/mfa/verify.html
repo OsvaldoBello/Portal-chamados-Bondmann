@@ -1,0 +1,39 @@
+{# Step-up de MFA (item 3.3): sessão aal1 de quem JÁ tem fator verificado.
+   Destino do redirect do enforcement (MfaChallengeRequired) e do pós-login. #}
+{% extends "mfa/_mfa_base.html" %}
+
+{% block title %}Verificação em duas etapas — Portal de Chamados Bondmann{% endblock %}
+
+{% block conteudo %}
+  <div class="flex items-center justify-center w-11 h-11 rounded-lg bg-navy-900/5 text-navy mb-4">
+    <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+  </div>
+
+  <h1 class="font-display font-bold text-xl text-navy">Verificação em duas etapas</h1>
+  <p class="text-muted text-sm mt-1.5">Abra seu aplicativo autenticador e informe o código de 6 dígitos para concluir o acesso.</p>
+
+  <form method="post" action="/mfa/verify" class="mt-6 space-y-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="block">
+      <span class="block text-[13px] font-semibold text-navy mb-1.5">Código do autenticador</span>
+      <input id="codigo" name="codigo" type="text" required autofocus
+             inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*"
+             maxlength="7" placeholder="000000"
+             class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-center text-lg tracking-[0.4em] font-semibold placeholder:text-faint placeholder:tracking-[0.4em]">
+    </label>
+    <button type="submit"
+            class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-navy-900 text-white hover:bg-navy-700 shadow-soft w-full">
+      Verificar e continuar
+    </button>
+  </form>
+
+  <p class="mt-6 text-xs text-muted">
+    Perdeu o acesso ao autenticador? Peça ao <strong class="text-navy">TI</strong> para
+    resetar seu MFA — depois você poderá configurá-lo novamente.
+  </p>
+
+  <form method="post" action="/logout" class="mt-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="text-xs font-medium text-muted hover:text-navy">Sair da conta</button>
+  </form>
+{% endblock %}

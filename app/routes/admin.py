@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
 
 from app import cache
-from app.auth.dependencies import CurrentUser, get_current_user
+from app.auth.dependencies import CurrentUser, enforce_admin_mfa, get_current_user
 from app.db import rls_request_scope
 from app.repositories.admin import AdminRepo, get_admin_repo
 from app.repositories.chamados import (
@@ -53,6 +53,8 @@ class AdminCtx:
     perfil: dict
     is_ti: bool
     escopo: str  # rótulo do escopo dos indicadores (setor ou "Todos os setores")
+    # Item 3.3 (Fase 1): ADMIN que ainda não habilitou MFA — a UI avisa, não bloqueia.
+    mfa_nudge: bool = False
 
 
 async def admin_context(
@@ -83,11 +85,20 @@ async def admin_context(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Área restrita a gestores (Admin do setor) e ao TI.",
             )
+        # MFA (item 3.3, Fase 1): o painel é a superfície de maior privilégio, então
+        # é aqui que o aal2 é exigido do papel ADMIN. Levanta MfaChallengeRequired
+        # (→ redirect para /mfa/verify) se o ADMIN tem MFA mas a sessão está em aal1;
+        # devolve o nudge se ele ainda não habilitou. OPERADOR do TI (que também
+        # entra aqui) fica de fora — nesta fatia o MFA só é imposto ao ADMIN.
+        mfa_nudge = enforce_admin_mfa(user)
+
         # Indicadores só do PRÓPRIO setor (decisão 2026-07-09) — TI passa a ser
         # escopado igual a qualquer Admin de departamento; "Todos os setores"
         # deixou de existir. TI segue sendo o único que GERE catálogos (_require_ti).
         escopo = perfil.get("departamento") or "—"
-        yield AdminCtx(user=user, perfil=perfil, is_ti=is_ti, escopo=escopo)
+        yield AdminCtx(
+            user=user, perfil=perfil, is_ti=is_ti, escopo=escopo, mfa_nudge=mfa_nudge
+        )
 
 
 def _require_ti(ctx: AdminCtx) -> None:
@@ -105,7 +116,12 @@ async def _csrf_guard(request: Request) -> None:
 
 def _base_ctx(ctx: AdminCtx) -> dict:
     """Contexto comum aos templates do admin (perfil/escopo para o shell)."""
-    return {"perfil": ctx.perfil, "is_ti": ctx.is_ti, "escopo": ctx.escopo}
+    return {
+        "perfil": ctx.perfil,
+        "is_ti": ctx.is_ti,
+        "escopo": ctx.escopo,
+        "mfa_nudge": ctx.mfa_nudge,
+    }
 
 
 @router.get("")
@@ -627,6 +643,38 @@ async def mudar_papel(
     if not resultado.sucesso:
         return _volta(erro=resultado.mensagem)
     return _volta(ok=resultado.mensagem)
+
+
+@router.post("/usuarios/{user_id}/reset-mfa")
+async def reset_mfa(
+    request: Request,
+    user_id: str,
+    ctx: AdminCtx = Depends(admin_context),
+    _: None = Depends(_csrf_guard),
+):
+    """Remove o MFA de um usuário — **recovery por admin** (decisão do gestor,
+    item 3.3): quem perde o autenticador pede ao TI para resetar e re-enrola.
+
+    Não há recovery codes guardados por nós (seriam mais um segredo sob nossa
+    guarda); o segredo TOTP vive só no GoTrue. Remover um fator verificado desloga
+    o usuário de todas as sessões — efeito do próprio GoTrue. Só TI."""
+    from app.auth import mfa as mfa_ops
+
+    _require_ti(ctx)
+
+    def _volta(*, ok: str = "", erro: str = ""):
+        from urllib.parse import urlencode
+
+        qs = urlencode({k: v for k, v in {"ok": ok, "erro": erro}.items() if v})
+        return RedirectResponse(f"/admin/usuarios?{qs}", status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        removidos = await mfa_ops.resetar_mfa(user_id)
+    except mfa_ops.MfaErro as exc:
+        return _volta(erro=f"Não foi possível resetar o MFA: {exc}")
+    if not removidos:
+        return _volta(ok="Este usuário não tinha MFA configurado.")
+    return _volta(ok="MFA resetado. O usuário poderá configurá-lo de novo no próximo acesso.")
 
 
 @router.post("/usuarios/{user_id}/excluir")

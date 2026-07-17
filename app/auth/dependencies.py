@@ -20,6 +20,37 @@ log = logging.getLogger("app.auth")
 
 ROLES = {"ADMIN", "OPERADOR", "CLIENTE"}
 
+# Níveis de garantia de autenticação do GoTrue (claim `aal`): `aal1` = só senha;
+# `aal2` = senha + fator MFA verificado nesta sessão (Seção 3.4.1).
+AAL_MFA = "aal2"
+
+
+class MfaChallengeRequired(Exception):
+    """ADMIN com MFA habilitado, porém a sessão ainda está em ``aal1``.
+
+    Sinaliza que falta o passo de verificação (step-up). O handler registrado em
+    ``app/main.py`` traduz isso num redirect para ``/mfa/verify`` — uma
+    ``HTTPException`` não serve aqui porque o que queremos é navegar o usuário
+    até o fluxo, não devolver um erro.
+    """
+
+
+def aal(claims: dict) -> str:
+    """Nível de garantia da sessão. Token sem o claim ⇒ trata como ``aal1``
+    (fail-safe: a ausência nunca vale como 'MFA verificado')."""
+    return str(claims.get("aal") or "aal1")
+
+
+def mfa_habilitado(claims: dict) -> bool:
+    """Se o usuário tem MFA ativo, lido do espelho ``app_metadata.mfa_enabled``.
+
+    O espelho é gravado por ``app/auth/mfa.py`` no enroll/reset (mesmo dual-write
+    do papel, item 1.5) justamente para esta leitura ser **local** — sem uma
+    chamada ao GoTrue por request. Ausente ⇒ ``False`` (comportamento de
+    transição: quem nunca enrolou não é bloqueado).
+    """
+    return bool((claims.get("app_metadata") or {}).get("mfa_enabled"))
+
 
 @dataclass(frozen=True)
 class CurrentUser:
@@ -27,6 +58,26 @@ class CurrentUser:
     email: str | None
     role: str             # ADMIN | OPERADOR | CLIENTE (claim ou perfil)
     claims: dict          # claims completos, repassados ao RLS via SET LOCAL
+
+
+def enforce_admin_mfa(user: CurrentUser) -> bool:
+    """Impõe ``aal2`` para o papel ADMIN (item 3.3 — Fase 1, Seção 3.4.1).
+
+    Retorna se a UI deve exibir o **nudge** (ADMIN que ainda não habilitou MFA).
+    Levanta :class:`MfaChallengeRequired` quando o ADMIN **tem** MFA habilitado
+    mas a sessão está em ``aal1`` (precisa verificar).
+
+    Fase 1 = *opcional com aviso* (decisão do gestor, 2026-07-16): ADMIN sem MFA
+    continua entrando, só é avisado — tornar obrigatório é a Fase 2 (Sprint 4).
+    ``OPERADOR``/``CLIENTE`` ficam **fora** do enforcement nesta fatia.
+    """
+    if user.role != "ADMIN":
+        return False
+    if aal(user.claims) == AAL_MFA:
+        return False
+    if mfa_habilitado(user.claims):
+        raise MfaChallengeRequired()
+    return True
 
 
 def _extract_token(request: Request) -> str | None:

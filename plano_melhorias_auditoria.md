@@ -831,7 +831,69 @@
     required — só roda em `paths` específicos e travaria PRs que não os tocam.
   - Sem código tocado ⇒ suíte inalterada (a base deste PR é o item 3.1, verde).
 
-### 3.3 · MFA (TOTP) com enforcement para ADMIN 🔴 ⏳ **A executar** (Fase 1 da Seção 3.4.1)
+### 3.3 · MFA (TOTP) com enforcement para ADMIN 🔴 ✅ **Concluído 2026-07-16** (Fase 1 da Seção 3.4.1)
+- [x] Fluxo de enrollment TOTP (enroll → challenge → verify) via GoTrue, com tela e rota
+      próprias; QR/segredo exibidos uma única vez.
+- [x] Enforcement: rotas do painel ADMIN exigem `aal2`, checando o claim `aal` na dependência
+      de autorização (`admin_context` → `enforce_admin_mfa`), com redirect para o fluxo de
+      verificação quando o ADMIN tem MFA habilitado mas a sessão está em aal1. CSP/headers e
+      o refresh de sessão existentes seguem válidos.
+- [x] Testes: enroll, verify, sessão aal1 barrada em rota ADMIN, aal2 liberada e usuário sem
+      MFA (comportamento de transição).
+- [x] Seção 3.4.1 do plano mestre atualizada + **[ADR-0007](docs/adr/0007-mfa-totp-aal2-admin.md)**
+      registrando a decisão de MFA/aal2.
+- [ ] **`[AÇÃO DO GESTOR]` — habilitar MFA/TOTP no projeto Supabase hospedado**
+      (Authentication → Multi-Factor Authentication). O `supabase/config.toml` local já foi
+      alinhado; ver item (c) do [runbook](docs/runbook_hardening_gestor.md).
+- **Decisões do gestor (2026-07-16), tomadas antes de implementar:**
+  - **Recovery:** reset por admin/TI (não recovery codes, não e-mail).
+  - **Obrigatoriedade:** MFA de ADMIN **opcional com aviso** nesta fatia (Fase 1); obrigatório
+    fica para a Fase 2 (Sprint 4).
+  - **Lockout/janela de aal2:** padrões do GoTrue (sem re-desafio periódico próprio).
+- **Aceite:** ADMIN com MFA não acessa o painel em aal1; ADMIN sem MFA não é bloqueado;
+  OPERADOR/CLIENTE intocados. **Atendido.**
+- **Notas de execução:**
+  - **Arquivos novos:** `app/auth/mfa.py` (operações GoTrue), `app/routes/mfa.py` (5 rotas:
+    `/mfa` hub, `/mfa/enroll`, `/mfa/enroll/confirmar`, `GET|POST /mfa/verify`),
+    `app/templates/mfa/` (3 telas + shell), `tests/test_mfa.py`, ADR-0007.
+  - **Segredo TOTP só no GoTrue** (não há coluna/tabela nova — zero migration). Cada operação
+    usa um **cliente isolado** + `set_session` (as chamadas MFA mutam a sessão do GoTrue;
+    reusar o cliente global daria corrida entre requests — mesma razão do fluxo de redefinição
+    de senha).
+  - **Decisão de desenho central — como o enforcement sabe que há MFA sem ir à rede:** o claim
+    `aal` diz o nível da sessão, mas **não** diz se o usuário tem fator. Para distinguir
+    "redirecionar" (tem MFA, aal1) de "avisar" (não tem), espelhamos um booleano em
+    **`app_metadata.mfa_enabled`** via Admin API no enroll/reset — o GoTrue o embute no JWT, e
+    o enforcement lê tudo dos claims: **local, sem rede por request, sem migration**. Mesmo
+    padrão de dual-write do `app_metadata.role` (item 1.5); é um booleano, não segredo. As duas
+    alternativas foram descartadas na ADR-0007: `list_factors()` por request (ida à rede em
+    toda requisição de ADMIN em aal1 — contraria a razão de a verificação de JWT ser local) e
+    coluna `perfis.mfa_enabled` (exigiria migration **e** mexer no trigger
+    `enforce_perfil_self_so_avatar` da 0033, que só libera `avatar_path` na auto-escrita —
+    risco de RLS desproporcional a um booleano).
+  - **Efeito colateral bom:** como claims sem `mfa_enabled` degradam para o nudge, a suíte
+    inteira roda **sem tocar o GoTrue** — os testes de admin existentes não precisaram de
+    nenhuma alteração, mesmo com o `.env` local tendo `service_role` real configurada (uma
+    detecção por Admin API teria feito chamadas de rede reais em cada teste de admin).
+  - **Login reforçado sem custo:** quem já tem fator verificado vai direto ao step-up em vez da
+    home — os `factors` vêm na própria resposta do `sign_in_with_password` (nenhuma chamada
+    extra). Fator `unverified` (enroll abandonado) não conta.
+  - **QR:** o gotrue-py monta o data URI concatenando o SVG **cru**, sem percent-encoding — um
+    `#` de cor no SVG truncaria a URI no fragmento e a imagem não renderizaria. `mfa.py`
+    reencoda (`_qr_data_uri`). Data URI é compatível com a CSP estrita (`img-src 'self' data:`,
+    Seção 3.8) — nenhum host externo, CSP inalterada.
+  - **Achado (fora do escopo, registrado):** o banner de nudge foi primeiro colocado em
+    `app/templates/admin/admin_base.html` e não renderizou — esse template é **código morto**
+    (nenhum arquivo o estende; as 4 páginas do painel usam `workspace/workspace_base.html`). A
+    edição foi revertida e o banner foi para o shell verdadeiro, guardado por
+    `mfa_nudge is defined` (só rotas do admin passam a flag ⇒ não aparece no Workspace). A
+    remoção do template morto ficou como tarefa separada.
+  - **Suíte:** `284 passed, 11 skipped` (295 coletados; os 11 são o e2e RLS, sem Docker neste
+    ambiente) — 21 testes novos. Cobertura **70.78%**, acima do floor de 69 fixado no item 3.1
+    (o piso com ~2 pontos de folga absorveu o código novo sem precisar mexer no gate, que era
+    exatamente o propósito). `ruff check .` limpo, `mypy` verde (agora 14 arquivos — inclui
+    `app/auth/mfa.py`), `npm run build:css` regenerado (as telas novas trouxeram classes
+    novas; `app/static/css/app.css` vai no commit).
 
 ---
 
@@ -872,6 +934,7 @@
 | 2026-07-16 | 2.8 (B6) | `app/security/password_policy.py` (novo), `app/auth/routes.py`, `app/routes/admin.py`, `supabase/config.toml`, plano mestre (Seção 3.4.1, Estado) | Hashing confirmado como delegado ao GoTrue (nada a mudar em código). Política de senha: mínimo 8 caracteres sem exigência de composição (NIST 800-63B), consolidado em `SENHA_MIN_CHARS` (fonte única — antes duplicado em `auth/routes.py`/`routes/admin.py`); `supabase/config.toml` local alinhado. Ajuste equivalente no painel do projeto Supabase hospedado (hoje default 6) fica como `[AÇÃO DO GESTOR PENDENTE]` (sem Management API via MCP). MFA avaliado (não implementado): faseamento TOTP opcional pro staff (Sprint 3) → obrigatório pro ADMIN (Sprint 4), registrado na Seção 3.4.1. Suíte verde, `ruff` limpo. |
 | 2026-07-16 | 3.1 (CI) | `pyproject.toml`, `requirements-dev.txt`, `.github/workflows/ci.yml`, `app/routes/admin.py`, `app/routes/workspace.py`, `app/security/csrf.py`, `app/repositories/{atendimento,fila,chamados}.py` + ~20 arquivos de lint automático | Gate de CI endurecido em adoção gradual. **Cobertura:** `pytest-cov`, medida em **71.57%**, floor `fail_under = 69` (~2 pts abaixo) no job `pytest`. **ruff:** `select` alargado p/ `["E9","F","I","UP","DTZ"]` sem ignore; ~65 violações corrigidas no mesmo PR (F821/UP037 `"date | None"` → import `date` + desaspar; DTZ `utcnow()`/`now()` → `now(UTC)` preservando comportamento; UP031 ETag → f-string). **mypy:** gradual, só `app/security`/`db.py`/`config.py`/`auth` (sem `--strict`, `follow_imports=silent`), job próprio; 1 erro real corrigido (`csrf.get_or_issue` narrowing). Nenhum template/JS tocado ⇒ `build:css` sem diff. `263 passed, 11 skipped`; `ruff check .` e `mypy` verdes. |
 | 2026-07-16 | 3.2 (gestor) `[AÇÃO DO GESTOR]` | `docs/runbook_hardening_gestor.md` (novo) | Runbook acionável para as duas travas que só o gestor executa: **(a)** branch protection em `claude/develop` (default; sem `main`) — comando `gh api -X PUT .../protection` com os 5 checks required pós-3.1 + variante para mantenedor solo + reversão, e o caminho pela UI; **(b)** política de senha do Supabase hospedado (6 → 8, dashboard Authentication → Password). Confirmado via `gh`: repo público, default `claude/develop`, sem proteção hoje (404). `gh` admin disponível ⇒ oferta de aplicar (a) registrada, mas **não executada sem confirmação** (alterar config de repo é ação de plataforma). Sem código ⇒ suíte inalterada. Ver [runbook](docs/runbook_hardening_gestor.md). |
+| 2026-07-16 | 3.3 (MFA) | `app/auth/mfa.py`, `app/routes/mfa.py`, `app/templates/mfa/` (novos), `app/auth/dependencies.py`, `app/auth/routes.py`, `app/routes/admin.py`, `app/main.py`, `app/templates/workspace/workspace_base.html`, `app/templates/admin/usuarios.html`, `supabase/config.toml`, `tests/test_mfa.py` (novo), `docs/adr/0007-mfa-totp-aal2-admin.md` (novo), plano mestre (Seção 3.4.1) | MFA TOTP Fase 1 (ADMIN-first). Enrollment (`/mfa`: enroll → challenge → verify, QR+segredo uma vez) e step-up (`/mfa/verify`), tudo via GoTrue — **segredo TOTP só no GoTrue, zero migration**. Enforcement de `aal2` no painel ADMIN (`enforce_admin_mfa` em `admin_context`): com MFA + aal1 ⇒ redirect (HTMX: `HX-Redirect`); **sem MFA ⇒ nudge, não bloqueia** (Fase 1 = opcional com aviso); OPERADOR/CLIENTE fora. Decisão-chave: espelho booleano `app_metadata.mfa_enabled` no JWT (padrão do dual-write de `role`, item 1.5) ⇒ enforcement **local, sem rede por request e sem tocar RLS** — alternativas (`list_factors` por request, coluna `perfis.mfa_enabled`) descartadas na ADR-0007. Recovery = **reset por TI** (`/admin/usuarios/{id}/reset-mfa`), sem recovery codes. Login manda quem já tem fator ao step-up (fatores vêm na resposta do login, sem chamada extra). Decisões do gestor (recovery/obrigatoriedade/lockout) tomadas antes de implementar. `284 passed, 11 skipped` (21 novos); cobertura 70.78% (acima do floor 69 do item 3.1); `ruff`/`mypy` verdes; `build:css` regenerado. `[AÇÃO DO GESTOR]`: habilitar TOTP no Supabase hospedado — item (c) do [runbook](docs/runbook_hardening_gestor.md). |
 
 ## Definição de pronto (todos os itens)
 

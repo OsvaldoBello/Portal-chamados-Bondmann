@@ -160,6 +160,22 @@
         </div>
       </header>
       <main class="anim-rise flex-1 p-4 sm:p-7 w-full {% block main_class %}max-w-[1400px]{% endblock %}">
+        {# MFA (item 3.3, Fase 1 — opcional com aviso): ADMIN sem MFA é avisado, não
+           bloqueado. Só as rotas do painel passam `mfa_nudge` (via `_base_ctx` do
+           admin.py), então o aviso não aparece nas telas do Workspace — onde o MFA
+           não é imposto nesta fatia. Some quando ele ativa; na Fase 2 (obrigatório)
+           o aviso dá lugar ao redirect. #}
+        {% if mfa_nudge is defined and mfa_nudge %}
+          <div class="mb-5 flex flex-wrap items-center gap-3 rounded-lg bg-st_aguard/10 ring-1 ring-st_aguard/20 px-4 py-3">
+            <svg class="w-5 h-5 text-st_aguard shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+            <p class="text-[13px] text-navy-700 flex-1 min-w-[220px]">
+              Sua conta é <strong>Administrador</strong> e ainda não tem verificação em duas etapas.
+            </p>
+            <a href="/mfa" class="inline-flex items-center gap-1.5 rounded-lg text-[13px] font-semibold px-3 py-1.5 bg-navy-900 text-white hover:bg-navy-700 transition">
+              Ativar MFA
+            </a>
+          </div>
+        {% endif %}
         {% block content %}{% endblock %}
       </main>
     </div>

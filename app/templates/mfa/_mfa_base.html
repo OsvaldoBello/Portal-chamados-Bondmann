@@ -1,0 +1,33 @@
+{# Shell das telas de MFA (item 3.3). Página standalone, no estilo do login.html:
+   a verificação (step-up) acontece durante o login, antes de o usuário chegar ao
+   shell do Workspace/Portal — então não estende app_base/workspace_base. #}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Verificação em duas etapas — Portal de Chamados Bondmann{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="font-sans bg-surface text-ink antialiased">
+  <div class="min-h-screen flex items-center justify-center p-6">
+    <div class="w-full max-w-[440px]">
+      <div class="flex items-center justify-center gap-2.5 select-none mb-8">
+        {% include "_logo.html" %}
+        <div class="leading-none">
+          <div class="font-display font-black tracking-tight text-xl text-navy">BONDMANN</div>
+          <div class="font-medium tracking-[0.42em] text-[9px] mt-0.5 text-navy/90">QUÍMICA</div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl shadow-soft ring-1 ring-line p-7">
+        {% if erro %}<p class="mb-5 rounded-lg bg-pr_urgente/10 px-3.5 py-2.5 text-sm text-pr_urgente">{{ erro }}</p>{% endif %}
+        {% if info %}<p class="mb-5 rounded-lg bg-brandgreen/10 px-3.5 py-2.5 text-sm text-brandgreen-700">{{ info }}</p>{% endif %}
+        {% block conteudo %}{% endblock %}
+      </div>
+
+      <p class="mt-8 text-center text-xs text-faint">© 2026 Bondmann Química · bondmann.com.br</p>
+    </div>
+  </div>
+</body>
+</html>

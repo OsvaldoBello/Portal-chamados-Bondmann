@@ -1,0 +1,53 @@
+{# Ativação do MFA (item 3.3): QR + segredo exibidos UMA única vez.
+   Dois estados:
+   - `enroll` presente  → 1ª exibição (QR/segredo do fator recém-criado);
+   - só `factor_id`     → reenvio após código inválido (o fator já existe no
+                          GoTrue; não reexibimos o segredo). #}
+{% extends "mfa/_mfa_base.html" %}
+
+{% block title %}Ativar verificação em duas etapas — Portal de Chamados Bondmann{% endblock %}
+
+{% block conteudo %}
+  <h1 class="font-display font-bold text-xl text-navy">Ativar verificação em duas etapas</h1>
+
+  {% if enroll %}
+    <p class="text-muted text-sm mt-1.5">Escaneie o QR code no seu aplicativo autenticador (Google Authenticator, Microsoft Authenticator, 1Password…) e informe o código gerado.</p>
+
+    <div class="mt-6 flex justify-center">
+      {# data URI (CSP: img-src 'self' data:) — nenhum host externo. #}
+      <img src="{{ enroll.qr_code }}" alt="QR code para o aplicativo autenticador"
+           width="200" height="200" class="w-[200px] h-[200px] rounded-lg ring-1 ring-line bg-white p-2">
+    </div>
+
+    <details class="mt-5 group">
+      <summary class="cursor-pointer text-[13px] font-semibold text-navy-700 hover:text-navy list-none">
+        Não consegue escanear? Digite o código manualmente
+      </summary>
+      <div class="mt-2.5 rounded-lg bg-surface ring-1 ring-line p-3">
+        <p class="text-[11px] font-semibold text-muted uppercase tracking-wide">Chave secreta</p>
+        <p class="mt-1 font-mono text-sm text-navy break-all select-all">{{ enroll.secret }}</p>
+        <p class="mt-2.5 text-[11px] text-faint">Esta chave aparece só agora. Depois de ativar, ela não será exibida novamente.</p>
+      </div>
+    </details>
+  {% else %}
+    <p class="text-muted text-sm mt-1.5">Informe um novo código do seu aplicativo autenticador para concluir a ativação.</p>
+  {% endif %}
+
+  <form method="post" action="/mfa/enroll/confirmar" class="mt-6 space-y-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="factor_id" value="{{ enroll.factor_id if enroll else factor_id }}">
+    <label class="block">
+      <span class="block text-[13px] font-semibold text-navy mb-1.5">Código do autenticador</span>
+      <input id="codigo" name="codigo" type="text" required autofocus
+             inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*"
+             maxlength="7" placeholder="000000"
+             class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-center text-lg tracking-[0.4em] font-semibold placeholder:text-faint placeholder:tracking-[0.4em]">
+    </label>
+    <button type="submit"
+            class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-navy-900 text-white hover:bg-navy-700 shadow-soft w-full">
+      Ativar MFA
+    </button>
+  </form>
+
+  <a href="/mfa" class="mt-4 inline-block text-xs font-medium text-muted hover:text-navy">Cancelar</a>
+{% endblock %}

@@ -401,25 +401,47 @@ plano). **`[AÇÃO DO GESTOR PENDENTE]`:** replicar o mesmo mínimo no painel do
 hospedado) — o GoTrue é a única barreira real para quem chamar a Auth API diretamente, fora
 do nosso formulário; não há Management API exposta via MCP para automatizar esse ajuste.
 
-**MFA — avaliação (não implementado nesta sessão):**
-- GoTrue já suporta MFA nativo (TOTP via app autenticador) sem trocar de provedor —
-  `[auth.mfa]`/`[auth.mfa.totp]` no `supabase/config.toml` local espelha o mesmo mecanismo do
-  projeto hospedado.
-- O custo real de implementação está no nosso lado: tela de enrollment (QR code + código de
-  verificação), desafio de MFA no fluxo de `/login` (hoje single-step,
-  `sign_in_with_password` direto pro Workspace/Portal), fluxo de recovery codes, e decidir
-  obrigatoriedade por papel.
-- **Recomendação de faseamento** (maior privilégio primeiro): `ADMIN`/`OPERADOR` (staff —
-  RLS mais permissiva, acesso a dados de outros usuários) antes de `CLIENTE` (funcionário
-  comum, só os próprios chamados).
-  - **Fase 1 (alvo: Sprint 3):** habilitar TOTP no projeto Supabase + telas de
-    enrollment/challenge no login para staff, **opcional** na 1ª rodada (nudge, não bloqueio
-    — evita travar quem esquece de configurar antes de ter suporte formado).
-  - **Fase 2 (alvo: Sprint 4, condicionada à adoção da Fase 1):** obrigatório para `ADMIN`;
-    reavaliar `OPERADOR`/`CLIENTE` conforme sensibilidade dos dados de RH/Financeiro
-    trafegados no portal.
-- **Aceite deste item:** avaliação registrada com prazo (acima) — a *implementação* da
-  feature de MFA fica para os sprints indicados, fora do escopo do item 2.8.
+**MFA — Fase 1 IMPLEMENTADA (Sprint 3 / item 3.3, 2026-07-16).** Decisões e alternativas
+descartadas estão na **[ADR-0007](docs/adr/0007-mfa-totp-aal2-admin.md)**; o resumo
+operacional é este:
+
+- **TOTP nativo do GoTrue**, sem trocar de provedor. O **segredo TOTP vive só no GoTrue** —
+  nada no nosso banco. O app orquestra `enroll → challenge → verify` (`app/auth/mfa.py`) com
+  um cliente isolado por operação (mesma razão do fluxo de redefinição de senha: as chamadas
+  MFA mutam a sessão do GoTrue).
+- **Telas** (`app/routes/mfa.py`, `app/templates/mfa/`): `GET /mfa` (hub/estado),
+  `POST /mfa/enroll` (QR + segredo exibidos **uma vez**), `POST /mfa/enroll/confirmar`,
+  `GET|POST /mfa/verify` (step-up). Páginas standalone no estilo do `/login` — a verificação
+  acontece antes de o usuário chegar ao shell.
+- **Enforcement (`aal2`) no painel ADMIN** (`admin_context`, `app/auth/dependencies.py::enforce_admin_mfa`):
+  - `ADMIN` **com** MFA + sessão `aal1` ⇒ redirect para `/mfa/verify` (`MfaChallengeRequired`;
+    HTMX recebe `HX-Redirect`).
+  - `ADMIN` **sem** MFA ⇒ entra com **nudge** na UI (Fase 1 = *opcional com aviso*,
+    `[DECISÃO DO GESTOR]` 2026-07-16 — não travar admin no dia do deploy).
+  - `OPERADOR`/`CLIENTE` ⇒ **fora** do enforcement nesta fatia.
+  - No login, quem já tem fator verificado vai direto ao step-up (os fatores vêm na resposta
+    do `sign_in_with_password` — sem chamada extra).
+- **Como o enforcement sabe que há MFA, sem ir à rede:** um booleano espelhado em
+  **`app_metadata.mfa_enabled`** (Admin API), que o GoTrue embute no JWT — mesmo padrão de
+  dual-write do `app_metadata.role` (item 1.5). Lido junto do claim `aal`, local, **sem
+  migration e sem tocar RLS** (ver ADR-0007 para as alternativas descartadas: chamada por
+  request e coluna `perfis.mfa_enabled`).
+- **Recovery = reset por admin/TI** (`[DECISÃO DO GESTOR]` 2026-07-16):
+  `POST /admin/usuarios/{id}/reset-mfa` remove o(s) fator(es) via Admin API e o usuário
+  re-enrola. **Sem recovery codes** (o GoTrue não os gera; construí-los seria guardar mais um
+  segredo sob nossa guarda) e **sem reset por e-mail** (quem controla a caixa contornaria o
+  MFA).
+- **Lockout / janela de re-desafio = padrões do GoTrue** (`[DECISÃO DO GESTOR]` 2026-07-16):
+  `aal2` vale pela vida da sessão (persiste no refresh); tentativas são limitadas pelo próprio
+  GoTrue. Nossos endpoints mantêm rate limit de borda (`10/minute`, Seção 2.4).
+- **Fase 2 (alvo: Sprint 4, condicionada à adoção):** obrigatório para `ADMIN` — vira remover
+  o ramo do nudge e mandar todo `aal1` ao enroll. Reavaliar `OPERADOR`/`CLIENTE` conforme a
+  sensibilidade dos dados de RH/Financeiro trafegados no portal.
+- **`[AÇÃO DO GESTOR PENDENTE]`:** habilitar TOTP no projeto Supabase **hospedado**
+  (Authentication → Multi-Factor Authentication). O `supabase/config.toml` local já está com
+  `[auth.mfa.totp] enroll_enabled/verify_enabled = true`; sem o equivalente no hospedado, o
+  `POST /mfa/enroll` responde 503 com mensagem explicando. Ver
+  [`docs/runbook_hardening_gestor.md`](docs/runbook_hardening_gestor.md).
 
 ### 3.5 CSRF (ausente na spec — **obrigatório**)
 
