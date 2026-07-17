@@ -28,7 +28,12 @@
       <ul class="mt-2 space-y-1">
         {% for a in m.anexos %}
         <li class="text-sm">
-          {% if a.url %}
+          {% if a.url and a.mime and a.mime.startswith('image/') %}
+          <a href="{{ a.url }}" target="_blank" rel="noopener" title="{{ a.nome }}">
+            <img src="{{ a.url }}" alt="{{ a.nome }}" loading="lazy"
+                 class="w-16 h-16 rounded object-cover ring-1 ring-line hover:ring-navy transition">
+          </a>
+          {% elif a.url %}
           <a href="{{ a.url }}" target="_blank" rel="noopener"
              class="inline-flex items-center gap-1.5 text-navy hover:underline">📎 {{ a.nome }}</a>
           {% else %}
