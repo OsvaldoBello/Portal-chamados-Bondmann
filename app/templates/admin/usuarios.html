@@ -5,6 +5,11 @@
 {% block subheading %}Criar colaboradores e definir setor/papel{% endblock %}
 {% block content %}
 {% set PAPEL_LABEL = {"CLIENTE": "Funcionário", "OPERADOR": "Operador", "ADMIN": "Admin de setor"} %}
+{# Querystring dos filtros ativos — preserva a busca/papel/setor ao confirmar/cancelar exclusão. #}
+{% set ns = '' %}
+{% if busca_sel %}{% set ns = ns ~ '&busca=' ~ busca_sel %}{% endif %}
+{% if papel_sel %}{% set ns = ns ~ '&papel=' ~ papel_sel %}{% endif %}
+{% if setor_sel %}{% set ns = ns ~ '&setor=' ~ setor_sel %}{% endif %}
 
 {% if ok %}<div class="mb-4 rounded-lg bg-sla-ok/10 border border-sla-ok/30 px-4 py-2.5 text-sm text-sla-ok">{{ ok }}</div>{% endif %}
 {% if erro %}<div class="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">{{ erro }}</div>{% endif %}
@@ -76,6 +81,40 @@
   {# ---------- Usuários existentes ---------- #}
   <section class="lg:col-span-2 bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h3 class="font-display font-bold text-navy mb-3">Usuários</h3>
+
+    {# Filtro: nome/e-mail (busca livre) + papel + setor. Form GET autosubmit,
+       mesmo padrão de app/templates/workspace/fila.html e kanban.html. #}
+    <form method="get" action="/admin/usuarios" class="mb-4 flex flex-wrap items-end gap-3">
+      <label class="flex flex-col gap-1">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Buscar</span>
+        <input type="search" name="busca" value="{{ busca_sel }}" placeholder="Nome ou e-mail" data-autosubmit
+               class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 w-48">
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Papel</span>
+        <select name="papel" data-autosubmit
+                class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+          <option value="">Todos</option>
+          {% for p, rot in PAPEL_LABEL.items() %}
+          <option value="{{ p }}" {% if p == papel_sel %}selected{% endif %}>{{ rot }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Setor</span>
+        <select name="setor" data-autosubmit
+                class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+          <option value="">Todos</option>
+          {% for d in departamentos %}
+          <option value="{{ d.id }}" {% if d.id|string == setor_sel %}selected{% endif %}>{{ d.nome }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% if tem_filtro_usuarios %}
+      <a href="/admin/usuarios" class="text-sm text-muted hover:text-navy pb-2">limpar filtros</a>
+      {% endif %}
+    </form>
+
     <div class="overflow-x-auto">
       <table class="w-full text-sm">
         <thead class="text-left text-[11px] font-bold uppercase tracking-wider text-muted">
@@ -127,12 +166,12 @@
                       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                       <button class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-sla-danger text-white hover:brightness-95">Confirmar exclusão</button>
                     </form>
-                    <a href="/admin/usuarios" class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-surface2 text-navy hover:bg-line">Cancelar</a>
+                    <a href="/admin/usuarios{% if ns %}?{{ ns[1:] }}{% endif %}" class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-surface2 text-navy hover:bg-line">Cancelar</a>
                   </div>
                 </div>
                 {% else %}
                 {# Etapa 1 — pede confirmação (GET, não exclui nada ainda). #}
-                <a href="/admin/usuarios?confirmar={{ u.id }}"
+                <a href="/admin/usuarios?confirmar={{ u.id }}{{ ns }}"
                    class="inline-flex items-center gap-1 text-xs font-semibold text-sla-danger hover:underline">
                   <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 7h12M9 7V5.5A1.5 1.5 0 0110.5 4h3A1.5 1.5 0 0115 5.5V7m-6 4v6m4-6v6M5 7l1 12a2 2 0 002 2h8a2 2 0 002-2l1-12"/></svg>
                   Excluir conta
@@ -143,7 +182,7 @@
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="4" class="py-3 text-sm text-muted">Nenhum usuário.</td></tr>
+          <tr><td colspan="4" class="py-3 text-sm text-muted">{% if tem_filtro_usuarios %}Nenhum usuário encontrado com esse filtro.{% else %}Nenhum usuário.{% endif %}</td></tr>
           {% endfor %}
         </tbody>
       </table>

@@ -461,18 +461,32 @@ _PAPEL_LABEL = {"CLIENTE": "Funcionário", "OPERADOR": "Operador", "ADMIN": "Adm
 async def _emails_por_id() -> dict[str, str]:
     """Mapa ``{user_id: email}`` via Admin API (service_role). O e-mail vive em
     ``auth.users``, fora do alcance do papel ``authenticated`` — por isso vem daqui.
-    Degrada para ``{}`` se a service_role não estiver configurada."""
+    Degrada para ``{}`` se a service_role não estiver configurada.
+
+    ``list_users`` é paginado pelo GoTrue (50 por página, por padrão) — sem
+    percorrer todas as páginas, usuários além da primeira ficam sem e-mail na
+    tela (bug observado com a base atual de usuários)."""
     from app.auth.supabase_client import ensure_admin_client
 
     client = await ensure_admin_client()
     if client is None:
         return {}
+    emails: dict[str, str] = {}
+    pagina = 1
     try:
-        usuarios = await client.auth.admin.list_users()
+        while True:
+            usuarios = await client.auth.admin.list_users(page=pagina, per_page=200)
+            itens = getattr(usuarios, "users", usuarios) or []
+            if not itens:
+                break
+            for u in itens:
+                emails[str(u.id)] = getattr(u, "email", None) or ""
+            if len(itens) < 200:
+                break
+            pagina += 1
     except Exception:  # noqa: BLE001 — Admin API indisponível → sem e-mails
-        return {}
-    itens = getattr(usuarios, "users", usuarios) or []
-    return {str(u.id): (getattr(u, "email", None) or "") for u in itens}
+        return emails
+    return emails
 
 
 @router.get("/usuarios")
@@ -481,6 +495,9 @@ async def usuarios(
     ok: str = "",
     erro: str = "",
     confirmar: str = "",
+    busca: str = "",
+    papel: str = "",
+    setor: str = "",
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
 ):
@@ -491,6 +508,21 @@ async def usuarios(
     emails = await _emails_por_id()
     for u in lista:
         u["email"] = emails.get(str(u["id"]), "")
+
+    busca_norm = busca.strip().lower()
+    papel_sel = papel.strip() if papel.strip() in _PAPEIS else ""
+    setor_sel = setor.strip()
+    if busca_norm:
+        lista = [
+            u for u in lista
+            if busca_norm in (u.get("nome") or "").lower()
+            or busca_norm in (u.get("email") or "").lower()
+        ]
+    if papel_sel:
+        lista = [u for u in lista if u["role"] == papel_sel]
+    if setor_sel:
+        lista = [u for u in lista if str(u.get("departamento_id") or "") == setor_sel]
+
     return render(
         request,
         "admin/usuarios.html",
@@ -505,6 +537,10 @@ async def usuarios(
             "erro": erro,
             # Exclusão em 2 etapas: ``confirmar`` = id do usuário aguardando confirmação.
             "confirmar": confirmar.strip(),
+            "busca_sel": busca,
+            "papel_sel": papel_sel,
+            "setor_sel": setor_sel,
+            "tem_filtro_usuarios": bool(busca_norm or papel_sel or setor_sel),
         },
     )
 
