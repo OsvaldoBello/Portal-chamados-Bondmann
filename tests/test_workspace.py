@@ -195,24 +195,19 @@ def test_kanban_renderiza_colunas():
     assert "kanban-delete-btn" in r.text
 
 
-def test_kanban_fora_do_marketing_mostra_coluna_a_fazer():
-    """A_FAZER não é mais exclusivo da coluna do Marketing (migration 0047 —
-    autoatendimento generalizado pra todos os setores): um chamado nesse
-    status fora do Marketing (ex.: os importados como "[Legado #...]", todos
-    A_FAZER) contava certo na fila mas sumia do Kanban, porque `status_list`
-    só incluía A_FAZER pro Marketing e `colunas` descarta qualquer status fora
-    dela."""
-    class RepoComAFazer(FakeRepo):
-        async def fila(self, claims, **kwargs):
-            cs = await super().fila(claims, **kwargs)
-            cs.append(_chamado(id="c4", codigo="BOND-2026-00004", status="A_FAZER"))
-            return cs
-
-    with ws_client(RepoComAFazer()) as c:
+def test_kanban_fora_do_marketing_nao_tem_coluna_a_fazer():
+    """A_FAZER e AGUARDANDO_TERCEIROS voltaram a ser exclusivos do Marketing
+    (decisão de produto 2026-07-21): fora do Marketing o Kanban usa o fluxo
+    clássico (NOVO/EM_ATENDIMENTO/AGUARDANDO/RESOLVIDO), sem essas colunas. Os
+    chamados legados que estavam em A_FAZER foram migrados para NOVO
+    (migration 0048)."""
+    with ws_client(FakeRepo()) as c:  # FakeRepo padrão = TI
         r = c.get("/workspace/kanban")
     assert r.status_code == 200
-    assert 'data-status="A_FAZER"' in r.text
-    assert "BOND-2026-00004" in r.text
+    assert 'data-status="A_FAZER"' not in r.text
+    assert 'data-status="AGUARDANDO_TERCEIROS"' not in r.text
+    for s in ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO"):
+        assert f'data-status="{s}"' in r.text
 
 
 def test_kanban_marketing_tem_coluna_aguardando_terceiros_apos_em_andamento():

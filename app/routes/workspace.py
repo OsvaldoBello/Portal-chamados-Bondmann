@@ -40,6 +40,20 @@ router = APIRouter(prefix="/workspace", tags=["workspace"])
 
 STATUS_VALIDOS = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO")
 
+# Status oferecidos na UI (dropdown de atendimento e colunas do Kanban) variam por
+# setor: "A fazer" (A_FAZER) e "Aguardando terceiros" (AGUARDANDO_TERCEIROS) são
+# exclusivos do Marketing (quadro Trello com autoatendimento/validação); os demais
+# setores (TI, RH, etc.) usam o fluxo clássico. STATUS_VALIDOS continua sendo a
+# whitelist completa da validação server-side (o enum do banco), já que o Marketing
+# precisa dos dois status extras.
+_STATUS_UI_MARKETING = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO")
+_STATUS_UI_PADRAO = ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
+
+
+def _status_ui(departamento: str | None) -> tuple[str, ...]:
+    """Status oferecidos na UI para o setor do chamado/staff (Marketing vs. clássico)."""
+    return _STATUS_UI_MARKETING if departamento == "Marketing" else _STATUS_UI_PADRAO
+
 
 @dataclass(frozen=True)
 class StaffCtx:
@@ -291,16 +305,11 @@ async def kanban(
     if not ctx.perfil.get("recebe_chamados"):
         return RedirectResponse("/portal", status_code=status.HTTP_303_SEE_OTHER)
     is_marketing = ctx.perfil.get("departamento") == "Marketing"
-    if is_marketing:
-        status_list = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO")
-    else:
-        # A_FAZER não é mais exclusivo do Marketing (migration 0047 generalizou
-        # o autoatendimento pra todos os setores): sem essa coluna aqui, um
-        # chamado nesse status (ex.: os 471 importados como "[Legado #...]",
-        # todos A_FAZER) contava certo nos cards da fila (`fila_stats`, sem
-        # filtro por `status_list`) mas sumia do quadro — `colunas` só inclui
-        # os status de `status_list`, e A_FAZER ficava de fora.
-        status_list = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
+    # A_FAZER e AGUARDANDO_TERCEIROS voltam a ser exclusivos do Marketing (decisão
+    # de produto 2026-07-21): os demais setores usam o fluxo clássico, sem essas
+    # colunas. Os chamados legados "[Legado #...]" que estavam em A_FAZER foram
+    # migrados para NOVO (migration 0048), então não somem do quadro.
+    status_list = _status_ui(ctx.perfil.get("departamento"))
 
     f = _parse_filtros_kanban(categoria, prioridade, operador, sla, setor, data_de, data_ate)
     dep_id = _dep_id(ctx)
@@ -431,7 +440,7 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         "pode_reivindicar": pode_reivindicar,
         "pode_atender": pode_atender,
         "prioridades": PRIORIDADES,
-        "status_validos": STATUS_VALIDOS,
+        "status_validos": _status_ui(chamado.get("departamento")),
         "supabase_url": settings.supabase_url or None,
         "anon_key": settings.supabase_anon_key or None,
         "access_token": _access_token(request),
