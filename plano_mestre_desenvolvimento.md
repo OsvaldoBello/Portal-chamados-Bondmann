@@ -319,8 +319,24 @@ Enum de papéis (coerente com a spec): **`ADMIN`**, **`OPERADOR`**, **`CLIENTE`*
 > `chamados_update_staff` permite `operador_id = cliente_id` e `mensagens_insert` permite o autor
 > postar como staff (pública ou nota interna) no próprio chamado. Fora desses dois setores (TI
 > incluído), a trava normal continua valendo.
+>
+> ### 🔁 `[DECISÃO DE PRODUTO 2026-07-20]` `0047` — Autoatendimento generalizado a TODOS os setores
+>
+> Pedido do usuário: o TI (e qualquer outro setor) não conseguia abrir chamado **para si mesmo** de
+> forma útil — o chamado ficava de fora do Kanban/fila (`FilaRepo.fila` só mostra pedido "de fora do
+> setor", salvo exceção) e o autor não podia se autoatender. Isso trava um caso real: a diretoria quer
+> abrir um chamado (ex.: para o TI) sem entrar na plataforma como staff — alguém do próprio setor abre
+> em nome da demanda, só que ela precisa aparecer no quadro do setor como qualquer outra, igual já
+> acontecia no Marketing/RH. `departamentos.autoatendimento` passa a `true` para **todos** os setores
+> (`UPDATE departamentos SET autoatendimento = true`, `0047`) e o **default da coluna** também vira
+> `true` (setor novo cadastrado depois já nasce com a regra, sem UPDATE manual). Nenhuma policy SQL
+> nova: `chamados_update_staff`/`mensagens_insert` (`0042`) já liam a coluna de forma genérica, sem
+> nome de setor hardcoded — só a **coluna de dados** mudou. Efeito prático: qualquer setor agora é, ao
+> mesmo tempo, suporte (recebe chamado de fora) **e** quadro Trello (gerencia as próprias demandas) —
+> a distinção "suporte clássico vs. autoatendimento" descrita acima deixa de ser por setor e passa a
+> valer por chamado (quem abriu é do mesmo setor de destino, ou não).
 
-Matriz consolidada (Seção 4.3/5 da spec, **reescrita** no modelo vigente — `0020`/`0027`/`0028`/`0038`/`0042`):
+Matriz consolidada (Seção 4.3/5 da spec, **reescrita** no modelo vigente — `0020`/`0027`/`0028`/`0038`/`0042`/`0047`):
 
 O eixo deixou de ser só "TI = tudo, resto = só o setor": hoje depende de **três coisas** — o setor de
 **destino** do chamado, o setor de **origem** (autor) de quem está olhando, e se esse setor tem
@@ -333,7 +349,7 @@ exclusividade sobre gestão de catálogos/usuários/planos.
 | Ver fila do setor (chamados "de fora", `fila()`) | — | Sim, só do **próprio** setor de destino (TI incluído, `0020`) | Não (sem fila) | — |
 | Ver chamados abertos por **colega do mesmo setor de origem**, p/ qualquer destino (`chamados_departamento()`) | — | Não (só a própria fila) | **Sim, só leitura** (`0028`) | — |
 | Atender: mudar status/prioridade/atribuir, responder | Não | Sim, só no seu setor de **destino** | **Não** (view-only; UI esconde as ações) | — |
-| **Autoatendimento** (ser responsável + postar como staff no próprio chamado) | Só se o setor de destino tem `autoatendimento=true` (Marketing/RH, `0038`/`0042`) | idem — só nos setores com a flag | — | — |
+| **Autoatendimento** (ser responsável + postar como staff no próprio chamado) | Sim, em qualquer setor (`autoatendimento=true` por padrão em todos desde `0047`; era só Marketing/RH em `0038`/`0042`) | idem | — | — |
 | Transferir chamado p/ outro departamento | Não | Não | Não | **Sim**, mas só em chamado já na fila do TI (`WITH CHECK auth_is_ti()`, `USING` não abre exceção) |
 | Ver `is_interna = true` | Não | Sim (do seu setor) | Sim (dos que enxerga por `0028`) | — |
 | Criar nota interna | Não | Sim | Não | — |
@@ -911,7 +927,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | Ações rápidas + histórico (status/prioridade/atribuição) | ✅ Implementado | 4 | Cada mudança grava `historico_chamados`; prioridade recalcula SLA (trigger); `respondido_em` na 1ª resposta pública. Escopo por RLS (TI tudo, RH/Mkt seu setor). |
 | **Iniciar atendimento + barra de SLA + repasse por TI** | ✅ Implementado | 3 | Botão "Iniciar atendimento" (NOVO→EM_ATENDIMENTO + assume). **Barra de progresso** de SLA (`barra_sla`, verde→amarelo na metade→vermelho; largura via CSSOM CSP-safe). Responsável atribuível **só do setor do chamado**; **TI repassa** para outro departamento (`transferir`; RLS já restringe ao TI, sem migration). Testes verdes. |
 | Notas internas (`is_interna`) | ✅ Implementado | 4 | Toggle no composer (fundo amarelo via `workspace.js`); `is_interna` decidido no servidor; RLS+Realtime não entregam ao solicitante (validado e2e na `0010`). |
-| Chat Realtime (supabase-js direto) | ✅ Implementado | 3 | `0011` (publicação Realtime em `mensagens`) + `chat.js` (assina `postgres_changes` por `chamado_id`, JWT do usuário, RLS na entrega) → refresh do fragmento HTMX; **fallback polling 10s**. Usado no portal **e** no workspace. |
+| Chat Realtime (supabase-js direto) | ✅ Implementado | 3 | `0011` (publicação Realtime em `mensagens`) + `chat.js` (assina `postgres_changes` por `chamado_id`, JWT do usuário, RLS na entrega) → refresh do fragmento HTMX; **fallback polling 10s**. Usado no portal **e** no workspace. **🔁 2026-07-17:** miniatura clicável 64×64 pra anexos de imagem (mime já validado no upload) + `paragrafos_mensagem()` (`app/templating.py`) rejunta texto colado com quebra manual e reformata na largura real do balão, preservando listas/tópicos linha a linha; coluna de conversa em `atendimento.html` ganhou mais espaço (2/3→3/4) frente ao painel de Ações. Ver `docs/CHANGELOG.md`. |
 | Painel Admin + KPIs + Export CSV | ✅ Implementado | 5 | `/admin`: KPIs (total/abertos/resolvidos, **conformidade de SLA**, **CSAT**, **TMA**), gráficos **Chart.js** (status, CSAT 1–5, por departamento, produtividade por operador), **painel "Últimas avaliações"** (feedback qualitativo), **gestão** de departamentos/categorias (criar/ativar-desativar, **só TI**) + planos (leitura), e **`GET /admin/export/csv`** (inclui `avaliacao_comentario`). Testado + fluxo e2e ao vivo. |
 | **Admin de departamento (papéis por setor)** | ✅ Implementado | 4 | `/admin` agora entra p/ **TI** (tudo + gestão) **e ADMIN de setor** (role `ADMIN`+`departamento_id`, ex.: gestor RH) — vê indicadores **só do seu setor** (CSAT/SLA/rapidez/avaliações; RLS escopa). OPERADOR/CLIENTE = 403. Gestão de catálogos só TI. `registro_usuarios.sql` documenta OPERADOR×ADMIN + exemplo de gestor RH. Testado (`test_admin`). |
 | **Sino de notificações em tempo real** | ✅ Implementado + **validado ao vivo** | 4 | `notificacoes.js` assina Realtime de `chamados`+`mensagens` (RLS na entrega) e acende/toca o sino + recarrega a lista a cada mudança significativa. Migration `0016_realtime_chamados` (publicação = `chamados, mensagens`). Rota `/realtime/config` (JWT do usuário). Fluxo depto→visibilidade revalidado (RH só vê RH). |

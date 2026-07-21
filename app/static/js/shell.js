@@ -77,4 +77,64 @@
     if (isNaN(p)) p = 0;
     el.style.width = Math.max(0, Math.min(100, p)) + "%";
   });
+
+  // ---- Anexos: <input type="file" multiple> nativo troca a seleção inteira
+  // toda vez que o picker reabre — só acumula se o usuário marcar vários
+  // arquivos num único diálogo. Aqui a seleção anterior é preservada e
+  // mesclada com a nova via DataTransfer, então dá pra anexar um arquivo por
+  // vez (mesmo padrão usado nos 3 forms com anexo: abertura de chamado, chat
+  // do Portal e do Workspace). Lista de chips abaixo do input mostra o que já
+  // foi selecionado, com botão pra remover individualmente.
+  document.querySelectorAll('input[type="file"][multiple]').forEach(function (input) {
+    var acumulado = [];
+    var lista = document.createElement("div");
+    lista.className = "flex flex-wrap gap-1.5 mt-1.5";
+    lista.setAttribute("data-anexos-lista", "");
+    input.insertAdjacentElement("afterend", lista);
+
+    function chave(f) {
+      return f.name + ":" + f.size + ":" + f.lastModified;
+    }
+
+    function sincronizarInput() {
+      var dt = new DataTransfer();
+      acumulado.forEach(function (f) { dt.items.add(f); });
+      input.files = dt.files;
+    }
+
+    function renderizar() {
+      lista.innerHTML = "";
+      acumulado.forEach(function (f, i) {
+        var chip = document.createElement("span");
+        chip.className = "inline-flex items-center gap-1 rounded-md bg-surface2 px-2 py-0.5 text-[11px] font-medium text-navy";
+        var nome = document.createElement("span");
+        nome.textContent = f.name;
+        chip.appendChild(nome);
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "text-muted hover:text-sla-danger font-bold leading-none";
+        btn.setAttribute("aria-label", "Remover " + f.name);
+        btn.textContent = "×";
+        btn.addEventListener("click", function () {
+          acumulado.splice(i, 1);
+          sincronizarInput();
+          renderizar();
+        });
+        chip.appendChild(btn);
+        lista.appendChild(chip);
+      });
+    }
+
+    input.addEventListener("change", function () {
+      var chaves = acumulado.map(chave);
+      Array.prototype.forEach.call(input.files, function (f) {
+        if (chaves.indexOf(chave(f)) === -1) {
+          acumulado.push(f);
+          chaves.push(chave(f));
+        }
+      });
+      sincronizarInput();
+      renderizar();
+    });
+  });
 })();

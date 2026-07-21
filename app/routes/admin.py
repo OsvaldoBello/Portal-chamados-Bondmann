@@ -25,7 +25,7 @@ import io
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
 
 from app import cache
@@ -124,9 +124,42 @@ def _base_ctx(ctx: AdminCtx) -> dict:
     }
 
 
+def _parse_periodo(periodo: str) -> tuple[int, int]:
+    """Aceita ``YYYY-MM`` (input type="month"); cai no mês corrente se ausente/
+    inválido. Mesmo formato já usado por ``salvar_marketing_midia``."""
+    if periodo:
+        try:
+            ano_s, mes_s = periodo.strip().split("-", 1)
+            ano, mes = int(ano_s), int(mes_s)
+            if 1 <= mes <= 12:
+                return ano, mes
+        except (ValueError, TypeError):
+            pass
+    hoje = datetime.now(UTC)
+    return hoje.year, hoje.month
+
+
+def _limites_periodo(ano: int, mes: int) -> tuple[datetime, datetime]:
+    inicio = datetime(ano, mes, 1, tzinfo=UTC)
+    fim = datetime(ano + 1, 1, 1, tzinfo=UTC) if mes == 12 else datetime(ano, mes + 1, 1, tzinfo=UTC)
+    return inicio, fim
+
+
+def _periodo_vizinho(ano: int, mes: int, *, delta: int) -> str:
+    """``delta`` +1/-1 mês, devolvido já como ``YYYY-MM`` pro link do seletor."""
+    novo_mes = mes + delta
+    novo_ano = ano
+    if novo_mes < 1:
+        novo_mes, novo_ano = 12, ano - 1
+    elif novo_mes > 12:
+        novo_mes, novo_ano = 1, ano + 1
+    return f"{novo_ano:04d}-{novo_mes:02d}"
+
+
 @router.get("")
 async def dashboard(
     request: Request,
+    periodo: str = "",
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
 ):
@@ -138,15 +171,43 @@ async def dashboard(
     dep_id = str(ctx.perfil.get("departamento_id") or "") or None
     escopo = ctx.escopo
 
-    kpis = await repo.kpis(claims, departamento_id=dep_id, todos_setores=False)
+    # Indicadores são mensais (2026-07-21): tudo escopado ao mês selecionado —
+    # nunca escreve/apaga nada, é sempre um recorte por período em cima dos
+    # chamados já existentes (created_at). Mês ausente/errado cai no atual.
+    ano, mes = _parse_periodo(periodo)
+    periodo_inicio, periodo_fim = _limites_periodo(ano, mes)
+    periodo_str = f"{ano:04d}-{mes:02d}"
+
+    kpis = await repo.kpis(
+        claims, departamento_id=dep_id, todos_setores=False,
+        periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+    )
     graficos = {
-        "por_status": await repo.por_status(claims, departamento_id=dep_id, todos_setores=False),
-        "csat": await repo.csat_distribuicao(claims, departamento_id=dep_id, todos_setores=False),
-        "por_departamento": await repo.por_departamento(claims, departamento_id=dep_id, todos_setores=False),
-        "por_setor": await repo.por_setor(claims, departamento_id=dep_id, todos_setores=False),
-        "produtividade": await repo.produtividade(claims, departamento_id=dep_id, todos_setores=False),
+        "por_status": await repo.por_status(
+            claims, departamento_id=dep_id, todos_setores=False,
+            periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+        ),
+        "csat": await repo.csat_distribuicao(
+            claims, departamento_id=dep_id, todos_setores=False,
+            periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+        ),
+        "por_departamento": await repo.por_departamento(
+            claims, departamento_id=dep_id, todos_setores=False,
+            periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+        ),
+        "por_setor": await repo.por_setor(
+            claims, departamento_id=dep_id, todos_setores=False,
+            periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+        ),
+        "produtividade": await repo.produtividade(
+            claims, departamento_id=dep_id, todos_setores=False,
+            periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+        ),
     }
-    avaliacoes = await repo.avaliacoes_recentes(claims, departamento_id=dep_id, todos_setores=False)
+    avaliacoes = await repo.avaliacoes_recentes(
+        claims, departamento_id=dep_id, todos_setores=False,
+        periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+    )
 
     if escopo == "Marketing":
         mkt_data = await repo.mkt_dashboard_data(claims)
@@ -173,8 +234,34 @@ async def dashboard(
             "avaliacoes": avaliacoes,
             "departamentos": [],
             "departamento_sel": "",
+            "periodo": periodo_str,
+            "periodo_anterior": _periodo_vizinho(ano, mes, delta=-1),
+            "periodo_seguinte": _periodo_vizinho(ano, mes, delta=1),
         },
     )
+
+
+@router.get("/indicadores/avaliacoes")
+async def avaliacoes_por_nota(
+    request: Request,
+    nota: int = 0,
+    periodo: str = "",
+    busca: str = "",
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+):
+    """Fragmento HTMX: lista de chamados com uma nota de CSAT específica —
+    conteúdo do modal aberto ao clicar numa barra de "Distribuição do CSAT"."""
+    if nota not in (1, 2, 3, 4, 5):
+        return render(request, "admin/_avaliacoes_lista.html", {"chamados": [], "nota": nota})
+    dep_id = str(ctx.perfil.get("departamento_id") or "") or None
+    ano, mes = _parse_periodo(periodo)
+    periodo_inicio, periodo_fim = _limites_periodo(ano, mes)
+    chamados = await repo.chamados_por_nota(
+        ctx.user.claims, nota=nota, departamento_id=dep_id, todos_setores=False,
+        busca=busca, periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+    )
+    return render(request, "admin/_avaliacoes_lista.html", {"chamados": chamados, "nota": nota})
 
 
 @router.get("/gestao")
@@ -548,6 +635,7 @@ async def usuarios(
 @router.post("/usuarios")
 async def criar_usuario(
     request: Request,
+    background_tasks: BackgroundTasks,
     nome: str = Form(""),
     email: str = Form(...),
     senha: str = Form(...),
@@ -608,6 +696,13 @@ async def criar_usuario(
 
     # O trigger criou o perfil CLIENTE sem setor; sempre promovemos papel+setor.
     await repo.atualizar_papel(ctx.user.claims, str(novo.id), role=papel, departamento_id=dep_id)
+
+    # Boas-vindas por e-mail (2026-07-21): instrui o primeiro acesso via
+    # "Esqueci minha senha" — em background pra não atrasar a resposta (mesmo
+    # padrão de app.notification.agendar_notificacao_email).
+    from app.notification import notificar_novo_usuario_email
+
+    background_tasks.add_task(notificar_novo_usuario_email, nome, email)
 
     # Foto de perfil (opcional, Fase 7): o TI já pode enviá-la na criação da
     # conta. O upload usa a service_role key (não o JWT do TI) porque a policy

@@ -64,13 +64,15 @@ class FilaRepo:
         ``ChamadosRepo.listar``.
 
         **Departamentos com autoatendimento** (``departamentos.autoatendimento`` —
-        hoje Marketing e RH, migrations 0038/0042): o setor não funciona como
-        suporte (alguém de fora abre, alguém do setor atende) — é um quadro estilo
-        Trello onde o próprio time cria e gerencia as demandas. Por isso, pra
-        chamados destinados a um desses departamentos, o recorte "de fora do
-        setor" não se aplica: toda demanda do departamento aparece aqui
-        (kanban/fila), inclusive as próprias e as de colega, além de continuar em
-        ``ChamadosRepo.listar`` ("Meus chamados").
+        todos os setores desde a migration 0047, generalizado a partir da exceção
+        original de Marketing e RH, migrations 0038/0042): o setor não funciona só
+        como suporte (alguém de fora abre, alguém do setor atende) — também é um
+        quadro estilo Trello onde o próprio time cria e gerencia demandas (ex.: a
+        diretoria abre um chamado pro TI sem precisar entrar na plataforma como
+        staff). Por isso, pra chamados destinados a um departamento com a flag, o
+        recorte "de fora do setor" não se aplica: toda demanda do departamento
+        aparece aqui (kanban/fila), inclusive as próprias e as de colega, além de
+        continuar em ``ChamadosRepo.listar`` ("Meus chamados").
 
         Filtros opcionais: ``status``, ``categoria_id``, ``prioridade``,
         ``operador_id``, ``setor`` (setor solicitante, texto livre) e o período
@@ -193,8 +195,8 @@ class FilaRepo:
     async def fila_stats(self, claims: dict, *, departamento_id: str | None = None) -> dict[str, int]:
         """Contagem por status no escopo da fila/kanban (cabeçalhos), mesmo
         recorte de :meth:`fila` — não conta chamados próprios nem de colegas,
-        exceto nos departamentos com autoatendimento (quadro Trello: toda
-        demanda do setor conta)."""
+        exceto nos departamentos com autoatendimento (todos, desde a 0047;
+        quadro Trello: toda demanda do setor conta)."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """SELECT c.status, count(*) AS n

@@ -189,6 +189,15 @@ async def novo_chamado_form(
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
+    # Avaliação pendente bloqueia a abertura de um novo chamado (2026-07-21):
+    # quem tem um atendimento RESOLVIDO ainda sem nota (1-5 ★) é mandado pra lá
+    # primeiro, em vez do formulário de abertura.
+    pendente = await repo.avaliacao_pendente(ctx.user.claims)
+    if pendente is not None:
+        return RedirectResponse(
+            f"/portal/chamados/{pendente['id']}?avaliar_pendente=1",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
     return await _render_form(request, ctx, repo)
 
 
@@ -394,6 +403,7 @@ async def criar_chamado(
 async def detalhe_chamado(
     request: Request,
     chamado_id: str,
+    avaliar_pendente: str = "",
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
@@ -419,6 +429,7 @@ async def detalhe_chamado(
             "chamado": chamado,
             "mensagens": mensagens,
             "pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id),
+            "avaliar_pendente": bool(avaliar_pendente),
             "observadores": observadores,
             "usuarios_copia": usuarios_copia,
             # Config do Realtime no browser (Seção 6.1): anon key + JWT do usuário.

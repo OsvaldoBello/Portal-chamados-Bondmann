@@ -25,7 +25,7 @@ class AtendimentoRepo:
                 """
                 SELECT c.id, c.codigo, c.titulo, c.descricao, c.status, c.prioridade,
                        c.cliente_id, c.operador_id, c.departamento_id, c.data_entrega,
-                       c.sem_prazo,
+                       c.sem_prazo, c.categoria_id, c.subcategoria_id,
                        c.created_at, c.limite_resposta, c.limite_resolucao,
                        c.respondido_em, c.resolvido_em,
                        c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
@@ -130,6 +130,29 @@ class AtendimentoRepo:
                 )
             return dict(row) if row else None
 
+    async def avaliacao_pendente(self, claims: dict) -> dict[str, Any] | None:
+        """O chamado RESOLVIDO mais antigo do próprio autor ainda sem avaliação
+        (1-5 ★), se houver — usado para redirecionar quem tenta abrir um novo
+        chamado antes de avaliar o anterior (2026-07-21). Mesmo recorte de
+        ``MensagensRepo.notificacoes`` (resolvido + sem nota + próprio autor),
+        aqui restrito a um único registro e explicitamente filtrado por
+        ``cliente_id`` (a rota que consome isto é aberta a qualquer papel
+        autenticado, não só CLIENTE — RLS por si só não estreita o bastante)."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, codigo, titulo
+                  FROM chamados
+                 WHERE cliente_id = $1::uuid
+                   AND status = 'RESOLVIDO'
+                   AND avaliacao_nota IS NULL
+                 ORDER BY resolvido_em ASC NULLS LAST
+                 LIMIT 1
+                """,
+                claims["sub"],
+            )
+            return dict(row) if row else None
+
     async def iniciar_atendimento(
         self, claims: dict, chamado_id: str, *, operador_id: str, novo_status: str = "EM_ATENDIMENTO"
     ) -> dict[str, Any] | None:
@@ -148,10 +171,11 @@ class AtendimentoRepo:
         "Em atendimento"; senão devolve None). Segregação de função: o autor do
         chamado nunca pode assumir o próprio chamado, mesmo sendo staff do setor
         de destino (devolve None) — **exceto nos departamentos com
-        autoatendimento** (``departamentos.autoatendimento`` — Marketing e RH,
+        autoatendimento** (``departamentos.autoatendimento`` — todos os setores desde
+        a migration 0047, generalizado a partir da exceção original de Marketing/RH,
         migrations 0038/0042), onde o próprio setor cria e gerencia as demandas
-        (quadro estilo Trello, sem a lógica de suporte de TI). Registra
-        ``ATENDIMENTO_INICIADO`` no histórico. Escopo por RLS (staff)."""
+        (quadro estilo Trello). Registra ``ATENDIMENTO_INICIADO`` no histórico.
+        Escopo por RLS (staff)."""
         async with rls_connection(claims) as conn:
             atual = await conn.fetchrow(
                 """
@@ -290,6 +314,34 @@ class AtendimentoRepo:
             )
             return dict(row)
 
+    async def alterar_categoria(
+        self, claims: dict, chamado_id: str, *,
+        categoria_id: str | None, subcategoria_id: str | None,
+    ) -> dict[str, Any] | None:
+        """Altera categoria/subcategoria de um chamado já aberto (staff no
+        escopo) + histórico. O par categoria/departamento e categoria/
+        subcategoria já foi validado na rota (mesma regra de
+        ``CatalogoRepo`` usada na abertura, Seção 5)."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE chamados
+                   SET categoria_id = $2::uuid, subcategoria_id = $3::uuid
+                 WHERE id = $1::uuid
+             RETURNING id, categoria_id, subcategoria_id
+                """,
+                chamado_id,
+                categoria_id,
+                subcategoria_id,
+            )
+            if row is None:
+                return None
+            await self._registrar(
+                conn, chamado_id, claims["sub"], "CATEGORIA_ALTERADA",
+                {"categoria_id": categoria_id, "subcategoria_id": subcategoria_id},
+            )
+            return dict(row)
+
     async def atribuir(
         self, claims: dict, chamado_id: str, operador_id: str | None
     ) -> dict[str, Any] | None:
@@ -298,8 +350,8 @@ class AtendimentoRepo:
         Segregação de função: não deixa atribuir o autor do chamado como o
         próprio responsável (devolve None nesse caso — a UI já não lista o
         autor entre os operadores, isto é defesa em profundidade) — **exceto
-        nos departamentos com autoatendimento** (Marketing e RH), onde o autor
-        É o dono da própria demanda no quadro."""
+        nos departamentos com autoatendimento** (todos os setores desde a 0047),
+        onde o autor É o dono da própria demanda no quadro."""
         async with rls_connection(claims) as conn:
             atual = await conn.fetchrow(
                 """

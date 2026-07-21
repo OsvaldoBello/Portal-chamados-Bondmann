@@ -44,8 +44,9 @@ class FakeRepo:
     """Implementa a superfície usada pelas rotas do portal."""
 
     def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None,
-                 role="CLIENTE", departamento_id=None, chamados_colegas=None):
+                 role="CLIENTE", departamento_id=None, chamados_colegas=None, avaliacao_pendente=None):
         self._chamado = chamado
+        self._avaliacao_pendente = avaliacao_pendente
         self._role = role
         self._departamento_id = departamento_id
         self._chamados_colegas = chamados_colegas if chamados_colegas is not None else []
@@ -96,6 +97,9 @@ class FakeRepo:
 
     async def obter(self, claims, chamado_id):
         return self._chamado
+
+    async def avaliacao_pendente(self, claims):
+        return self._avaliacao_pendente
 
     async def mensagens(self, claims, chamado_id):
         return []
@@ -669,3 +673,30 @@ def test_remover_observador():
         )
     assert resp.status_code == 303
     assert repo.observadores_removidos == [("aaa", "u9")]
+
+
+# --------------------------------------------------------------------------
+# 2026-07-21: avaliação pendente bloqueia a abertura de um novo chamado.
+# --------------------------------------------------------------------------
+def test_abrir_chamado_com_avaliacao_pendente_e_redirecionado():
+    repo = FakeRepo(avaliacao_pendente={"id": "res1", "codigo": "BOND-2026-00099", "titulo": "Impressora"})
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/novo", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/portal/chamados/res1?avaliar_pendente=1"
+
+
+def test_abrir_chamado_sem_pendencia_mostra_formulario():
+    repo = FakeRepo(avaliacao_pendente=None)
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/novo")
+    assert resp.status_code == 200
+    assert "Selecione o departamento" in resp.text
+
+
+def test_detalhe_com_avaliar_pendente_mostra_aviso():
+    repo = FakeRepo(chamado=_chamado(status="RESOLVIDO"))
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa?avaliar_pendente=1")
+    assert resp.status_code == 200
+    assert "Antes de abrir um novo chamado" in resp.text

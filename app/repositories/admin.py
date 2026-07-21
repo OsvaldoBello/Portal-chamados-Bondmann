@@ -8,6 +8,7 @@ pelas policies `*_admin_all` (também `auth_is_ti()`).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from app.db import admin_connection, rls_connection
@@ -32,7 +33,8 @@ class AdminRepo:
 
     # ---- KPIs -----------------------------------------------------------
     async def kpis(
-        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
+        periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> dict[str, Any]:
         async with self._kpi_scope(claims, todos_setores) as conn:
             row = await conn.fetchrow(
@@ -50,8 +52,12 @@ class AdminRepo:
                     FILTER (WHERE resolvido_em IS NOT NULL)            AS tma_seg
                 FROM chamados
                 WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                  AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+                  AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
                 """,
                 departamento_id,
+                periodo_inicio,
+                periodo_fim,
             )
         d = dict(row)
         resolvidos = d["resolvidos"] or 0
@@ -62,34 +68,45 @@ class AdminRepo:
         return d
 
     async def por_status(
-        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
+        periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> dict[str, int]:
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """SELECT status, count(*) n FROM chamados
                     WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                      AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
                     GROUP BY status""",
                 departamento_id,
+                periodo_inicio,
+                periodo_fim,
             )
         por = {r["status"]: r["n"] for r in rows}
         return {s: por.get(s, 0) for s in ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")}
 
     async def csat_distribuicao(
-        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
+        periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> dict[int, int]:
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """SELECT avaliacao_nota n, count(*) c FROM chamados
                     WHERE avaliacao_nota IS NOT NULL
                       AND ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                      AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
                     GROUP BY 1""",
                 departamento_id,
+                periodo_inicio,
+                periodo_fim,
             )
         por = {int(r["n"]): r["c"] for r in rows}
         return {i: por.get(i, 0) for i in range(1, 6)}
 
     async def produtividade(
-        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
+        periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> list[dict[str, Any]]:
         """Chamados resolvidos por operador (produtividade)."""
         async with self._kpi_scope(claims, todos_setores) as conn:
@@ -100,38 +117,84 @@ class AdminRepo:
                        count(*) AS atribuidos
                   FROM chamados c LEFT JOIN perfis op ON op.id = c.operador_id
                  WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                   AND ($2::timestamptz IS NULL OR c.created_at >= $2::timestamptz)
+                   AND ($3::timestamptz IS NULL OR c.created_at < $3::timestamptz)
                  GROUP BY op.nome ORDER BY resolvidos DESC NULLS LAST LIMIT 15
                 """,
                 departamento_id,
+                periodo_inicio,
+                periodo_fim,
             )
             return [dict(r) for r in rows]
 
     async def avaliacoes_recentes(
         self, claims: dict, *, limite: int = 8, departamento_id: str | None = None,
         todos_setores: bool = False,
+        periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> list[dict[str, Any]]:
         """Últimas avaliações (CSAT) com comentário do solicitante, para o TI ver
-        o feedback qualitativo — não só a média. Nota sempre; comentário opcional."""
+        o feedback qualitativo — não só a média. Nota sempre; comentário opcional.
+        Inclui ``id`` do chamado para linkar direto ao detalhe (Workspace)."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
-                SELECT c.codigo, c.titulo, c.avaliacao_nota AS nota,
+                SELECT c.id, c.codigo, c.titulo, c.avaliacao_nota AS nota,
                        c.avaliacao_comentario AS comentario, c.avaliacao_em AS em,
                        autor.nome AS solicitante
                   FROM chamados c
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                  WHERE c.avaliacao_nota IS NOT NULL
                    AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
+                   AND ($3::timestamptz IS NULL OR c.created_at >= $3::timestamptz)
+                   AND ($4::timestamptz IS NULL OR c.created_at < $4::timestamptz)
                  ORDER BY c.avaliacao_em DESC NULLS LAST
                  LIMIT $1
                 """,
                 limite,
                 departamento_id,
+                periodo_inicio,
+                periodo_fim,
+            )
+            return [dict(r) for r in rows]
+
+    async def chamados_por_nota(
+        self, claims: dict, *, nota: int, departamento_id: str | None = None,
+        todos_setores: bool = False, busca: str | None = None,
+        periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
+        limite: int = 300,
+    ) -> list[dict[str, Any]]:
+        """Chamados com uma nota de CSAT específica (1-5) — alimenta o modal que
+        abre ao clicar numa barra do gráfico "Distribuição do CSAT"."""
+        busca_norm = f"%{busca.strip()}%" if busca and busca.strip() else None
+        async with self._kpi_scope(claims, todos_setores) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT c.id, c.codigo, c.titulo, c.status, c.avaliacao_nota AS nota,
+                       c.avaliacao_comentario AS comentario, c.avaliacao_em AS em,
+                       autor.nome AS solicitante
+                  FROM chamados c
+                  LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                 WHERE c.avaliacao_nota = $1
+                   AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
+                   AND ($3::timestamptz IS NULL OR c.created_at >= $3::timestamptz)
+                   AND ($4::timestamptz IS NULL OR c.created_at < $4::timestamptz)
+                   AND ($5::text IS NULL OR c.codigo ILIKE $5 OR c.titulo ILIKE $5
+                        OR autor.nome ILIKE $5)
+                 ORDER BY c.avaliacao_em DESC NULLS LAST
+                 LIMIT $6
+                """,
+                nota,
+                departamento_id,
+                periodo_inicio,
+                periodo_fim,
+                busca_norm,
+                limite,
             )
             return [dict(r) for r in rows]
 
     async def por_departamento(
-        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
+        periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> list[dict[str, Any]]:
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
@@ -139,14 +202,19 @@ class AdminRepo:
                 SELECT COALESCE(d.nome, '—') AS departamento, count(*) AS total
                   FROM chamados c LEFT JOIN departamentos d ON d.id = c.departamento_id
                  WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                   AND ($2::timestamptz IS NULL OR c.created_at >= $2::timestamptz)
+                   AND ($3::timestamptz IS NULL OR c.created_at < $3::timestamptz)
                  GROUP BY d.nome ORDER BY total DESC
                 """,
                 departamento_id,
+                periodo_inicio,
+                periodo_fim,
             )
             return [dict(r) for r in rows]
 
     async def por_setor(
-        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
+        periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> list[dict[str, Any]]:
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
@@ -154,9 +222,13 @@ class AdminRepo:
                 SELECT COALESCE(setor, 'Não informado') AS setor, count(*) AS total
                   FROM chamados
                  WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                   AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+                   AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
                  GROUP BY setor ORDER BY total DESC
                 """,
                 departamento_id,
+                periodo_inicio,
+                periodo_fim,
             )
             return [dict(r) for r in rows]
 

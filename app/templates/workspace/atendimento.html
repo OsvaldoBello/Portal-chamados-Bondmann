@@ -128,7 +128,7 @@
     {% if pode_reivindicar %}
     {# Iniciar atendimento: assume o chamado e move para "Em atendimento". Só
        aparece pra quem NÃO é o autor — exceto nos departamentos com
-       autoatendimento (Marketing/RH), onde o autor é o dono da própria
+       autoatendimento (todos, desde a 0047), onde o autor é o dono da própria
        demanda (quadro estilo Trello, sem segregação 0029). #}
     <form method="post" action="/workspace/chamados/{{ chamado.id }}/iniciar{% if origem %}?origem={{ origem }}{% endif %}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -195,6 +195,29 @@
           {% endfor %}
         </select>
         <p class="text-[11px] text-muted">Alterar a prioridade recalcula os prazos de SLA.</p>
+      </form>
+
+      <form method="post" action="/workspace/chamados/{{ chamado.id }}/categoria{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-1.5 pt-1 border-t border-line/60">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label class="block text-[13px] font-semibold text-navy pt-3">Categoria</label>
+        <select name="categoria_id" id="categoria-edit-select"
+                hx-get="/workspace/chamados/{{ chamado.id }}/subcategorias" hx-target="#subcategoria-edit-select"
+                hx-swap="innerHTML" hx-trigger="change"
+                class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+          <option value="">— Sem categoria —</option>
+          {% for c in categorias_edit %}
+          <option value="{{ c.id }}" {% if chamado.categoria_id and c.id|string == chamado.categoria_id|string %}selected{% endif %}>{{ c.nome }}</option>
+          {% endfor %}
+        </select>
+        <label class="block text-[13px] font-semibold text-navy">Subcategoria</label>
+        <select name="subcategoria_id" id="subcategoria-edit-select"
+                class="w-full px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+          <option value="">{% if subcategorias_edit %}— Sem subcategoria —{% else %}Esta categoria não tem subcategorias{% endif %}</option>
+          {% for s in subcategorias_edit %}
+          <option value="{{ s.id }}" {% if chamado.subcategoria_id and s.id|string == chamado.subcategoria_id|string %}selected{% endif %}>{{ s.nome }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="w-full py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 transition">Salvar categoria</button>
       </form>
 
       <form method="post" action="/workspace/chamados/{{ chamado.id }}/atribuir{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-1.5">

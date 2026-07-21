@@ -32,10 +32,82 @@
       stLabels.map(function (k) { return st[k]; }),
       stLabels.map(function (k) { return STATUS_COR[k] || NAVY; }));
 
-  // CSAT 1..5
+  // CSAT 1..5 — clicar numa barra abre o modal com os chamados daquela nota
+  // (Seção "Distribuição do CSAT"). Sem Alpine: mesmo padrão vanilla JS do
+  // resto do painel admin.
   var cs = d.csat || {};
-  bar("chart-csat", ["1★", "2★", "3★", "4★", "5★"],
-      [1, 2, 3, 4, 5].map(function (n) { return cs[n] || 0; }), GREEN);
+  var csatCanvas = document.getElementById("chart-csat");
+  if (csatCanvas) {
+    new window.Chart(csatCanvas, {
+      type: "bar",
+      data: {
+        labels: ["1★", "2★", "3★", "4★", "5★"],
+        datasets: [{ data: [1, 2, 3, 4, 5].map(function (n) { return cs[n] || 0; }), backgroundColor: GREEN, borderRadius: 4 }],
+      },
+      options: {
+        plugins: { legend: { display: false } },
+        scales: { x: { grid: { display: false } }, y: { beginAtZero: true, ticks: { precision: 0 } } },
+        onClick: function (evt, elements) {
+          if (!elements.length) return;
+          abrirModalCsat(elements[0].index + 1);
+        },
+        onHover: function (evt, elements) {
+          evt.native.target.style.cursor = elements.length ? "pointer" : "default";
+        },
+      },
+    });
+  }
+
+  // ---- Modal "Chamados desta nota" -------------------------------------
+  var modal = document.getElementById("csat-modal");
+  var modalTitulo = document.getElementById("csat-modal-titulo");
+  var modalBusca = document.getElementById("csat-modal-busca");
+  var notaAtual = null;
+
+  function carregarModalCsat() {
+    if (!modal || !window.htmx || notaAtual === null) return;
+    var params = new URLSearchParams({
+      nota: String(notaAtual),
+      periodo: modal.dataset.periodo || "",
+      departamento: modal.dataset.departamento || "",
+      busca: (modalBusca && modalBusca.value) || "",
+    });
+    window.htmx.ajax("GET", "/admin/indicadores/avaliacoes?" + params.toString(), {
+      target: "#csat-modal-lista", swap: "innerHTML",
+    });
+  }
+
+  window.abrirModalCsat = function (nota) {
+    if (!modal) return;
+    notaAtual = nota;
+    if (modalTitulo) modalTitulo.textContent = "Chamados avaliados com " + nota + " estrela" + (nota > 1 ? "s" : "");
+    if (modalBusca) modalBusca.value = "";
+    modal.hidden = false;
+    carregarModalCsat();
+  };
+
+  function fecharModalCsat() {
+    if (modal) modal.hidden = true;
+    notaAtual = null;
+  }
+
+  var fecharBtn = document.getElementById("csat-modal-fechar");
+  if (fecharBtn) fecharBtn.addEventListener("click", fecharModalCsat);
+  if (modal) {
+    modal.addEventListener("click", function (evt) {
+      if (evt.target === modal) fecharModalCsat();
+    });
+  }
+  document.addEventListener("keydown", function (evt) {
+    if (evt.key === "Escape" && modal && !modal.hidden) fecharModalCsat();
+  });
+  if (modalBusca) {
+    var buscaTimer = null;
+    modalBusca.addEventListener("input", function () {
+      clearTimeout(buscaTimer);
+      buscaTimer = setTimeout(carregarModalCsat, 350);
+    });
+  }
 
   // Departamento
   var dep = d.por_departamento || [];

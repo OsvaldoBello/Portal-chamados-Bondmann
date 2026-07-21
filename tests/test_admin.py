@@ -43,29 +43,42 @@ class FakeAdmin:
     async def is_ti(self, claims):
         return self._ti
 
-    async def kpis(self, claims, *, departamento_id=None, todos_setores=False):
+    async def kpis(self, claims, *, departamento_id=None, todos_setores=False,
+                   periodo_inicio=None, periodo_fim=None):
         return {"total": 10, "abertos": 4, "resolvidos": 6, "resolvidos_no_prazo": 5,
                 "conformidade_sla": 83.3, "csat_media": 4.5, "csat_respostas": 4,
                 "tma_horas": 12.0, "tma_seg": 43200}
 
-    async def por_status(self, claims, *, departamento_id=None, todos_setores=False):
+    async def por_status(self, claims, *, departamento_id=None, todos_setores=False,
+                          periodo_inicio=None, periodo_fim=None):
         return {"NOVO": 2, "EM_ATENDIMENTO": 2, "AGUARDANDO": 0, "RESOLVIDO": 6}
 
-    async def csat_distribuicao(self, claims, *, departamento_id=None, todos_setores=False):
+    async def csat_distribuicao(self, claims, *, departamento_id=None, todos_setores=False,
+                                 periodo_inicio=None, periodo_fim=None):
         return {1: 0, 2: 0, 3: 1, 4: 1, 5: 2}
 
-    async def por_departamento(self, claims, *, departamento_id=None, todos_setores=False):
+    async def por_departamento(self, claims, *, departamento_id=None, todos_setores=False,
+                                periodo_inicio=None, periodo_fim=None):
         return [{"departamento": "TI", "total": 7}, {"departamento": "RH", "total": 3}]
 
-    async def por_setor(self, claims, *, departamento_id=None, todos_setores=False):
+    async def por_setor(self, claims, *, departamento_id=None, todos_setores=False,
+                         periodo_inicio=None, periodo_fim=None):
         return [{"setor": "Financeiro", "total": 6}, {"setor": "Vendas", "total": 4}]
 
-    async def produtividade(self, claims, *, departamento_id=None, todos_setores=False):
+    async def produtividade(self, claims, *, departamento_id=None, todos_setores=False,
+                             periodo_inicio=None, periodo_fim=None):
         return [{"operador": "Op TI", "resolvidos": 6, "atribuidos": 8}]
 
-    async def avaliacoes_recentes(self, claims, *, limite=8, departamento_id=None, todos_setores=False):
-        return [{"codigo": "BOND-2026-00001", "titulo": "Impressora", "nota": 5,
+    async def avaliacoes_recentes(self, claims, *, limite=8, departamento_id=None, todos_setores=False,
+                                   periodo_inicio=None, periodo_fim=None):
+        return [{"id": "c1", "codigo": "BOND-2026-00001", "titulo": "Impressora", "nota": 5,
                  "comentario": "Ótimo atendimento", "solicitante": "Ana",
+                 "em": datetime(2026, 7, 1, tzinfo=UTC)}]
+
+    async def chamados_por_nota(self, claims, *, nota, departamento_id=None, todos_setores=False,
+                                 busca=None, periodo_inicio=None, periodo_fim=None, limite=300):
+        return [{"id": "c1", "codigo": "BOND-2026-00001", "titulo": "Impressora", "status": "RESOLVIDO",
+                 "nota": nota, "comentario": "Ótimo atendimento", "solicitante": "Ana",
                  "em": datetime(2026, 7, 1, tzinfo=UTC)}]
 
     async def departamentos(self, claims):
@@ -260,6 +273,56 @@ def test_ti_dashboard_ignora_tentativa_de_filtrar_outro_departamento():
         r = c.get("/admin?departamento=d2")
     assert r.status_code == 200
     assert "Indicadores de: <strong>TI</strong>" in r.text
+
+
+# --------------------------------------------------------------------------
+# 2026-07-21: indicadores mensais (seletor de mês) + modal de avaliações por nota.
+# --------------------------------------------------------------------------
+def test_dashboard_mes_ausente_cai_no_atual_e_mostra_setas():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert 'type="month"' in r.text
+    assert "Mês anterior" in r.text
+    assert "Próximo mês" in r.text
+
+
+def test_dashboard_aceita_mes_especifico_sem_apagar_nada():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin?periodo=2026-08")
+    assert r.status_code == 200
+    assert 'value="2026-08"' in r.text
+    # Setas continuam levando pro mês vizinho, preservando a navegação.
+    assert "periodo=2026-07" in r.text
+    assert "periodo=2026-09" in r.text
+
+
+def test_dashboard_mes_invalido_cai_no_atual():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin?periodo=lixo")
+    assert r.status_code == 200  # não quebra
+
+
+def test_csat_modal_fragmento_lista_chamados_da_nota():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin/indicadores/avaliacoes?nota=5")
+    assert r.status_code == 200
+    assert "BOND-2026-00001" in r.text
+    assert "Ótimo atendimento" in r.text
+
+
+def test_csat_modal_fragmento_nota_invalida_nao_quebra():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin/indicadores/avaliacoes?nota=9")
+    assert r.status_code == 200
+    assert "Nenhum chamado encontrado" in r.text
+
+
+def test_ultimas_avaliacoes_linka_pro_chamado_no_workspace():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert 'href="/workspace/chamados/c1"' in r.text
 
 
 def test_funcionario_do_ti_sem_papel_de_staff_recebe_403():

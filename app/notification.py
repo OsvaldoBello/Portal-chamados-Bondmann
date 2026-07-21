@@ -327,6 +327,124 @@ async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteu
     await enviar_email(email, assunto, corpo_texto, corpo_html, reply_to=reply_to)
 
 
+async def notificar_novo_usuario_email(nome: str, email: str) -> None:
+    """E-mail de boas-vindas ao criar uma conta pelo painel Admin (2026-07-21):
+    instrui o primeiro acesso via "Esqueci minha senha" (o TI cria a conta com
+    uma senha provisória — trocar por uma própria é o próprio fluxo de OTP de
+    recuperação do GoTrue, já existente em ``/esqueci-senha``, em vez de um
+    link mágico separado pra manter)."""
+    settings = get_settings()
+    site_url = settings.site_url.rstrip("/")
+    url_login = f"{site_url}/login"
+    url_senha = f"{site_url}/esqueci-senha"
+
+    assunto = "[Portal Bondmann] Sua conta foi criada — primeiro acesso"
+
+    corpo_texto = (
+        f"Olá, {nome}!\n\n"
+        f"Uma conta foi criada para você no Portal de Chamados Bondmann Química.\n\n"
+        f"Para o primeiro acesso:\n"
+        f"1. Acesse {url_login}\n"
+        f"2. Clique em \"Esqueci minha senha\" ({url_senha}) e informe o e-mail {email}\n"
+        f"3. Defina sua própria senha a partir do código enviado por e-mail\n\n"
+        f"Atenciosamente,\n"
+        f"Portal de Chamados Bondmann Química\n"
+    )
+
+    corpo_html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f8fafc;
+      color: #334155;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }}
+    .wrapper {{ width: 100%; background-color: #f8fafc; padding: 30px 15px; }}
+    .container {{
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+      border: 1px solid #e2e8f0;
+    }}
+    .header {{ background-color: #1e293b; padding: 24px; text-align: center; }}
+    .header-logo {{ color: #ffffff; font-weight: 800; font-size: 20px; letter-spacing: 0.05em; }}
+    .header-sub {{ color: #1d9e75; font-size: 10px; font-weight: bold; letter-spacing: 0.3em; margin-top: 4px; }}
+    .content {{ padding: 32px 24px; }}
+    .title {{ font-size: 18px; font-weight: 700; color: #0f172a; margin-top: 0; margin-bottom: 8px; }}
+    .steps {{
+      background-color: #f1f5f9;
+      border-left: 4px solid #1d9e75;
+      border-radius: 4px;
+      padding: 16px;
+      margin-bottom: 24px;
+      font-size: 14px;
+      line-height: 1.8;
+      color: #334155;
+    }}
+    .btn-container {{ text-align: center; margin-bottom: 24px; }}
+    .btn {{
+      display: inline-block;
+      background-color: #1e293b;
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 6px;
+      box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    }}
+    .footer {{
+      background-color: #f8fafc;
+      padding: 24px;
+      text-align: center;
+      font-size: 11px;
+      color: #94a3b8;
+      border-top: 1px solid #e2e8f0;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <div class="header-logo">BONDMANN</div>
+        <div class="header-sub">PORTAL DE CHAMADOS</div>
+      </div>
+      <div class="content">
+        <h2 class="title">Bem-vindo(a), {nome}!</h2>
+        <p style="margin-top:0; font-size:14px; color: #475569;">Sua conta no Portal de Chamados foi criada. Para o primeiro acesso:</p>
+        <div class="steps">
+          1. Acesse o portal<br>
+          2. Clique em <strong>"Esqueci minha senha"</strong><br>
+          3. Informe o e-mail <strong>{email}</strong> e defina sua própria senha
+        </div>
+        <div class="btn-container">
+          <a href="{url_senha}" class="btn">Definir minha senha</a>
+        </div>
+        <p style="font-size: 12px; color: #94a3b8; margin-bottom: 0;">Se o botão não funcionar, copie e cole o link no seu navegador:<br><a href="{url_senha}" style="color: #1d9e75; text-decoration: none;">{url_senha}</a></p>
+      </div>
+      <div class="footer">
+        Este é um e-mail automático enviado pelo Portal de Chamados Bondmann Química.<br>
+        Por favor, não responda diretamente a este endereço de e-mail.
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+    await enviar_email(email, assunto, corpo_texto, corpo_html)
+
+
 async def agendar_notificacao_email(background_tasks: BackgroundTasks, chamado: dict, remetente_id: str, conteudo: str) -> None:
     """Dispara a notificação de e-mail de forma assíncrona via BackgroundTasks.
 

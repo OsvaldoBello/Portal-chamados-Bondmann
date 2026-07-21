@@ -1,9 +1,9 @@
 """Suíte e2e de RLS (Sprint 1 / item 1.7, M9) — matriz de visibilidade contra Supabase local real.
 
 Cobre a matriz descrita em `plano_melhorias_auditoria.md` (item 1.7): autor · staff
-RH/Marketing · líder de setor (0028) · TI pós-0020 · exceções de autoatendimento
-Marketing (0038) e RH (0042) · nota interna invisível ao autor · upload de avatar (1º
-envio e reenvio, regressão 0037) · Realtime não entrega `is_interna` ao cliente.
+RH/Marketing · líder de setor (0028) · TI pós-0020 · autoatendimento generalizado a
+todos os setores (0038/0042/0047) · nota interna invisível ao autor · upload de avatar
+(1º envio e reenvio, regressão 0037) · Realtime não entrega `is_interna` ao cliente.
 
 Cada teste roda contra o Postgres real com as policies de RLS aplicadas — não contra
 `FakeRepo`/mocks — para pegar exatamente a classe de bug que motivou este item: mock
@@ -86,15 +86,20 @@ async def test_ti_pos_0020_nao_ve_chamados_de_outros_setores(conn: asyncpg.Conne
     async with as_user(conn, seed.staff_ti):
         ids = {r["id"] for r in await conn.fetch("SELECT id FROM chamados")}
     assert seed.chamado_ti in ids
-    assert seed.chamado_ti_sem_auto in ids  # também é do setor TI
+    assert seed.chamado_ti_auto in ids  # também é do setor TI
     assert seed.chamado_rh not in ids
     assert seed.chamado_marketing_auto not in ids
 
 
 # ============================================================
-# Exceções de autoatendimento — Marketing (0038) e RH (0042, generalização via
-# coluna `departamentos.autoatendimento`) permitem que o autor assuma o próprio
-# chamado; os demais departamentos continuam proibidos (0029).
+# Exceções de autoatendimento — generalizada a TODOS os departamentos pela 0047
+# (originalmente só Marketing/0038 e RH/0042, via coluna
+# `departamentos.autoatendimento`): o autor pode assumir o próprio chamado quando
+# o setor de destino é o mesmo do autor. Decisão de produto 2026-07-20: TI (e
+# qualquer outro setor) precisa poder abrir chamado pra si mesmo e vê-lo aparecer
+# no Kanban/fila — ex.: a diretoria pede pro TI abrir uma demanda em seu nome, sem
+# precisar logar na plataforma. Sem essa exceção não há mais nenhum setor onde a
+# trava geral de segregação de função (0029) se aplique sozinha.
 # ============================================================
 async def test_exececao_marketing_autoatendimento(conn: asyncpg.Connection, seed: Seed):
     async with as_user(conn, seed.staff_marketing):
@@ -116,25 +121,17 @@ async def test_excecao_rh_autoatendimento(conn: asyncpg.Connection, seed: Seed):
     assert rowcount(status) == 1
 
 
-async def test_ti_sem_flag_autoatendimento_nao_pode_se_autoatender(
-    conn: asyncpg.Connection, seed: Seed
-):
-    """TI nunca ganhou `autoatendimento = true` (0042 só marcou Marketing/RH) — a
-    regra geral de segregação de função (0029) continua valendo para o TI."""
+async def test_excecao_ti_autoatendimento(conn: asyncpg.Connection, seed: Seed):
+    """0047 generaliza a exceção pro TI também — mesmo comportamento de
+    Marketing/RH acima, TI deixa de ser bloqueado pela segregação de função
+    (0029) quando é autor E destino do próprio chamado."""
     async with as_user(conn, seed.staff_ti):
-        # Qualquer erro do Postgres aborta a transação corrente (não só o statement);
-        # sem um SAVEPOINT, o próximo comando na mesma transação (aqui, o `RESET ROLE`
-        # do cleanup de `as_user`) falharia com `InFailedSQLTransactionError`, mascarando
-        # o sucesso deste teste. `conn.transaction()` aninhado dentro da transação do
-        # fixture `conn` vira SAVEPOINT automaticamente (padrão asyncpg) e absorve o erro
-        # esperado sem derrubar o resto da transação.
-        with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
-            async with conn.transaction():
-                await conn.execute(
-                    "UPDATE chamados SET operador_id = $1 WHERE id = $2",
-                    seed.staff_ti,
-                    seed.chamado_ti_sem_auto,
-                )
+        status = await conn.execute(
+            "UPDATE chamados SET operador_id = $1 WHERE id = $2",
+            seed.staff_ti,
+            seed.chamado_ti_auto,
+        )
+    assert rowcount(status) == 1
 
 
 # ============================================================

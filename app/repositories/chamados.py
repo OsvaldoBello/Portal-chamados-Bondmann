@@ -69,7 +69,8 @@ class ChamadosRepo:
                 """SELECT p.id, p.nome, p.role, p.empresa_id, p.departamento_id,
                           p.avatar_path, p.updated_at AS avatar_atualizado_em,
                           d.nome AS departamento,
-                          COALESCE(d.nome = 'TI', false) AS is_ti
+                          COALESCE(d.nome = 'TI', false) AS is_ti,
+                          COALESCE(d.recebe_chamados, false) AS recebe_chamados
                      FROM perfis p
                      LEFT JOIN departamentos d ON d.id = p.departamento_id
                     WHERE p.id = $1::uuid""",
@@ -337,6 +338,9 @@ class ChamadosRepo:
     ) -> dict[str, Any] | None:
         return await self._atendimento.transferir(claims, chamado_id, departamento_id=departamento_id)
 
+    async def avaliacao_pendente(self, claims: dict) -> dict[str, Any] | None:
+        return await self._atendimento.avaliacao_pendente(claims)
+
     async def alterar_status(
         self, claims: dict, chamado_id: str, novo_status: str
     ) -> dict[str, Any] | None:
@@ -351,6 +355,14 @@ class ChamadosRepo:
         self, claims: dict, chamado_id: str, operador_id: str | None
     ) -> dict[str, Any] | None:
         return await self._atendimento.atribuir(claims, chamado_id, operador_id)
+
+    async def alterar_categoria(
+        self, claims: dict, chamado_id: str, *,
+        categoria_id: str | None, subcategoria_id: str | None,
+    ) -> dict[str, Any] | None:
+        return await self._atendimento.alterar_categoria(
+            claims, chamado_id, categoria_id=categoria_id, subcategoria_id=subcategoria_id
+        )
 
     async def excluir(self, claims: dict, chamado_id: str) -> bool:
         return await self._atendimento.excluir(claims, chamado_id)

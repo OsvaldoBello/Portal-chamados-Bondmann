@@ -148,7 +148,7 @@ class Seed:
     chamado_rh: uuid.UUID  # autor_comercial -> RH (o líder do Comercial deve acompanhar)
     chamado_marketing_auto: uuid.UUID  # staff_marketing é autor E destino Marketing (0038)
     chamado_rh_auto: uuid.UUID  # staff_rh é autor E destino RH (0042)
-    chamado_ti_sem_auto: uuid.UUID  # staff_ti é autor E destino TI (TI não tem autoatendimento)
+    chamado_ti_auto: uuid.UUID  # staff_ti é autor E destino TI (TI também autoatende, 0047)
 
     msg_publica: uuid.UUID
     msg_interna: uuid.UUID
@@ -228,7 +228,7 @@ async def seed(conn: asyncpg.Connection) -> Seed:
     chamado_rh_auto = await _criar_chamado(
         conn, empresa_id=empresa_id, cliente_id=staff_rh, departamento_id=dept_ids["RH"]
     )
-    chamado_ti_sem_auto = await _criar_chamado(
+    chamado_ti_auto = await _criar_chamado(
         conn, empresa_id=empresa_id, cliente_id=staff_ti, departamento_id=dept_ids["TI"]
     )
 
@@ -261,7 +261,7 @@ async def seed(conn: asyncpg.Connection) -> Seed:
         chamado_rh=chamado_rh,
         chamado_marketing_auto=chamado_marketing_auto,
         chamado_rh_auto=chamado_rh_auto,
-        chamado_ti_sem_auto=chamado_ti_sem_auto,
+        chamado_ti_auto=chamado_ti_auto,
         msg_publica=msg_publica,
         msg_interna=msg_interna,
     )

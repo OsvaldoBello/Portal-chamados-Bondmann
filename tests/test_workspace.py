@@ -30,6 +30,7 @@ def _chamado(**extra):
         "id": "c1", "codigo": "BOND-2026-00001", "titulo": "Impressora", "descricao": "quebrou",
         "status": "NOVO", "prioridade": "ALTA", "cliente_id": "aaa", "operador_id": None,
         "departamento_id": "d1", "departamento": "TI", "categoria": "Suporte",
+        "categoria_id": None, "subcategoria_id": None,
         "cliente_nome": "Ana", "cliente_avatar_path": None, "operador_nome": None,
         "created_at": NOW - timedelta(hours=20), "limite_resolucao": NOW + timedelta(hours=1),
         "limite_resposta": None, "respondido_em": None, "resolvido_em": None,
@@ -41,7 +42,8 @@ def _chamado(**extra):
 
 class FakeRepo:
     def __init__(self, *, is_ti=True, status="NOVO", perfil_departamento_id="d1",
-                 operador_id=None, cliente_id="aaa", observadores=None, departamento="TI"):
+                 operador_id=None, cliente_id="aaa", observadores=None, departamento="TI",
+                 recebe_chamados=True):
         self.acoes = []
         self._is_ti = is_ti
         self._status = status
@@ -50,13 +52,14 @@ class FakeRepo:
         self._cliente_id = cliente_id
         self._observadores = observadores or []
         self._departamento = departamento
+        self._recebe_chamados = recebe_chamados
         self.operadores_dep = "__nao_chamado__"  # captura o filtro de departamento
         self.operadores_excluir = "__nao_chamado__"  # captura o excluir_id
 
     async def perfil(self, claims):
         return {"id": OP, "nome": "Op TI", "role": "OPERADOR", "empresa_id": "e1",
                 "departamento_id": self._perfil_departamento_id, "departamento": self._departamento,
-                "is_ti": self._is_ti}
+                "is_ti": self._is_ti, "recebe_chamados": self._recebe_chamados}
 
     async def fila(self, claims, *, departamento_id=None, status=None, categoria_id=None,
                    prioridade=None, operador_id=None, setor=None, data_de=None, data_ate=None,
@@ -82,6 +85,19 @@ class FakeRepo:
 
     async def categorias_ativas(self, claims, departamento_id=None):
         return [{"id": "cat1", "nome": "Suporte"}]
+
+    async def subcategorias_ativas(self, claims, categoria_id):
+        return [{"id": "sub1", "nome": "Acesso VPN"}] if categoria_id else []
+
+    async def categoria_valida(self, claims, *, categoria_id, departamento_id):
+        return categoria_id == "cat1"
+
+    async def subcategoria_valida(self, claims, *, categoria_id, subcategoria_id):
+        return categoria_id == "cat1" and subcategoria_id == "sub1"
+
+    async def alterar_categoria(self, claims, cid, *, categoria_id, subcategoria_id):
+        self.acoes.append(("categoria", cid, categoria_id, subcategoria_id))
+        return {"id": cid, "categoria_id": categoria_id, "subcategoria_id": subcategoria_id}
 
     async def setores_ativos(self, claims, departamento_id=None):
         return ["Comercial", "Financeiro"]
@@ -177,6 +193,26 @@ def test_kanban_renderiza_colunas():
     assert "kanban-col" in r.text
     # Lixeira de exclusão rápida em cada cartão.
     assert "kanban-delete-btn" in r.text
+
+
+def test_kanban_fora_do_marketing_mostra_coluna_a_fazer():
+    """A_FAZER não é mais exclusivo da coluna do Marketing (migration 0047 —
+    autoatendimento generalizado pra todos os setores): um chamado nesse
+    status fora do Marketing (ex.: os importados como "[Legado #...]", todos
+    A_FAZER) contava certo na fila mas sumia do Kanban, porque `status_list`
+    só incluía A_FAZER pro Marketing e `colunas` descarta qualquer status fora
+    dela."""
+    class RepoComAFazer(FakeRepo):
+        async def fila(self, claims, **kwargs):
+            cs = await super().fila(claims, **kwargs)
+            cs.append(_chamado(id="c4", codigo="BOND-2026-00004", status="A_FAZER"))
+            return cs
+
+    with ws_client(RepoComAFazer()) as c:
+        r = c.get("/workspace/kanban")
+    assert r.status_code == 200
+    assert 'data-status="A_FAZER"' in r.text
+    assert "BOND-2026-00004" in r.text
 
 
 def test_kanban_marketing_tem_coluna_aguardando_terceiros_apos_em_andamento():
@@ -607,3 +643,78 @@ def test_atendimento_sem_observadores_nao_mostra_secao():
     with ws_client(FakeRepo(observadores=[])) as c:
         r = c.get("/workspace/chamados/c1")
     assert "Em cópia" not in r.text
+
+
+# --------------------------------------------------------------------------
+# 2026-07-21: setor sem fila (ADMIN líder, ex.: Controladoria) só abre/
+# acompanha chamados — sem Fila/Kanban.
+# --------------------------------------------------------------------------
+def test_lider_sem_fila_nao_ve_fila_e_kanban_na_nav():
+    with ws_client(FakeRepo(recebe_chamados=False)) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert r.status_code == 200
+    assert "Fila de chamados" not in r.text
+    assert ">Kanban<" not in r.text
+    assert "Meus chamados" in r.text
+    assert "Abrir chamado" in r.text
+
+
+def test_lider_sem_fila_acessando_fila_direto_e_redirecionado():
+    with ws_client(FakeRepo(recebe_chamados=False)) as c:
+        r = c.get("/workspace", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/portal"
+
+
+def test_lider_sem_fila_acessando_kanban_direto_e_redirecionado():
+    with ws_client(FakeRepo(recebe_chamados=False)) as c:
+        r = c.get("/workspace/kanban", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/portal"
+
+
+def test_staff_com_fila_continua_vendo_fila_e_kanban():
+    with ws_client(FakeRepo(recebe_chamados=True)) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert "Fila de chamados" in r.text
+    assert ">Kanban<" in r.text
+
+
+# --------------------------------------------------------------------------
+# 2026-07-21: categoria/subcategoria editáveis nas Ações.
+# --------------------------------------------------------------------------
+def test_atendimento_mostra_selects_de_categoria():
+    # Ações (incl. categoria) só aparece com o chamado já assumido (pode_atender).
+    with ws_client(FakeRepo(status="EM_ATENDIMENTO", operador_id=OP)) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert r.status_code == 200
+    assert 'id="categoria-edit-select"' in r.text
+    assert 'id="subcategoria-edit-select"' in r.text
+    assert "Suporte" in r.text  # categoria do FakeRepo.categorias_ativas
+
+
+def test_alterar_categoria_valida_e_salva():
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/categoria",
+            data={"csrf_token": t, "categoria_id": "cat1", "subcategoria_id": "sub1"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert ("categoria", "c1", "cat1", "sub1") in repo.acoes
+
+
+def test_alterar_categoria_invalida_e_ignorada_mas_nao_quebra():
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/categoria",
+            data={"csrf_token": t, "categoria_id": "cat-forjada", "subcategoria_id": "sub1"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    # categoria inválida -> gravada como None (defesa em profundidade)
+    assert ("categoria", "c1", None, None) in repo.acoes

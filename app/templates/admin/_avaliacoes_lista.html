@@ -1,0 +1,20 @@
+{% from "portal/_macros.html" import status_badge %}
+{% if chamados %}
+<ul class="divide-y divide-line">
+  {% for c in chamados %}
+  <li class="py-3">
+    <div class="flex items-center justify-between gap-3">
+      <a href="/workspace/chamados/{{ c.id }}" class="font-mono text-[12px] font-semibold text-brandgreen-700 hover:underline">{{ c.codigo }}</a>
+      {{ status_badge(c.status) }}
+    </div>
+    <div class="text-sm text-ink mt-0.5">{{ c.titulo }}</div>
+    {% if c.comentario %}
+    <p class="text-sm text-muted mt-0.5">“{{ c.comentario }}”</p>
+    {% endif %}
+    <div class="text-[11px] text-muted mt-0.5">{{ c.solicitante or "—" }} · {{ fmt_dt(c.em) }}</div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="text-sm text-muted">Nenhum chamado encontrado para esta nota.</p>
+{% endif %}

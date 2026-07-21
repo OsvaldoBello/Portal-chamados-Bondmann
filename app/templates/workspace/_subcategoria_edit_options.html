@@ -1,0 +1,5 @@
+{# Options do select de subcategoria na edição de categoria (Ações) — recarregado via HTMX ao trocar a categoria. #}
+<option value="">{% if subcategorias %}— Sem subcategoria —{% else %}Esta categoria não tem subcategorias{% endif %}</option>
+{% for s in subcategorias %}
+<option value="{{ s.id }}" {% if subcategoria_sel and s.id|string == subcategoria_sel|string %}selected{% endif %}>{{ s.nome }}</option>
+{% endfor %}

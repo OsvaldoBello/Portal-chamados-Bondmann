@@ -9,6 +9,12 @@
   <a href="/portal" class="text-sm text-muted hover:text-navy">&larr; Voltar aos chamados</a>
 </div>
 
+{% if avaliar_pendente %}
+<div class="mb-5 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+  Antes de abrir um novo chamado, avalie este atendimento já resolvido — é rapidinho, 1 a 5 estrelas.
+</div>
+{% endif %}
+
 {# Cabeçalho do chamado #}
 <div class="bg-white rounded-xl shadow-card border border-line/60 p-6 mb-5">
   <div class="flex items-start justify-between gap-4">

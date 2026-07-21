@@ -193,6 +193,13 @@ async def fila_lista(
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
+    # Sem fila no próprio setor (ADMIN líder de setor, ex.: Controladoria) — não
+    # atende, só abre/acompanha chamados. Reforça no servidor o que a nav já
+    # esconde (2026-07-21): sem isso, a URL direta ainda abriria uma fila vazia.
+    # 303 literal (não `status.HTTP_303_SEE_OTHER`): o parâmetro `status` desta
+    # rota (filtro de status da fila) sombreia o módulo `fastapi.status` aqui dentro.
+    if not ctx.perfil.get("recebe_chamados"):
+        return RedirectResponse("/portal", status_code=303)
     f = _parse_filtros(status, categoria, prioridade, operador, sla)
     dep_id = _dep_id(ctx)
     chamados = await _buscar_fila(repo, ctx.user.claims, dep_id, f)
@@ -281,11 +288,19 @@ async def kanban(
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
+    if not ctx.perfil.get("recebe_chamados"):
+        return RedirectResponse("/portal", status_code=status.HTTP_303_SEE_OTHER)
     is_marketing = ctx.perfil.get("departamento") == "Marketing"
     if is_marketing:
         status_list = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO")
     else:
-        status_list = ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
+        # A_FAZER não é mais exclusivo do Marketing (migration 0047 generalizou
+        # o autoatendimento pra todos os setores): sem essa coluna aqui, um
+        # chamado nesse status (ex.: os 471 importados como "[Legado #...]",
+        # todos A_FAZER) contava certo nos cards da fila (`fila_stats`, sem
+        # filtro por `status_list`) mas sumia do quadro — `colunas` só inclui
+        # os status de `status_list`, e A_FAZER ficava de fora.
+        status_list = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
 
     f = _parse_filtros_kanban(categoria, prioridade, operador, sla, setor, data_de, data_ate)
     dep_id = _dep_id(ctx)
@@ -391,6 +406,17 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
     departamentos = (
         await repo.departamentos_destino_ativos(ctx.user.claims) if ctx.perfil.get("is_ti") else []
     )
+    # Categoria/subcategoria editáveis nas Ações (2026-07-21): mesmo catálogo
+    # cacheado usado na abertura do chamado (CatalogoRepo), escopado ao
+    # departamento do chamado — trocar de setor via repasse já muda o catálogo
+    # disponível aqui na próxima carga da página.
+    categorias_edit = await repo.categorias_ativas(
+        ctx.user.claims, str(chamado.get("departamento_id") or "") or None
+    )
+    subcategorias_edit = (
+        await repo.subcategorias_ativas(ctx.user.claims, str(chamado["categoria_id"]))
+        if chamado.get("categoria_id") else []
+    )
     settings = get_settings()
     ctx_render = {
         "perfil": ctx.perfil,
@@ -398,6 +424,8 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         "mensagens": mensagens,
         "operadores": operadores,
         "departamentos": departamentos,
+        "categorias_edit": categorias_edit,
+        "subcategorias_edit": subcategorias_edit,
         "observadores": observadores,
         "eh_autor": eh_autor,
         "pode_reivindicar": pode_reivindicar,
@@ -524,6 +552,64 @@ async def mudar_prioridade(
 ):
     if nova_prioridade in PRIORIDADES:
         await repo.alterar_prioridade(ctx.user.claims, chamado_id, nova_prioridade)
+    return _voltar(chamado_id, origem)
+
+
+@router.get("/chamados/{chamado_id}/subcategorias")
+async def subcategorias_edit_fragmento(
+    request: Request,
+    chamado_id: str,
+    categoria_id: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+):
+    """Cascade da edição de Categoria/Subcategoria nas Ações (recarrega ao
+    trocar a categoria). ``chamado_id`` não entra na consulta — mantido na URL
+    só por consistência com o resto das rotas de ação do chamado."""
+    categoria_id = categoria_id.strip()
+    subs = await repo.subcategorias_ativas(ctx.user.claims, categoria_id) if categoria_id else []
+    return render(
+        request, "workspace/_subcategoria_edit_options.html",
+        {"subcategorias": subs, "subcategoria_sel": ""},
+    )
+
+
+@router.post("/chamados/{chamado_id}/categoria")
+async def alterar_categoria(
+    request: Request,
+    chamado_id: str,
+    categoria_id: str = Form(""),
+    subcategoria_id: str = Form(""),
+    origem: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Corrige a categorização de um chamado já aberto (staff no escopo) —
+    defesa em profundidade: revalida o par categoria/departamento e categoria/
+    subcategoria no servidor, mesma regra da abertura (não confia só no que o
+    select mandou)."""
+    categoria_id = categoria_id.strip()
+    subcategoria_id = subcategoria_id.strip()
+    chamado = await repo.obter(ctx.user.claims, chamado_id)
+    if chamado is not None:
+        dep_id = str(chamado.get("departamento_id") or "")
+        categoria_ok = bool(categoria_id) and await repo.categoria_valida(
+            ctx.user.claims, categoria_id=categoria_id, departamento_id=dep_id
+        )
+        if not categoria_ok:
+            # Categoria inválida/ausente: a subcategoria fica órfã sem ela —
+            # limpa as duas (não dá pra revalidar subcategoria contra nada).
+            categoria_id = ""
+            subcategoria_id = ""
+        elif subcategoria_id and not await repo.subcategoria_valida(
+            ctx.user.claims, categoria_id=categoria_id, subcategoria_id=subcategoria_id
+        ):
+            subcategoria_id = ""
+        await repo.alterar_categoria(
+            ctx.user.claims, chamado_id,
+            categoria_id=categoria_id or None, subcategoria_id=subcategoria_id or None,
+        )
     return _voltar(chamado_id, origem)
 
 
