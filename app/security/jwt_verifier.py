@@ -4,7 +4,8 @@ Decisão: **signing keys assimétricas via JWKS** (RS256/ES256) quando o projeto
 suportar — verificação por chave pública, com JWKS cacheado e rotação. Fallback
 para **HS256** com o JWT secret legado se for o modo provisionado.
 
-Valida assinatura, ``exp``, ``aud`` (``authenticated``) e ``iss``.
+Valida assinatura, ``exp``, ``aud`` (``authenticated``) e ``iss``, com uma folga
+de relógio (``leeway``) para ``exp``/``iat``/``nbf`` — ver ``_LEEWAY_SEGUNDOS``.
 """
 
 from __future__ import annotations
@@ -15,6 +16,12 @@ from jwt import PyJWKClient
 from app.config import Settings
 
 EXPECTED_AUD = "authenticated"
+# Tolerância de relógio (exp/iat/nbf) entre quem emite (Supabase) e quem verifica
+# (este processo) — sem isso, um desvio de poucos segundos no relógio local (comum
+# sem NTP contínuo, ex.: Windows sincroniza só periodicamente) rejeita todo login
+# com "token not yet valid (iat)" mesmo com credenciais corretas (bug real, dev
+# local, 2026-07-21). PyJWT aplica a mesma folga aos três claims de tempo.
+_LEEWAY_SEGUNDOS = 10
 
 
 class TokenInvalido(Exception):
@@ -61,6 +68,7 @@ class JWTVerifier:
             algorithms=[alg],
             audience=EXPECTED_AUD,
             issuer=self._issuer,
+            leeway=_LEEWAY_SEGUNDOS,
             options={"require": ["exp", "sub"]},
         )
 
@@ -74,6 +82,7 @@ class JWTVerifier:
             algorithms=["HS256"],
             audience=EXPECTED_AUD,
             issuer=self._issuer,
+            leeway=_LEEWAY_SEGUNDOS,
             options={"require": ["exp", "sub"]},
         )
 

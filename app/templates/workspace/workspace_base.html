@@ -166,7 +166,11 @@
           </div>
         </div>
       </header>
-      <main class="anim-rise flex-1 p-4 sm:p-7 w-full {% block main_class %}max-w-[1400px]{% endblock %}">
+      {# mx-auto no default: sem isso, o cap de largura (max-w-[1400px]) deixa o
+         conteúdo colado à esquerda em telas largas — sobra tudo como uma faixa
+         em branco à direita em vez de margem simétrica. Kanban zera o bloco
+         (full-width, layout de quadro) e não é afetado. #}
+      <main class="anim-rise flex-1 p-4 sm:p-7 w-full {% block main_class %}max-w-[1400px] mx-auto{% endblock %}">
         {# MFA (item 3.3, Fase 1 — opcional com aviso): ADMIN sem MFA é avisado, não
            bloqueado. Só as rotas do painel passam `mfa_nudge` (via `_base_ctx` do
            admin.py), então o aviso não aparece nas telas do Workspace — onde o MFA
@@ -187,6 +191,15 @@
       </main>
     </div>
   </div>
+  {# Modais/overlays de página (ex.: csat-modal do dashboard) ficam FORA de
+     `<main>` de propósito: `<main>` tem `anim-rise` (animação de entrada via
+     `transform: translateY(...)`, `animation-fill-mode: both` — o valor final
+     persiste mesmo depois de terminar) e QUALQUER `transform` num ancestral
+     vira containing block pra `position: fixed`. Um modal `fixed inset-0`
+     dentro de `<main>` não centraliza na viewport — centraliza dentro da
+     caixa (alta) do `<main>`, aparecendo lá embaixo da página em vez do meio
+     da tela visível (bug real, 2026-07-21). #}
+  {% block overlays %}{% endblock %}
   {# Sino de notificações em tempo real (Fase 4). #}
   <script src="/static/vendor/supabase.min.js"
           integrity="sha384-8ljL080xacUYrqBXUJRcP68fd1dVCh9qK/xi9QMzxUgOVNycXp0s6mBZAjBMp9W0"></script>

@@ -60,3 +60,21 @@ def test_token_vazio():
     verifier = JWTVerifier(_settings())
     with pytest.raises(TokenInvalido):
         verifier.verify("")
+
+
+def test_tolera_pequeno_desvio_de_relogio_no_iat():
+    """Bug real (dev local, 2026-07-21): relógio do Windows uns segundos atrasado
+    em relação ao Supabase (sem NTP contínuo) fazia todo login falhar com "token
+    not yet valid (iat)", mesmo com credenciais corretas — o PyJWT rejeitava
+    qualquer `iat` no "futuro" sem nenhuma tolerância. `leeway` cobre esse desvio."""
+    verifier = JWTVerifier(_settings())
+    token = _make_token(iat=int(time.time()) + 5)
+    claims = verifier.verify(token)
+    assert claims["sub"] == "11111111-1111-1111-1111-111111111111"
+
+
+def test_ainda_rejeita_desvio_maior_que_a_folga():
+    verifier = JWTVerifier(_settings())
+    token = _make_token(iat=int(time.time()) + 3600)
+    with pytest.raises(TokenInvalido):
+        verifier.verify(token)

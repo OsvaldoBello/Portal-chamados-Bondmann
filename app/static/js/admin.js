@@ -82,12 +82,28 @@
     notaAtual = nota;
     if (modalTitulo) modalTitulo.textContent = "Chamados avaliados com " + nota + " estrela" + (nota > 1 ? "s" : "");
     if (modalBusca) modalBusca.value = "";
-    modal.hidden = false;
+    // classList, não `.hidden`/atributo: o modal precisa de `flex` estático pra
+    // centralizar o card, e o `[hidden]` do Preflight tem especificidade zero
+    // (:where()) — perde pra `.flex` e o modal nunca se esconde de fato. Como
+    // classe, `.hidden` entra depois de `.flex` no CSS compilado e vence.
+    modal.classList.remove("hidden");
+    // Trava o scroll da página por trás: o modal já é `fixed inset-0` (sempre
+    // centralizado na viewport), mas sem isso a página de baixo continua
+    // rolando livremente enquanto ele está aberto — rolar por engano faz
+    // parecer que o modal "não está centralizado"/preciso rolar pra achar.
+    // `document.scrollingElement` é o `<html>`, não o `<body>` (documento em
+    // standards mode) — travar só o `<body>` não impede o scroll real do
+    // mouse/touch/teclado, por isso os dois. Fecha (X, clique fora, Esc)
+    // devolve o scroll.
+    document.documentElement.classList.add("overflow-hidden");
+    document.body.classList.add("overflow-hidden");
     carregarModalCsat();
   };
 
   function fecharModalCsat() {
-    if (modal) modal.hidden = true;
+    if (modal) modal.classList.add("hidden");
+    document.documentElement.classList.remove("overflow-hidden");
+    document.body.classList.remove("overflow-hidden");
     notaAtual = null;
   }
 
@@ -99,7 +115,7 @@
     });
   }
   document.addEventListener("keydown", function (evt) {
-    if (evt.key === "Escape" && modal && !modal.hidden) fecharModalCsat();
+    if (evt.key === "Escape" && modal && !modal.classList.contains("hidden")) fecharModalCsat();
   });
   if (modalBusca) {
     var buscaTimer = null;

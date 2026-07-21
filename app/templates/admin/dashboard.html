@@ -133,13 +133,38 @@
   {% endif %}
 </div>
 
+{# Dados inertes (não é script executável) lidos pelo admin.js — CSP-safe. #}
+<script type="application/json" id="chart-data">{{ graficos | tojson }}</script>
+{% endblock %}
+
+{% block overlays %}
 {# Modal "Chamados desta nota" — abre ao clicar numa barra do CSAT. Fica sempre
    no DOM (oculto); admin.js troca a visibilidade e o HTMX busca o conteúdo sob
    demanda. Sem Alpine: o resto do painel admin é vanilla JS + HTMX (nenhuma
-   outra tela usa Alpine hoje), então mantém o mesmo padrão. #}
-<div id="csat-modal" hidden
+   outra tela usa Alpine hoje), então mantém o mesmo padrão.
+
+   FORA de `<main>` de propósito (`{% block overlays %}` é irmão de `<main>`
+   no shell, não filho): `<main>` tem `anim-rise` (`transform` de entrada,
+   persistente via `animation-fill-mode: both`) e qualquer `transform` num
+   ancestral vira containing block pra `position: fixed` — dentro de `<main>`
+   o modal centralizava dentro da caixa (alta) dele, não na viewport,
+   aparecendo lá embaixo da página em vez do centro da tela visível
+   independente do quanto a página estivesse rolada (bug real, 2026-07-21).
+
+   Visibilidade via classe `hidden` do Tailwind, não o atributo nativo
+   `hidden`: o Preflight declara `[hidden]:where(...){display:none}` com
+   `:where()` (especificidade zero) justamente pra permitir o padrão
+   responsivo `hidden md:flex`; combinado com `flex` estático no mesmo
+   elemento (preciso pra centralizar o card), o atributo nativo perde pra
+   `.flex{display:flex}` e o modal fica sempre visível, "carregando" pra
+   sempre e impossível de fechar — o clique em fechar até roda o JS, mas
+   `.hidden = true` só reaplica o atributo perdedor. Como classe, `.hidden`
+   entra depois de `.flex` no CSS compilado e ganha o empate de
+   especificidade (mesmo padrão já usado em `#sidebar-overlay`/`[data-menu]`
+   no shell). #}
+<div id="csat-modal"
      data-periodo="{{ periodo }}" data-departamento="{{ departamento_sel }}"
-     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy-900/50">
+     class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy-900/50">
   <div class="bg-white rounded-xl shadow-card w-full max-w-2xl max-h-[85vh] flex flex-col">
     <div class="flex items-center justify-between gap-3 px-5 py-4 border-b border-line shrink-0">
       <h3 id="csat-modal-titulo" class="font-display font-bold text-navy">Chamados avaliados</h3>
@@ -157,9 +182,6 @@
     </div>
   </div>
 </div>
-
-{# Dados inertes (não é script executável) lidos pelo admin.js — CSP-safe. #}
-<script type="application/json" id="chart-data">{{ graficos | tojson }}</script>
 {% endblock %}
 
 {% block scripts %}

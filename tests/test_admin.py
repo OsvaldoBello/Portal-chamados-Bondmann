@@ -303,6 +303,44 @@ def test_dashboard_mes_invalido_cai_no_atual():
     assert r.status_code == 200  # não quebra
 
 
+def test_csat_modal_comeca_escondido_via_classe_nao_atributo():
+    """Bug real: o modal combinava o atributo nativo `hidden` com a classe
+    `flex` (necessária pra centralizar o card). O Preflight do Tailwind
+    declara `[hidden]:where(...){display:none}` com especificidade zero
+    (:where()) — perde pra `.flex{display:flex}` e o modal ficava sempre
+    visível (renderizado já aberto, título genérico "Chamados avaliados"
+    sem nota, "Carregando…" pra sempre, e o botão fechar sem efeito visual,
+    já que ele só reaplicava o mesmo atributo perdedor). Fix: visibilidade
+    via classe `.hidden` do Tailwind (mesmo padrão de `#sidebar-overlay`/
+    `[data-menu]` no shell) — no CSS compilado ela entra depois de `.flex`
+    e vence o empate de especificidade."""
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert 'id="csat-modal" hidden' not in r.text
+    import re
+    m = re.search(r'id="csat-modal"[^>]*class="([^"]*)"', r.text)
+    assert m is not None
+    classes = m.group(1).split()
+    assert "hidden" in classes
+    assert "flex" in classes
+
+
+def test_csat_modal_fica_fora_do_main_transformado():
+    """Bug real (2026-07-21): `<main>` tem `anim-rise` (animação de entrada via
+    `transform`, que persiste com `animation-fill-mode: both`) — qualquer
+    `transform` num ancestral vira containing block pra `position: fixed`.
+    Com o modal dentro de `<main>`, `fixed inset-0` centralizava dentro da
+    caixa (alta) do `<main>`, não na viewport — aparecia lá embaixo da
+    página em vez do centro da tela visível, não importa o quanto a página
+    estivesse rolada. Fix: o modal mora no bloco `overlays`, irmão de
+    `<main>` no shell, não filho — precisa continuar depois do `</main>`."""
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert r.text.index("</main>") < r.text.index('id="csat-modal"')
+
+
 def test_csat_modal_fragmento_lista_chamados_da_nota():
     with admin_client(FakeAdmin()) as c:
         r = c.get("/admin/indicadores/avaliacoes?nota=5")
