@@ -104,6 +104,9 @@ class FakeRepo:
     async def mensagens(self, claims, chamado_id):
         return []
 
+    async def mensagens_assinatura(self, claims, chamado_id):
+        return (0, None)
+
     async def categorias_ativas(self, claims, departamento_id=None):
         return self._categorias
 

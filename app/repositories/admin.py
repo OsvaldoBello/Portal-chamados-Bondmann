@@ -36,24 +36,59 @@ class AdminRepo:
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> dict[str, Any]:
+        """KPIs do mês selecionado.
+
+        **Ancoragem por métrica, não um único corte por `created_at` (2026-07-22):**
+        um chamado aberto em maio e fechado em junho deve contar para JUNHO nos
+        indicadores de fechamento — ``total``/``abertos`` (volume de entrada) usam
+        ``created_at``, mas ``resolvidos``/``resolvidos_no_prazo``/``tma`` usam
+        ``resolvido_em`` e o CSAT usa ``avaliacao_em`` (quando a nota foi dada).
+        Antes, um único ``WHERE created_at BETWEEN ...`` filtrava a linha inteira
+        pela data de ABERTURA, então um chamado fechado no mês corrente mas aberto
+        num mês anterior simplesmente desaparecia dos resolvidos/CSAT/TMA do mês —
+        números de "resolvidos este mês" ficavam sistematicamente baixos.
+        """
         async with self._kpi_scope(claims, todos_setores) as conn:
             row = await conn.fetchrow(
                 """
                 SELECT
-                  count(*)                                             AS total,
-                  count(*) FILTER (WHERE status <> 'RESOLVIDO')        AS abertos,
-                  count(*) FILTER (WHERE resolvido_em IS NOT NULL)     AS resolvidos,
+                  count(*) FILTER (
+                    WHERE ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz))
+                                                                        AS total,
+                  count(*) FILTER (
+                    WHERE status <> 'RESOLVIDO'
+                      AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz))
+                                                                        AS abertos,
+                  count(*) FILTER (
+                    WHERE resolvido_em IS NOT NULL
+                      AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))
+                                                                        AS resolvidos,
                   count(*) FILTER (
                     WHERE resolvido_em IS NOT NULL AND limite_resolucao IS NOT NULL
-                      AND resolvido_em <= limite_resolucao)            AS resolvidos_no_prazo,
-                  avg(avaliacao_nota)::numeric(10,2)                   AS csat_media,
-                  count(avaliacao_nota)                                AS csat_respostas,
-                  avg(EXTRACT(EPOCH FROM (resolvido_em - created_at)))
-                    FILTER (WHERE resolvido_em IS NOT NULL)            AS tma_seg
+                      AND resolvido_em <= limite_resolucao
+                      AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))
+                                                                        AS resolvidos_no_prazo,
+                  avg(avaliacao_nota) FILTER (
+                    WHERE avaliacao_em IS NOT NULL
+                      AND ($2::timestamptz IS NULL OR avaliacao_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR avaliacao_em < $3::timestamptz))::numeric(10,2)
+                                                                        AS csat_media,
+                  count(avaliacao_nota) FILTER (
+                    WHERE avaliacao_em IS NOT NULL
+                      AND ($2::timestamptz IS NULL OR avaliacao_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR avaliacao_em < $3::timestamptz))
+                                                                        AS csat_respostas,
+                  avg(EXTRACT(EPOCH FROM (resolvido_em - created_at))) FILTER (
+                    WHERE resolvido_em IS NOT NULL
+                      AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))
+                                                                        AS tma_seg
                 FROM chamados
                 WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
-                  AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
-                  AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
                 """,
                 departamento_id,
                 periodo_inicio,
@@ -71,12 +106,22 @@ class AdminRepo:
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> dict[str, int]:
+        """Distribuição por status no mês. RESOLVIDO é ancorado em ``resolvido_em``
+        (fechado no mês conta pro mês, mesmo aberto antes — mesma correção da
+        Seção `kpis`); os demais status (ainda abertos) usam ``created_at``."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """SELECT status, count(*) n FROM chamados
                     WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
-                      AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
-                      AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
+                      AND (
+                        CASE WHEN status = 'RESOLVIDO' THEN
+                          ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                          AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz)
+                        ELSE
+                          ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+                          AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
+                        END
+                      )
                     GROUP BY status""",
                 departamento_id,
                 periodo_inicio,
@@ -89,13 +134,16 @@ class AdminRepo:
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> dict[int, int]:
+        """Distribuição de notas CSAT do mês, ancorada em ``avaliacao_em`` (quando
+        o autor avaliou) — não em ``created_at`` do chamado, que podia ser de um
+        mês anterior ao da avaliação."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """SELECT avaliacao_nota n, count(*) c FROM chamados
                     WHERE avaliacao_nota IS NOT NULL
                       AND ($1::uuid IS NULL OR departamento_id = $1::uuid)
-                      AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
-                      AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
+                      AND ($2::timestamptz IS NULL OR avaliacao_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR avaliacao_em < $3::timestamptz)
                     GROUP BY 1""",
                 departamento_id,
                 periodo_inicio,
@@ -108,17 +156,26 @@ class AdminRepo:
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> list[dict[str, Any]]:
-        """Chamados resolvidos por operador (produtividade)."""
+        """Chamados resolvidos por operador (produtividade) no mês.
+
+        ``resolvidos`` é ancorado em ``resolvido_em`` (fechado no mês conta pro
+        mês, mesmo aberto antes); ``atribuidos`` (volume atribuído ao operador,
+        independente do status) continua ancorado em ``created_at``."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
                 SELECT COALESCE(op.nome, 'Sem operador') AS operador,
-                       count(*) FILTER (WHERE c.status = 'RESOLVIDO') AS resolvidos,
-                       count(*) AS atribuidos
+                       count(*) FILTER (
+                         WHERE c.status = 'RESOLVIDO'
+                           AND ($2::timestamptz IS NULL OR c.resolvido_em >= $2::timestamptz)
+                           AND ($3::timestamptz IS NULL OR c.resolvido_em < $3::timestamptz))
+                                                                        AS resolvidos,
+                       count(*) FILTER (
+                         WHERE ($2::timestamptz IS NULL OR c.created_at >= $2::timestamptz)
+                           AND ($3::timestamptz IS NULL OR c.created_at < $3::timestamptz))
+                                                                        AS atribuidos
                   FROM chamados c LEFT JOIN perfis op ON op.id = c.operador_id
                  WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
-                   AND ($2::timestamptz IS NULL OR c.created_at >= $2::timestamptz)
-                   AND ($3::timestamptz IS NULL OR c.created_at < $3::timestamptz)
                  GROUP BY op.nome ORDER BY resolvidos DESC NULLS LAST LIMIT 15
                 """,
                 departamento_id,
@@ -134,7 +191,11 @@ class AdminRepo:
     ) -> list[dict[str, Any]]:
         """Últimas avaliações (CSAT) com comentário do solicitante, para o TI ver
         o feedback qualitativo — não só a média. Nota sempre; comentário opcional.
-        Inclui ``id`` do chamado para linkar direto ao detalhe (Workspace)."""
+        Inclui ``id`` do chamado para linkar direto ao detalhe (Workspace).
+
+        Período ancorado em ``avaliacao_em`` (quando o autor avaliou), não em
+        ``created_at`` do chamado — uma avaliação dada em junho sobre um chamado
+        aberto em maio deve aparecer no recorte de junho."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
@@ -145,8 +206,8 @@ class AdminRepo:
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                  WHERE c.avaliacao_nota IS NOT NULL
                    AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
-                   AND ($3::timestamptz IS NULL OR c.created_at >= $3::timestamptz)
-                   AND ($4::timestamptz IS NULL OR c.created_at < $4::timestamptz)
+                   AND ($3::timestamptz IS NULL OR c.avaliacao_em >= $3::timestamptz)
+                   AND ($4::timestamptz IS NULL OR c.avaliacao_em < $4::timestamptz)
                  ORDER BY c.avaliacao_em DESC NULLS LAST
                  LIMIT $1
                 """,
@@ -164,7 +225,11 @@ class AdminRepo:
         limite: int = 300,
     ) -> list[dict[str, Any]]:
         """Chamados com uma nota de CSAT específica (1-5) — alimenta o modal que
-        abre ao clicar numa barra do gráfico "Distribuição do CSAT"."""
+        abre ao clicar numa barra do gráfico "Distribuição do CSAT".
+
+        Período ancorado em ``avaliacao_em`` — mesmo critério de
+        :meth:`avaliacoes_recentes`/:meth:`csat_distribuicao`, para o modal bater
+        com a barra que o usuário clicou."""
         busca_norm = f"%{busca.strip()}%" if busca and busca.strip() else None
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
@@ -176,8 +241,8 @@ class AdminRepo:
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                  WHERE c.avaliacao_nota = $1
                    AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
-                   AND ($3::timestamptz IS NULL OR c.created_at >= $3::timestamptz)
-                   AND ($4::timestamptz IS NULL OR c.created_at < $4::timestamptz)
+                   AND ($3::timestamptz IS NULL OR c.avaliacao_em >= $3::timestamptz)
+                   AND ($4::timestamptz IS NULL OR c.avaliacao_em < $4::timestamptz)
                    AND ($5::text IS NULL OR c.codigo ILIKE $5 OR c.titulo ILIKE $5
                         OR autor.nome ILIKE $5)
                  ORDER BY c.avaliacao_em DESC NULLS LAST

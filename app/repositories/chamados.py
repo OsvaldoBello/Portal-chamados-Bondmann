@@ -168,6 +168,9 @@ class ChamadosRepo:
     async def mensagens(self, claims: dict, chamado_id: str) -> list[dict[str, Any]]:
         return await self._mensagens.mensagens(claims, chamado_id)
 
+    async def mensagens_assinatura(self, claims: dict, chamado_id: str):
+        return await self._mensagens.mensagens_assinatura(claims, chamado_id)
+
     async def adicionar_mensagem(
         self,
         claims: dict,
@@ -229,6 +232,7 @@ class ChamadosRepo:
         setor: str | None = None,
         data_de: date | None = None,
         data_ate: date | None = None,
+        busca: str | None = None,
         limite: int = 200,
     ) -> list[dict[str, Any]]:
         return await self._fila.fila(
@@ -241,6 +245,7 @@ class ChamadosRepo:
             setor=setor,
             data_de=data_de,
             data_ate=data_ate,
+            busca=busca,
             limite=limite,
         )
 

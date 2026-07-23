@@ -137,7 +137,12 @@ class AtendimentoRepo:
         ``MensagensRepo.notificacoes`` (resolvido + sem nota + próprio autor),
         aqui restrito a um único registro e explicitamente filtrado por
         ``cliente_id`` (a rota que consome isto é aberta a qualquer papel
-        autenticado, não só CLIENTE — RLS por si só não estreita o bastante)."""
+        autenticado, não só CLIENTE — RLS por si só não estreita o bastante).
+
+        Autoatendimento (``operador_id = cliente_id``) não entra: quem resolveu
+        a própria demanda não precisa avaliar a si mesmo (mesma regra de
+        ``PortalService.pode_avaliar``) — sem isso, o autor ficava travado na
+        tela de avaliação para sempre, já que nunca vai preencher a própria nota."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
@@ -146,6 +151,7 @@ class AtendimentoRepo:
                  WHERE cliente_id = $1::uuid
                    AND status = 'RESOLVIDO'
                    AND avaliacao_nota IS NULL
+                   AND operador_id IS DISTINCT FROM cliente_id
                  ORDER BY resolvido_em ASC NULLS LAST
                  LIMIT 1
                 """,

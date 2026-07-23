@@ -11,7 +11,8 @@
 {% if prioridade_sel %}{% set ns = ns ~ '&prioridade=' ~ prioridade_sel %}{% endif %}
 {% if operador_sel %}{% set ns = ns ~ '&operador=' ~ operador_sel %}{% endif %}
 {% if sla_sel %}{% set ns = ns ~ '&sla=' ~ sla_sel %}{% endif %}
-{% set tem_filtro = categoria_sel or prioridade_sel or operador_sel or sla_sel %}
+{% if busca_sel %}{% set ns = ns ~ '&busca=' ~ (busca_sel | urlencode) %}{% endif %}
+{% set tem_filtro = categoria_sel or prioridade_sel or operador_sel or sla_sel or busca_sel %}
 {% set sla_labels = {"atrasado": "Atrasado / vencido", "risco": "Em risco", "no_prazo": "No prazo"} %}
 
 {# Contadores por status #}
@@ -31,6 +32,12 @@
    preserva o status atual via campo oculto. #}
 <form method="get" action="/workspace" class="mb-4 flex flex-wrap items-end gap-3">
   {% if filtro %}<input type="hidden" name="status" value="{{ filtro }}">{% endif %}
+  <label class="flex flex-col gap-1 flex-1 min-w-[220px]">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Buscar</span>
+    <input type="search" name="busca" value="{{ busca_sel }}" data-autosubmit
+           placeholder="Assunto ou descrição…"
+           class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+  </label>
   <label class="flex flex-col gap-1">
     <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Categoria</span>
     <select name="categoria" data-autosubmit

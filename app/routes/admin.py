@@ -173,7 +173,11 @@ async def dashboard(
 
     # Indicadores são mensais (2026-07-21): tudo escopado ao mês selecionado —
     # nunca escreve/apaga nada, é sempre um recorte por período em cima dos
-    # chamados já existentes (created_at). Mês ausente/errado cai no atual.
+    # chamados já existentes. Mês ausente/errado cai no atual. **2026-07-22:**
+    # cada métrica ancora no seu próprio campo de data (AdminRepo.kpis) — volume
+    # aberto por `created_at`, resolvidos/TMA por `resolvido_em`, CSAT por
+    # `avaliacao_em` — não um único `created_at` pra tudo (um chamado aberto em
+    # maio e fechado em junho conta pra junho nos indicadores de fechamento).
     ano, mes = _parse_periodo(periodo)
     periodo_inicio, periodo_fim = _limites_periodo(ano, mes)
     periodo_str = f"{ano:04d}-{mes:02d}"

@@ -53,6 +53,12 @@
       </button>
     </form>
 
+  {% elif chamado.status == "RESOLVIDO" and chamado.operador_id and (chamado.operador_id | string) == (chamado.cliente_id | string) %}
+    {# Autoatendimento: o próprio autor também atendeu — nada a avaliar. #}
+    <p class="text-sm text-muted">
+      Você mesmo atendeu esta demanda — avaliação não se aplica aqui.
+    </p>
+
   {% else %}
     <p class="text-sm text-muted">
       A avaliação fica disponível assim que o chamado for <strong>resolvido</strong>.

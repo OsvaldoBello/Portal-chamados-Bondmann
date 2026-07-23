@@ -55,6 +55,7 @@ class FilaRepo:
         setor: str | None = None,
         data_de: date | None = None,
         data_ate: date | None = None,
+        busca: str | None = None,
         limite: int = 200,
     ) -> list[dict[str, Any]]:
         """Fila/Kanban (a atender): chamados do MEU setor abertos por alguém que
@@ -75,13 +76,15 @@ class FilaRepo:
         continuar em ``ChamadosRepo.listar`` ("Meus chamados").
 
         Filtros opcionais: ``status``, ``categoria_id``, ``prioridade``,
-        ``operador_id``, ``setor`` (setor solicitante, texto livre) e o período
-        ``data_de``/``data_ate`` (sobre `created_at`, inclusive nas duas pontas —
-        o filtro de SLA é aplicado na camada de rota, pois depende do cálculo de
-        estado do domínio). **Ordenação padrão: data de entrega (mais próxima
-        primeiro); sem data de entrega fica por último, por data de abertura
-        (mais recentes primeiro).**
+        ``operador_id``, ``setor`` (setor solicitante, texto livre), ``busca``
+        (texto livre casado contra **assunto/título e descrição**, case-insensitive)
+        e o período ``data_de``/``data_ate`` (sobre `created_at`, inclusive nas duas
+        pontas — o filtro de SLA é aplicado na camada de rota, pois depende do
+        cálculo de estado do domínio). **Ordenação padrão: data de entrega (mais
+        próxima primeiro); sem data de entrega fica por último, por data de
+        abertura (mais recentes primeiro).**
         """
+        busca_norm = f"%{busca.strip()}%" if busca and busca.strip() else None
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 self._FILA_COLUNAS
@@ -98,6 +101,7 @@ class FilaRepo:
                    AND ($7::text IS NULL OR c.setor = $7::text)
                    AND ($8::date IS NULL OR c.created_at >= $8::date)
                    AND ($9::date IS NULL OR c.created_at < ($9::date + 1))
+                   AND ($10::text IS NULL OR c.titulo ILIKE $10 OR c.descricao ILIKE $10)
                  ORDER BY c.data_entrega ASC NULLS LAST, c.created_at DESC
                  LIMIT $2
                 """,
@@ -110,6 +114,7 @@ class FilaRepo:
                 setor,
                 data_de,
                 data_ate,
+                busca_norm,
             )
             return [dict(r) for r in rows]
 

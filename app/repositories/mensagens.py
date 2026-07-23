@@ -16,6 +16,21 @@ from app.db import rls_connection
 class MensagensRepo:
     """Mensagens (públicas/nota interna), notificações e observadores em cópia."""
 
+    async def mensagens_assinatura(self, claims: dict, chamado_id: str) -> tuple[int, Any]:
+        """Assinatura leve da conversa (count + max ``created_at``) no escopo do
+        chamado — RLS aplica o mesmo recorte de :meth:`mensagens` (nota interna
+        não entra pro autor). Usada para ETag/304 no polling do chat (Seção 2.2):
+        se nada mudou, evita buscar/re-renderizar as mensagens e — principal causa
+        do "piscar" da conversa — regenerar as signed URLs dos anexos a cada 10s
+        sem necessidade (a URL muda a cada render mesmo quando o conteúdo é o
+        mesmo, forçando o navegador a recarregar as imagens)."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                "SELECT count(*)::int AS n, max(created_at) AS mx FROM mensagens WHERE chamado_id = $1::uuid",
+                chamado_id,
+            )
+            return (row["n"], row["mx"])
+
     async def mensagens(self, claims: dict, chamado_id: str) -> list[dict[str, Any]]:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
@@ -105,7 +120,12 @@ class MensagensRepo:
     async def notificacoes(self, claims: dict, *, limite: int = 6) -> list[dict[str, Any]]:
         """Itens que precisam de atenção no escopo do usuário (o escopo vem da RLS):
         chamados **não resolvidos** + **resolvidos-não-avaliados** do próprio autor.
-        Serve tanto ao sino do staff (fila do setor) quanto ao do funcionário."""
+        Serve tanto ao sino do staff (fila do setor) quanto ao do funcionário.
+
+        Autoatendimento (``operador_id = cliente_id``) fica de fora do segundo
+        recorte: quem resolveu a própria demanda nunca vai avaliá-la (mesma regra
+        de ``PortalService.pode_avaliar``) — sem essa exclusão, o chamado ficava
+        pendente pra sempre e o sino nunca apagava a bolinha de aviso."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
@@ -115,7 +135,8 @@ class MensagensRepo:
                   FROM chamados c
                  WHERE c.status <> 'RESOLVIDO'
                     OR (c.resolvido_em IS NOT NULL AND c.avaliacao_nota IS NULL
-                        AND c.cliente_id = auth.uid())
+                        AND c.cliente_id = auth.uid()
+                        AND c.operador_id IS DISTINCT FROM c.cliente_id)
                  ORDER BY COALESCE(c.updated_at, c.created_at) DESC
                  LIMIT $1
                 """,

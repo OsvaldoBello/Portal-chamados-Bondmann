@@ -89,8 +89,10 @@ def _access_token(request: Request) -> str | None:
 _SLA_FILTROS = {"atrasado": "danger", "risco": "warn", "no_prazo": "ok"}
 
 
-def _parse_filtros(status: str, categoria: str, prioridade: str, operador: str, sla: str) -> dict:
-    """Normaliza os filtros da fila (status/categoria/prioridade/operador/SLA)."""
+def _parse_filtros(
+    status: str, categoria: str, prioridade: str, operador: str, sla: str, busca: str = ""
+) -> dict:
+    """Normaliza os filtros da fila (status/categoria/prioridade/operador/SLA/busca)."""
     prio = (prioridade or "").strip().upper()
     sla_v = (sla or "").strip()
     return {
@@ -99,6 +101,7 @@ def _parse_filtros(status: str, categoria: str, prioridade: str, operador: str, 
         "prioridade": prio if prio in PRIORIDADES else None,
         "operador_id": (operador or "").strip() or None,
         "sla": sla_v if sla_v in _SLA_FILTROS else "",
+        "busca": (busca or "").strip() or None,
     }
 
 
@@ -117,6 +120,8 @@ def _filtros_qs(f: dict) -> str:
         pares["operador"] = f["operador_id"]
     if f["sla"]:
         pares["sla"] = f["sla"]
+    if f.get("busca"):
+        pares["busca"] = f["busca"]
     return urlencode(pares)
 
 
@@ -135,7 +140,8 @@ def _aplicar_sla(chamados: list[dict], sla: str) -> list[dict]:
 
 
 def _parse_filtros_kanban(
-    categoria: str, prioridade: str, operador: str, sla: str, setor: str, data_de: str, data_ate: str
+    categoria: str, prioridade: str, operador: str, sla: str, setor: str, data_de: str, data_ate: str,
+    busca: str = "",
 ) -> dict:
     """Normaliza os filtros do Kanban (categoria/prioridade/operador/SLA/setor/período).
 
@@ -166,6 +172,7 @@ def _parse_filtros_kanban(
         "data_ate": _data(data_ate),
         "data_de_raw": (data_de or "").strip(),
         "data_ate_raw": (data_ate or "").strip(),
+        "busca": (busca or "").strip() or None,
     }
 
 
@@ -189,6 +196,7 @@ async def _buscar_fila(repo: ChamadosRepo, claims: dict, dep_id: str | None, f: 
         categoria_id=f["categoria_id"],
         prioridade=f["prioridade"],
         operador_id=f["operador_id"],
+        busca=f.get("busca"),
     )
     return _aplicar_sla(chamados, f["sla"])
 
@@ -204,6 +212,7 @@ async def fila_lista(
     prioridade: str = "",
     operador: str = "",
     sla: str = "",
+    busca: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
@@ -214,7 +223,7 @@ async def fila_lista(
     # rota (filtro de status da fila) sombreia o módulo `fastapi.status` aqui dentro.
     if not ctx.perfil.get("recebe_chamados"):
         return RedirectResponse("/portal", status_code=303)
-    f = _parse_filtros(status, categoria, prioridade, operador, sla)
+    f = _parse_filtros(status, categoria, prioridade, operador, sla, busca)
     dep_id = _dep_id(ctx)
     chamados = await _buscar_fila(repo, ctx.user.claims, dep_id, f)
     stats = await repo.fila_stats(ctx.user.claims, departamento_id=dep_id)
@@ -256,6 +265,7 @@ async def fila_lista(
             "prioridade_sel": f["prioridade"] or "",
             "operador_sel": f["operador_id"] or "",
             "sla_sel": f["sla"],
+            "busca_sel": f.get("busca") or "",
             "filtros_qs": _filtros_qs(f),
             "status_cards": status_cards,
         },
@@ -270,10 +280,11 @@ async def fila_fragmento(
     prioridade: str = "",
     operador: str = "",
     sla: str = "",
+    busca: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
-    f = _parse_filtros(status, categoria, prioridade, operador, sla)
+    f = _parse_filtros(status, categoria, prioridade, operador, sla, busca)
     dep_id = _dep_id(ctx)
     # ETag/304 (Seção 2.2): consulta leve de assinatura; se nada mudou desde o
     # último poll, responde 304 sem buscar todas as linhas nem re-renderizar. Os
@@ -299,6 +310,7 @@ async def kanban(
     setor: str = "",
     data_de: str = "",
     data_ate: str = "",
+    busca: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
@@ -311,7 +323,7 @@ async def kanban(
     # migrados para NOVO (migration 0048), então não somem do quadro.
     status_list = _status_ui(ctx.perfil.get("departamento"))
 
-    f = _parse_filtros_kanban(categoria, prioridade, operador, sla, setor, data_de, data_ate)
+    f = _parse_filtros_kanban(categoria, prioridade, operador, sla, setor, data_de, data_ate, busca)
     dep_id = _dep_id(ctx)
     chamados = await repo.fila(
         ctx.user.claims,
@@ -322,6 +334,7 @@ async def kanban(
         setor=f["setor"],
         data_de=f["data_de"],
         data_ate=f["data_ate"],
+        busca=f["busca"],
     )
     chamados = _aplicar_sla(chamados, f["sla"])
     # dept_bate calculado uma única vez aqui (AtendimentoService) e consumido
@@ -340,7 +353,7 @@ async def kanban(
     setores = await repo.setores_ativos(ctx.user.claims, dep_id)
     tem_filtro = any([
         f["categoria_id"], f["prioridade"], f["operador_id"], f["sla"],
-        f["setor"], f["data_de_raw"], f["data_ate_raw"],
+        f["setor"], f["data_de_raw"], f["data_ate_raw"], f["busca"],
     ])
     return render(
         request,
@@ -362,6 +375,7 @@ async def kanban(
             "setor_sel": f["setor"] or "",
             "data_de_sel": f["data_de_raw"],
             "data_ate_sel": f["data_ate_raw"],
+            "busca_sel": f["busca"] or "",
             "tem_filtro": tem_filtro,
         },
     )
@@ -474,9 +488,20 @@ async def mensagens_fragmento(
     chamado = await repo.obter(ctx.user.claims, chamado_id)
     if chamado is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+    # ETag/304 (Seção 2.2): se nada mudou desde o último poll, responde 304 sem
+    # buscar as mensagens nem regenerar as signed URLs dos anexos — a causa do
+    # chat "piscar" a cada 10s mesmo sem mensagem nova (URL assinada muda a cada
+    # render, forçando o navegador a recarregar as imagens já exibidas).
+    n, mx = await repo.mensagens_assinatura(ctx.user.claims, chamado_id)
+    etag = f'W/"{sha256(f"{chamado_id}:{n}:{mx}".encode()).hexdigest()[:16]}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
     mensagens = await repo.mensagens(ctx.user.claims, chamado_id)
     await assinar_anexos(request, mensagens)
-    return render(request, "portal/_mensagens.html", {"chamado": chamado, "mensagens": mensagens})
+    resp = render(request, "portal/_mensagens.html", {"chamado": chamado, "mensagens": mensagens})
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 def _voltar(chamado_id: str, origem: str = "") -> RedirectResponse:

@@ -36,10 +36,16 @@ class PortalService:
 
     @staticmethod
     def pode_avaliar(chamado: dict, user_id: str) -> bool:
-        """Regra de UI: autor + RESOLVIDO podem avaliar (RLS reforça no banco)."""
+        """Regra de UI: autor + RESOLVIDO podem avaliar (RLS reforça no banco).
+
+        Autoatendimento (o próprio autor também atendeu, ``operador_id ==
+        cliente_id``) fica de fora: não faz sentido pedir CSAT de quem resolveu
+        a própria demanda — CSAT mede a experiência de quem foi atendido por
+        outra pessoa/setor."""
         return (
             chamado.get("status") == "RESOLVIDO"
             and str(chamado.get("cliente_id")) == str(user_id)
+            and str(chamado.get("operador_id")) != str(chamado.get("cliente_id"))
         )
 
     @staticmethod

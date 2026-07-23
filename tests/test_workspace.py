@@ -63,11 +63,11 @@ class FakeRepo:
 
     async def fila(self, claims, *, departamento_id=None, status=None, categoria_id=None,
                    prioridade=None, operador_id=None, setor=None, data_de=None, data_ate=None,
-                   limite=200):
+                   busca=None, limite=200):
         self.fila_filtros = {  # captura os filtros aplicados
             "departamento_id": departamento_id, "categoria_id": categoria_id,
             "prioridade": prioridade, "operador_id": operador_id,
-            "setor": setor, "data_de": data_de, "data_ate": data_ate,
+            "setor": setor, "data_de": data_de, "data_ate": data_ate, "busca": busca,
         }
         cs = [
             _chamado(),
@@ -108,6 +108,9 @@ class FakeRepo:
 
     async def mensagens(self, claims, cid):
         return []
+
+    async def mensagens_assinatura(self, claims, cid):
+        return (0, None)
 
     async def observadores(self, claims, cid):
         return self._observadores

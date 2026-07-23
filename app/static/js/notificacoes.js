@@ -6,9 +6,12 @@
  * `chamados` e `mensagens`. A RLS aplica na entrega — o usuário só recebe
  * eventos do seu escopo (funcionário: os seus; staff: o setor; TI: tudo).
  *
- * A cada mudança significativa (novo chamado, troca de status/prioridade,
- * atribuição, nova mensagem/resposta), acende o ponto do sino, dá um "toque"
- * animado e, se o painel estiver aberto, recarrega a lista via HTMX.
+ * A bolinha vermelha reflete se HÁ algo pendente (lista de /notificacoes
+ * não-vazia) — não é só um "toque" de evento Realtime que nunca se apaga.
+ * Ela é recalculada: (a) no carregamento da página; (b) toda vez que a lista
+ * é recarregada (clique no sino ou refresh disparado por um evento Realtime).
+ * Assim, ao ler/resolver todos os chamados pendentes, a bolinha some sozinha
+ * na próxima recarga da lista, sem depender de um clique "apagar aviso".
  *
  * Sem Realtime (config ausente/off), o sino segue funcionando por clique
  * (carrega a lista sob demanda — comportamento base do shell).
@@ -17,8 +20,45 @@
   "use strict";
 
   var bell = document.querySelector('[data-menu-toggle="notif"]');
-  if (!bell || !window.supabase || !window.fetch) return;
+  if (!bell || !window.fetch) return;
   var dot = document.querySelector("[data-notif-dot]");
+  var list = document.getElementById("notif-list");
+
+  // A lista renderiza <a> por item pendente (ver _notificacoes.html); vazia,
+  // ela só tem o parágrafo "Nada pendente por aqui". Contar âncoras é o sinal
+  // mais barato de "ainda há algo a fazer" sem duplicar a regra do backend.
+  function atualizarDot(html) {
+    if (!dot) return;
+    var vazio = !/<a\s/i.test(html);
+    dot.classList.toggle("hidden", vazio);
+    if (vazio) dot.classList.remove("notif-dot-ping");
+  }
+
+  function recarregarLista() {
+    fetch("/notificacoes", { credentials: "same-origin", headers: { Accept: "text/html" } })
+      .then(function (r) { return r && r.ok ? r.text() : null; })
+      .then(function (html) {
+        if (html == null) return;
+        atualizarDot(html);
+        if (list) list.innerHTML = html;
+      })
+      .catch(function () { /* silencioso: mantém o estado atual do sino */ });
+  }
+
+  // Estado inicial ao carregar a página — antes disso a bolinha fica oculta
+  // (classe `hidden` por padrão em _sino.html), nunca "sempre vermelha".
+  recarregarLista();
+
+  // Se o dropdown está aberto quando a lista é recarregada (clique ou evento
+  // Realtime), o próprio HTMX troca o conteúdo (hx-trigger="click once"); aqui
+  // só garantimos que a bolinha reflita o resultado desse swap também.
+  document.body.addEventListener("htmx:afterSwap", function (evt) {
+    if (evt.target && evt.target.id === "notif-list") {
+      atualizarDot(evt.target.innerHTML);
+    }
+  });
+
+  if (!window.supabase || !window.fetch) return;
 
   var lastPing = 0;
   function sinalizar() {
@@ -27,23 +67,23 @@
     if (now - lastPing < 800) return;
     lastPing = now;
 
-    if (dot) {
-      dot.classList.remove("hidden");
-      dot.classList.add("notif-dot-ping");
-    }
     bell.classList.remove("notif-ring");
     void bell.offsetWidth; // reflow: reinicia a animação
     bell.classList.add("notif-ring");
+    if (dot) dot.classList.add("notif-dot-ping");
 
-    // Se o dropdown está aberto, recarrega a lista já com o novo estado.
+    // Recarrega a lista (e a bolinha) com o novo estado — o dropdown, se
+    // aberto, é atualizado pelo HTMX via afterSwap acima.
     var menu = document.querySelector('[data-menu="notif"]');
-    var list = document.getElementById("notif-list");
     if (menu && !menu.classList.contains("hidden") && list && window.htmx) {
       window.htmx.ajax("GET", "/notificacoes", { target: "#notif-list", swap: "innerHTML" });
+    } else {
+      recarregarLista();
     }
   }
 
-  // Ao abrir o sino, o usuário "viu" — para o halo pulsante.
+  // Ao abrir o sino, para o halo pulsante (o HTMX cuida de trazer a lista
+  // atual — "click once" — e o afterSwap acima recalcula a bolinha).
   bell.addEventListener("click", function () {
     if (dot) dot.classList.remove("notif-dot-ping");
   });

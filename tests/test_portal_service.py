@@ -33,6 +33,21 @@ def test_pode_avaliar_falso_se_nao_autor():
     )
 
 
+def test_pode_avaliar_falso_se_autoatendimento():
+    """Autor que também atendeu (operador_id == cliente_id) não precisa avaliar
+    a própria demanda — CSAT mede a experiência de quem foi atendido por outra
+    pessoa/setor."""
+    assert not PortalService.pode_avaliar(
+        {"status": "RESOLVIDO", "cliente_id": "u1", "operador_id": "u1"}, "u1"
+    )
+
+
+def test_pode_avaliar_verdadeiro_se_atendido_por_outro():
+    assert PortalService.pode_avaliar(
+        {"status": "RESOLVIDO", "cliente_id": "u1", "operador_id": "u2"}, "u1"
+    )
+
+
 def test_marketing_dep_id_encontra_por_nome_case_insensitive():
     deps = [{"id": "x1", "nome": "marketing"}]
     assert PortalService.marketing_dep_id(deps) == "x1"

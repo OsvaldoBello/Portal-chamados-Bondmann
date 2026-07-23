@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from hashlib import sha256
 
 from fastapi import (
     APIRouter,
@@ -22,7 +23,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 
 from app.anexos import (
     access_token as _access_token,
@@ -485,9 +486,20 @@ async def mensagens_fragmento(
     chamado = await repo.obter(ctx.user.claims, chamado_id)
     if chamado is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+    # ETag/304 (Seção 2.2): se nada mudou desde o último poll, responde 304 sem
+    # buscar as mensagens nem regenerar as signed URLs dos anexos — a causa do
+    # chat "piscar" a cada 10s mesmo sem mensagem nova (URL assinada muda a cada
+    # render, forçando o navegador a recarregar as imagens já exibidas).
+    n, mx = await repo.mensagens_assinatura(ctx.user.claims, chamado_id)
+    etag = f'W/"{sha256(f"{chamado_id}:{n}:{mx}".encode()).hexdigest()[:16]}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
     mensagens = await repo.mensagens(ctx.user.claims, chamado_id)
     await _assinar_anexos(request, mensagens)
-    return render(request, "portal/_mensagens.html", {"chamado": chamado, "mensagens": mensagens})
+    resp = render(request, "portal/_mensagens.html", {"chamado": chamado, "mensagens": mensagens})
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 @router.post("/chamados/{chamado_id}/mensagens")
