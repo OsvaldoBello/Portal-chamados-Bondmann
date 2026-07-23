@@ -389,6 +389,9 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
     chamado = await repo.obter(ctx.user.claims, chamado_id)
     if chamado is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+    # Marca como "visto" pelo usuário (apaga a bolinha do sino se este era o
+    # motivo dela estar acesa — ver MensagensRepo.notificacoes/marcar_notificacao_vista).
+    await repo.marcar_notificacao_vista(ctx.user.claims, chamado_id)
     mensagens = await repo.mensagens(ctx.user.claims, chamado_id)
     await assinar_anexos(request, mensagens)
     # "Em cópia" (Fase 8) — só leitura aqui; gerenciar (adicionar/remover) é no

@@ -460,8 +460,16 @@ async def criar_chamado(
     # pelo slowapi + ``from __future__ import annotations``, o FastAPI não
     # resolve o parâmetro injetado (mesma limitação do ``UploadFile``).
     tarefa_ia = BackgroundTasks()
-    # (1) Resumo do Químico (F0–F3 intocado — C2; será absorvido pelo Passe B na F4).
-    if eh_quimico:
+    dep_destino_nome = next(
+        (d["nome"] for d in setores_ativos if str(d["id"]) == departamento_id), None
+    )
+    triagem_cobre = triagem.deve_triar(dep_destino_nome, get_settings())
+    # (1) Resumo do Químico (C2) — APOSENTADO pela F4 quando a triagem cobre o
+    # departamento: o Passe B gera a pré-análise técnica (que contém o resumo e
+    # mais) como nota interna. O resumo simples só roda como transição enquanto
+    # a triagem do Químico não estiver habilitada nas envs (IA_TRIAGEM_ATIVA +
+    # IA_TRIAGEM_DEPARTAMENTOS) — nunca os dois pipelines no mesmo evento.
+    if eh_quimico and not triagem_cobre:
         tarefa_ia.add_task(
             gerar_e_salvar_resumo,
             str(novo["id"]),
@@ -474,10 +482,7 @@ async def criar_chamado(
     # IMEDIATO via create_task (latência p95 < 2 min — não espera o ciclo da
     # resposta como BackgroundTasks); o motor revalida tudo (kill switch,
     # status NOVO, idempotência) ao executar.
-    dep_destino_nome = next(
-        (d["nome"] for d in setores_ativos if str(d["id"]) == departamento_id), None
-    )
-    if triagem.deve_triar(dep_destino_nome, get_settings()):
+    if triagem_cobre:
         triagem.agendar_triagem(str(novo["id"]))
 
     # "Em cópia" (Fase 8): observadores escolhidos já na abertura — multi-setorial,
@@ -519,6 +524,9 @@ async def detalhe_chamado(
     chamado = await repo.obter(ctx.user.claims, chamado_id)
     if chamado is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+    # Marca como "visto" pelo usuário (apaga a bolinha do sino se este era o
+    # motivo dela estar acesa — ver MensagensRepo.notificacoes/marcar_notificacao_vista).
+    await repo.marcar_notificacao_vista(ctx.user.claims, chamado_id)
     mensagens = await repo.mensagens(ctx.user.claims, chamado_id)
     await _assinar_anexos(request, mensagens)
     settings = get_settings()

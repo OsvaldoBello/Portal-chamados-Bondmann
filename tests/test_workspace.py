@@ -107,6 +107,9 @@ class FakeRepo:
         return _chamado(id=cid, status=self._status, operador_id=self._operador_id,
                          cliente_id=self._cliente_id)
 
+    async def marcar_notificacao_vista(self, claims, cid):
+        self.acoes.append(("visto", cid))
+
     async def mensagens(self, claims, cid):
         return []
 

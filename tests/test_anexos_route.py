@@ -46,6 +46,9 @@ class FakeRepo:
             "avaliacao_nota": None, "avaliacao_comentario": None, "avaliacao_em": None,
         }
 
+    async def marcar_notificacao_vista(self, claims, chamado_id):
+        pass
+
     async def mensagens(self, claims, chamado_id):
         return list(self._msgs)
 

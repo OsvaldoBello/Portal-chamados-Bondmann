@@ -131,15 +131,29 @@ class MensagensRepo:
         chamado ficava pendente pra sempre e o sino nunca apagava a bolinha de
         aviso. Antes disso a regra comparava ``operador_id`` com
         ``cliente_id``, mas isso falhava sempre que o card era resolvido por
-        um colega do mesmo setor."""
+        um colega do mesmo setor.
+
+        ``nao_visto`` (2026-07-23): a lista em si continua mostrando TODO
+        pendente, mas a bolinha do sino (``_notificacoes.html``, que só olha
+        NOVO/RESOLVIDO) precisa saber se o usuário já ABRIU aquele chamado
+        desde a última mudança — sem isso um chamado NOVO já atribuído a
+        alguém, mas sem "Iniciar atendimento" clicado, mantinha a bolinha
+        acesa pra sempre mesmo depois de conferido. Comparamos contra
+        ``chamados_notificacoes_vistas.chamado_updated_em`` (o ``updated_at``
+        do chamado no momento em que foi visto) em vez de um timestamp de
+        parede: dispensa relógio de cliente e volta a acender sozinho se o
+        chamado mudar de novo (reatribuição, nova mensagem, reabertura)."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
                 SELECT c.id, c.codigo, c.titulo, c.status,
                        c.created_at, c.limite_resolucao, c.resolvido_em,
-                       c.avaliacao_nota, (c.cliente_id = auth.uid()) AS meu
+                       c.avaliacao_nota, (c.cliente_id = auth.uid()) AS meu,
+                       (v.chamado_updated_em IS NULL OR v.chamado_updated_em < c.updated_at) AS nao_visto
                   FROM chamados c
                   LEFT JOIN perfis cli ON cli.id = c.cliente_id
+                  LEFT JOIN chamados_notificacoes_vistas v
+                         ON v.chamado_id = c.id AND v.perfil_id = auth.uid()
                  WHERE c.status <> 'RESOLVIDO'
                     OR (c.resolvido_em IS NOT NULL AND c.avaliacao_nota IS NULL
                         AND c.cliente_id = auth.uid()
@@ -150,6 +164,26 @@ class MensagensRepo:
                 limite,
             )
             return [dict(r) for r in rows]
+
+    async def marcar_notificacao_vista(self, claims: dict, chamado_id: str) -> None:
+        """Registra que o usuário abriu o chamado AGORA — chamado ao carregar a
+        tela de detalhe (portal e workspace). Grava o ``updated_at`` atual do
+        chamado como referência (ver :meth:`notificacoes`); silencioso se o
+        chamado não existe/não está no escopo do usuário (RLS), pois marcar
+        "visto" nunca deve derrubar o carregamento da página."""
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                """
+                INSERT INTO chamados_notificacoes_vistas (chamado_id, perfil_id, chamado_updated_em, visto_em)
+                SELECT c.id, auth.uid(), c.updated_at, now()
+                  FROM chamados c
+                 WHERE c.id = $1::uuid
+                ON CONFLICT (chamado_id, perfil_id)
+                DO UPDATE SET chamado_updated_em = EXCLUDED.chamado_updated_em,
+                               visto_em = EXCLUDED.visto_em
+                """,
+                chamado_id,
+            )
 
     # ---------------------------------------------------------------------
     # "Em cópia" — observadores multi-setoriais (Fase 8, 2026-07-09).

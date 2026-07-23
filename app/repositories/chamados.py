@@ -203,6 +203,9 @@ class ChamadosRepo:
     async def notificacoes(self, claims: dict, *, limite: int = 6) -> list[dict[str, Any]]:
         return await self._mensagens.notificacoes(claims, limite=limite)
 
+    async def marcar_notificacao_vista(self, claims: dict, chamado_id: str) -> None:
+        return await self._mensagens.marcar_notificacao_vista(claims, chamado_id)
+
     async def usuarios_para_copia(
         self, claims: dict, *, excluir_id: str | None = None
     ) -> list[dict[str, Any]]:

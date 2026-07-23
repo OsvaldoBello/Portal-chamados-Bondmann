@@ -113,6 +113,9 @@ class FakeRepo:
     async def obter(self, claims, chamado_id):
         return self._chamado
 
+    async def marcar_notificacao_vista(self, claims, chamado_id):
+        pass
+
     async def avaliacao_pendente(self, claims):
         return self._avaliacao_pendente
 

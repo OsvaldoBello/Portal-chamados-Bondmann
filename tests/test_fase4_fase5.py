@@ -32,7 +32,7 @@ class FakeNotif:
             {"id": "a1", "codigo": "BOND-2026-00042", "titulo": "Impressora travando",
              "status": "NOVO", "created_at": agora - timedelta(hours=1),
              "limite_resolucao": agora + timedelta(hours=20), "resolvido_em": None,
-             "avaliacao_nota": None, "meu": True},
+             "avaliacao_nota": None, "meu": True, "nao_visto": True},
         ]
 
 
@@ -77,11 +77,11 @@ class FakeNotifMisto:
             {"id": "novo1", "codigo": "BOND-2026-00100", "titulo": "Chamado novo",
              "status": "NOVO", "created_at": agora - timedelta(minutes=5),
              "limite_resolucao": agora + timedelta(hours=20), "resolvido_em": None,
-             "avaliacao_nota": None, "meu": False},
+             "avaliacao_nota": None, "meu": False, "nao_visto": True},
             {"id": "atrasado1", "codigo": "BOND-2026-00099", "titulo": "Chamado atrasado",
              "status": "EM_ATENDIMENTO", "created_at": agora - timedelta(days=5),
              "limite_resolucao": agora - timedelta(hours=3), "resolvido_em": None,
-             "avaliacao_nota": None, "meu": False},
+             "avaliacao_nota": None, "meu": False, "nao_visto": True},
         ]
 
 
@@ -97,6 +97,31 @@ def test_notificacoes_marca_novo_mas_nao_sla_estourado_em_atendimento():
     assert marcados == ["novo1"]
     assert "atrasado1" not in "".join(marcados)
     assert "Chamado atrasado" in r.text  # segue aparecendo na lista, só sem o marcador
+
+
+class FakeNotifVisto:
+    """Chamado NOVO já atribuído a um operador, porém sem "Iniciar
+    atendimento" — status continua NOVO, mas o usuário já abriu o chamado
+    (``nao_visto=False``): a bolinha não deve acender (2026-07-23, correção
+    do sino que nunca apagava mesmo depois de o chamado já ter sido
+    conferido)."""
+
+    async def notificacoes(self, claims, *, limite=6):
+        agora = datetime.now(UTC)
+        return [
+            {"id": "visto1", "codigo": "BOND-2026-00101", "titulo": "Já conferido",
+             "status": "NOVO", "created_at": agora - timedelta(minutes=5),
+             "limite_resolucao": agora + timedelta(hours=20), "resolvido_em": None,
+             "avaliacao_nota": None, "meu": False, "nao_visto": False},
+        ]
+
+
+def test_notificacoes_nao_acende_chamado_ja_visto():
+    with client(user=_user(role="OPERADOR"), repo=FakeNotifVisto()) as c:
+        r = c.get("/notificacoes")
+    assert r.status_code == 200
+    assert 'data-notif-novo="1"' not in r.text
+    assert "Já conferido" in r.text  # segue na lista, só sem o marcador do sino
 
 
 def test_realtime_config_autenticado_retorna_json():

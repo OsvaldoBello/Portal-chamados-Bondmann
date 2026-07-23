@@ -6,12 +6,16 @@
    qualquer item da lista (2026-07-23 — SLA estourado não deve manter o sino
    piscando/vermelho). A lista em si continua mostrando TODO pendente
    (inclusive SLA estourado em atendimento), só o alerta do sino é mais
-   estrito. #}
+   estrito. Além do status, exige `i.nao_visto` (2026-07-23): abrir o
+   chamado grava um marcador de "visto" (MensagensRepo.marcar_notificacao_vista)
+   e apaga a bolinha mesmo sem trocar o status — sem isso, um chamado NOVO já
+   atribuído mas sem "Iniciar atendimento" clicado mantinha a bolinha acesa
+   pra sempre, mesmo já conferido. #}
 {% if itens %}
 <div class="divide-y divide-line/70">
   {% for i in itens %}
   {% set s = estado_sla(i.created_at, i.limite_resolucao, i.resolvido_em, status=i.status) %}
-  <a href="{{ base }}/{{ i.id }}" {% if i.status in ('NOVO', 'RESOLVIDO') %}data-notif-novo="1"{% endif %} class="flex gap-3 px-4 py-3 hover:bg-surface transition">
+  <a href="{{ base }}/{{ i.id }}" {% if i.status in ('NOVO', 'RESOLVIDO') and i.nao_visto %}data-notif-novo="1"{% endif %} class="flex gap-3 px-4 py-3 hover:bg-surface transition">
     <span class="mt-1.5 w-2 h-2 rounded-full shrink-0
       {%- if i.status == 'RESOLVIDO' %} bg-brandgreen-600
       {%- elif s.estado == 'danger' %} bg-sla-danger
