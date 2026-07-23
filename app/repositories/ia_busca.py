@@ -1,16 +1,28 @@
 """Busca de chamados semelhantes para a triagem por IA (F3 — plano IA, Seção 5).
 
-Fase A: FTS português (migration ``0052``) sobre chamados ``RESOLVIDO`` do
+Fase A: FTS português (migration ``0053``) sobre chamados ``RESOLVIDO`` do
 **mesmo departamento** do chamado em triagem. Os termos vêm do próprio modelo
 (``SaidaTriagem.termos_busca``); o resultado (código + título + resolução
 registrada) é citado na nota interna. Fase B (pgvector) fica para quando o
 volume justificar (Seção 4.5).
 
+Campos pesquisados: o casamento e o ranqueamento cobrem **título + descrição**
+(coluna gerada ``chamados.fts``) **e a resolução registrada** — esta última
+concatenada ao ``tsvector`` em tempo de busca (``c.fts || to_tsvector(res)``),
+sem coluna materializada nova. Assim um chamado passado é encontrado tanto pelo
+sintoma (título/descrição) quanto pela solução aplicada. A "resolução
+registrada" é a última mensagem pública de staff do chamado resolvido
+(Seção 4.4 — não há coluna de resolução); pesquisa e exibição usam exatamente o
+mesmo texto, então nunca se cita uma resolução que não casou. Como o predicado
+passa a incidir sobre uma expressão (não só sobre ``c.fts``), o índice GIN
+``idx_chamados_fts`` deixa de filtrar sozinho; os filtros duros
+(``departamento_id`` + ``status='RESOLVIDO'``) mantêm o conjunto candidato
+pequeno na v1 — se o volume justificar, promover a resolução a coluna
+materializada indexada (mesma decisão de engenharia da Seção 4.4).
+
 Contrato de segurança (Seção 5): a consulta roda na conexão administrativa do
 motor, então o filtro por ``departamento_id`` é **obrigatório no SQL** — defesa
-em profundidade, mesmo padrão do plano mestre geral. A "resolução registrada"
-é a última mensagem pública de staff do chamado resolvido (Seção 4.4 — não há
-coluna de resolução).
+em profundidade, mesmo padrão do plano mestre geral.
 
 Este módulo recebe a conexão de quem chama (o motor já tem a administrativa
 aberta na fase de persistência) — não abre conexão própria.
@@ -38,8 +50,10 @@ SELECT c.id::text AS id, c.codigo, c.titulo, res.conteudo AS resolucao
  WHERE c.departamento_id = $1
    AND c.id <> $2::uuid
    AND c.status = 'RESOLVIDO'
-   AND c.fts @@ websearch_to_tsquery('portuguese', $3)
- ORDER BY ts_rank(c.fts, websearch_to_tsquery('portuguese', $3)) DESC,
+   AND (c.fts || to_tsvector('portuguese', coalesce(res.conteudo, '')))
+       @@ websearch_to_tsquery('portuguese', $3)
+ ORDER BY ts_rank(c.fts || to_tsvector('portuguese', coalesce(res.conteudo, '')),
+                  websearch_to_tsquery('portuguese', $3)) DESC,
           c.resolvido_em DESC NULLS LAST
  LIMIT $4
 """

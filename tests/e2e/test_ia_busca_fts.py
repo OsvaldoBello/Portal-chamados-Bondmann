@@ -89,6 +89,31 @@ async def test_acha_o_semelhante_certo_com_resolucao(conn: asyncpg.Connection, s
     assert resultados[0]["codigo"]  # código BOND gerado pelo trigger
 
 
+async def test_acha_pela_resolucao_quando_titulo_e_descricao_nao_casam(
+    conn: asyncpg.Connection, seed: Seed
+):
+    """A resolução registrada entra na busca: um chamado cujo sintoma (título +
+    descrição) não menciona o termo, mas cuja SOLUÇÃO aplicada sim, é encontrado
+    e citado. Cobre a inclusão da resolução no ``tsvector`` (Seção 5)."""
+    achado = await _chamado_resolvido(
+        conn,
+        seed,
+        departamento_id=seed.dept_ti,
+        titulo="Sistema de notas travando",
+        descricao="O ERP fecha sozinho ao gerar documento fiscal.",
+        resolucao="Reinstalado o certificado digital A1 e o emissor voltou a operar.",
+        staff_id=seed.staff_ti,
+    )
+    resultados = await buscar_semelhantes(
+        conn,
+        departamento_id=seed.dept_ti,
+        chamado_id=str(seed.chamado_ti),
+        termos=["certificado digital A1"],
+    )
+    assert [r["id"] for r in resultados] == [str(achado)]
+    assert "certificado digital A1" in resultados[0]["resolucao"]
+
+
 async def test_nao_vaza_chamado_de_outro_departamento(conn: asyncpg.Connection, seed: Seed):
     """O mesmo vocabulário em outro departamento fica fora — o filtro por
     `departamento_id` no SQL é a única barreira (conexão administrativa)."""

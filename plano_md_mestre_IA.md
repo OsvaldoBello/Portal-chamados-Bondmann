@@ -397,68 +397,47 @@ O UUID entra em env/config (`IA_TRIAGEM_PERFIL_ID`) ou é resolvido por lookup d
 inicialização — `[DECISÃO DE ENGENHARIA]` lookup por nome com cache em memória (sem env extra,
 sem hardcode de UUID).
 
-### 4.3 Tabelas `base_quimico_*` (migration da F4)
+### 4.3 Tabelas `base_quimico_*` (migration `0054_base_quimico.sql`, F4 — executada 2026-07-23)
+
+> Schema CONFERIDO contra a planilha real em 2026-07-23 ("as abas mandam"):
+> `Base_IA_Produtos` (61 linhas), `Base_IA_Componentes` (437), `Base_IA_Materias_Primas`
+> (94), `Diagnostico_Ocorrencias` (5), `Perguntas_Investigacao` (6),
+> `Regras_Sigilo_Resposta` (5). PDF de fichas: 71 páginas, 100% texto,
+> ~1 ficha/página. Diferenças vs. o DDL planejado originalmente:
+> `materias_primas` ganhou `codigo_mp` como PK (coluna real "Código MP") e
+> `formula_quimica`/`utilizacoes`; `playbooks` unifica as 3 abas pequenas com
+> coluna `tipo` (`DIAGNOSTICO` | `PERGUNTA_INVESTIGACAO` | `REGRA_SIGILO`) e
+> `dados` jsonb (colunas da aba rotuladas); `formulacoes` ganhou `ordem` +
+> `codigo_mp` + `UNIQUE(chave_produto, ordem)` (chave natural do upsert).
 
 ```sql
--- Catálogo de produtos: componentes SEM proporção, palavras-chave, orientação de resposta.
-CREATE TABLE base_quimico_produtos (
-  chave_produto   text PRIMARY KEY,
-  nome            text NOT NULL,
-  aplicacao       text,
-  familia_tecnica text,
-  componentes     jsonb NOT NULL DEFAULT '[]'::jsonb,   -- nomes, SEM quantidades
-  palavras_chave  text[],
-  orientacao      text,
-  nivel_sigilo    text,
-  atualizado_em   timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE base_quimico_materias_primas (
-  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  nome          text NOT NULL,
-  funcao        text,
-  nivel_sigilo  text,
-  atualizado_em timestamptz NOT NULL DEFAULT now()
-);
-
--- Playbooks de diagnóstico/perguntas por sintoma (Passe A — sem dado de produto).
-CREATE TABLE base_quimico_playbooks (
-  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  sintoma       text NOT NULL,
-  perguntas     jsonb NOT NULL,          -- roteiro: dados a coletar, parâmetros a medir
-  causas        jsonb DEFAULT '[]',      -- causas prováveis + escalonamento (uso no Passe B)
-  atualizado_em timestamptz NOT NULL DEFAULT now()
-);
-
--- Fichas técnicas fatiadas por produto.
-CREATE TABLE base_quimico_fichas (
-  chave_produto text PRIMARY KEY REFERENCES base_quimico_produtos(chave_produto) ON DELETE CASCADE,
-  conteudo      text NOT NULL,           -- texto integral da ficha do produto
-  atualizado_em timestamptz NOT NULL DEFAULT now()
-);
-
--- A formulação de fato — quantidades. NENHUM passe acessa (C7).
-CREATE TABLE base_quimico_formulacoes (
-  id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  chave_produto text NOT NULL REFERENCES base_quimico_produtos(chave_produto) ON DELETE CASCADE,
-  componente    text NOT NULL,
-  quantidade    numeric,
-  unidade       text,
-  atualizado_em timestamptz NOT NULL DEFAULT now()
-);
-
--- Todas: RLS habilitado, ZERO policies (inacessíveis via claims/PostgREST).
--- Role dedicado do worker (C7):
-CREATE ROLE ia_worker LOGIN PASSWORD NULL;  -- senha definida fora da migration (env/painel)
-GRANT SELECT ON base_quimico_produtos, base_quimico_materias_primas,
-               base_quimico_playbooks, base_quimico_fichas TO ia_worker;
--- SEM grant em base_quimico_formulacoes — intencional e testado.
+-- DDL completo em supabase/migrations/0054_base_quimico.sql. Resumo:
+base_quimico_produtos        (chave_produto PK, segmento, codigo_produto, nome,
+                              nome_normalizado, aplicacao, familia_tecnica, tipo_uso,
+                              componentes jsonb,  -- nomes, SEM quantidades
+                              palavras_chave text[], orientacao, atualizado_em)
+base_quimico_materias_primas (codigo_mp PK, nome, formula_quimica, utilizacoes, atualizado_em)
+base_quimico_playbooks       (id PK, tipo CHECK, sintoma, dados jsonb, atualizado_em,
+                              UNIQUE (tipo, sintoma))
+base_quimico_fichas          (chave_produto PK→produtos, conteudo, atualizado_em)
+base_quimico_formulacoes     (id PK, chave_produto→produtos, ordem, codigo_mp,
+                              componente, quantidade, funcao, atualizado_em,
+                              UNIQUE (chave_produto, ordem))
 ```
 
-> `⚠️ SUPOSIÇÃO A VALIDAR (F4):` criação de role com senha via migration no Supabase hospedado
-> (pode exiger passo manual no painel/SQL editor — documentar em
-> `docs/runbook_hardening_gestor.md` se for o caso). O schema exato das colunas será conferido
-> contra a planilha real na F4 (as abas mandam; este DDL é o alvo, não a planilha inventada).
+- **RLS habilitado nas 5 tabelas; ZERO policies para papéis de usuário**
+  (anon/authenticated ⇒ 0 linhas, mesmo com o GRANT default do Supabase).
+- **Correção ao plano original (2026-07-23):** RLS também se aplica ao role
+  `ia_worker` (só owner/superuser passam por cima) — logo as 4 tabelas
+  liberadas têm, além do GRANT, uma **policy `FOR SELECT TO ia_worker USING (true)`**
+  (`bq_*_ia_worker`). Isso não enfraquece nada: a policy é restrita ao role.
+- `base_quimico_formulacoes`: **sem GRANT e sem policy** para `ia_worker`
+  (`REVOKE ALL` explícito) ⇒ `SELECT` falha com erro de permissão —
+  e2e `tests/e2e/test_rls_base_quimico.py` (marker `rls`) prova os dois lados.
+- Role criado idempotente na migration com `LOGIN` **sem senha** (login
+  impossível); a senha é definida pelo gestor fora da migration
+  (`ALTER ROLE ia_worker PASSWORD ...` no SQL editor) e entra em
+  `IA_WORKER_DATABASE_URL` — ver runbook.
 
 ### 4.4 Índice FTS em português (migration `0053`, F3 — aplicada em produção 2026-07-23)
 
@@ -473,8 +452,11 @@ CREATE INDEX IF NOT EXISTS idx_chamados_fts ON chamados USING gin(fts);
 
 A "resolução registrada" (o chamado não tem coluna de resolução) é obtida no momento da busca:
 últimas mensagens **públicas de staff** do chamado resolvido (`mensagens` já indexada por
-`chamado_id, created_at`). `[DECISÃO DE ENGENHARIA]` — evita duplicar conteúdo em coluna nova;
-se o volume tornar isso lento, promover a coluna materializada em migration futura.
+`chamado_id, created_at`). Essa resolução **também participa do casamento FTS**, concatenada ao
+`c.fts` em tempo de busca (Seção 5) — a coluna gerada indexa só `titulo + descricao`; a resolução
+entra via `to_tsvector` na query. `[DECISÃO DE ENGENHARIA]` — evita duplicar conteúdo em coluna
+nova; se o volume tornar isso lento, promover a resolução a coluna materializada indexada em
+migration futura.
 
 ### 4.5 Fase B — pgvector (migration futura, só quando o volume justificar)
 
@@ -493,6 +475,17 @@ Objetivo: a nota interna cita "o chamado X teve problema parecido; a solução r
   profundidade, mesmo padrão do plano mestre geral). O motor extrai termos-chave do chamado novo
   (o próprio modelo devolve `termos_busca[]` no JSON do passe) e recebe os 3 melhores resultados
   (código + resolução).
+- **Campos pesquisados (decisão do usuário, 2026-07-23):** o casamento e o ranqueamento cobrem
+  **título + descrição** (coluna gerada `chamados.fts`) **e a resolução registrada** — a última
+  mensagem pública de staff, concatenada ao `tsvector` em tempo de busca
+  (`c.fts || to_tsvector('portuguese', coalesce(res.conteudo,''))`), sem coluna materializada
+  nova. Assim um chamado é encontrado tanto pelo sintoma quanto pela **solução aplicada** (ex.:
+  achar casos pela conduta "reinstalação do certificado A1", ainda que o título não a cite).
+  Pesquisa e exibição usam o **mesmo texto** de resolução — nunca se cita uma resolução que não
+  casou. `[DECISÃO DE ENGENHARIA]` o predicado passa a incidir sobre uma expressão, então o índice
+  GIN `idx_chamados_fts` não filtra sozinho; os filtros duros (`departamento_id` +
+  `status='RESOLVIDO'`) seguram o conjunto candidato na v1 — promover a resolução a coluna
+  materializada indexada só se o volume justificar (mesma linha da Seção 4.4).
 - **Fase B (futuro):** pgvector/embeddings — captura semelhança semântica ("tela azul" ≈
   "computador reinicia sozinho"). Gatilho: quando a Fase A começar a errar por vocabulário, com
   volume que justifique (~fração de centavo por chamado de custo de embedding).
