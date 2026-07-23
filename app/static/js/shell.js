@@ -70,6 +70,41 @@
     });
   });
 
+  // ---- Lightbox de imagem: [data-lightbox="url"] (ex.: miniatura de avatar
+  // em admin/usuarios.html) abre a imagem ampliada e centralizada no overlay
+  // compartilhado `#lightbox` (workspace_base.html). Clique fora (no fundo,
+  // não na própria imagem) ou Esc fecha. Mesmo padrão do csat-modal
+  // (admin.js): `.hidden`/`.flex` via classList, nunca o atributo `hidden`
+  // (Preflight tem especificidade zero nele — perderia pra `.flex` estático e
+  // o overlay nunca se escondia de fato). ----
+  var lightbox = document.getElementById("lightbox");
+  var lightboxImg = document.getElementById("lightbox-img");
+  function fecharLightbox() {
+    if (!lightbox) return;
+    lightbox.classList.add("hidden");
+    document.documentElement.classList.remove("overflow-hidden");
+    document.body.classList.remove("overflow-hidden");
+  }
+  if (lightbox && lightboxImg) {
+    document.querySelectorAll("[data-lightbox]").forEach(function (el) {
+      el.addEventListener("click", function (e) {
+        var url = el.getAttribute("data-lightbox");
+        if (!url) return;
+        e.preventDefault();
+        lightboxImg.src = url;
+        lightbox.classList.remove("hidden");
+        document.documentElement.classList.add("overflow-hidden");
+        document.body.classList.add("overflow-hidden");
+      });
+    });
+    lightbox.addEventListener("click", function (e) {
+      if (e.target === lightbox) fecharLightbox();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !lightbox.classList.contains("hidden")) fecharLightbox();
+    });
+  }
+
   // ---- Barra de progresso de SLA: largura via CSSOM (permitido pela CSP;
   //      style="" inline seria bloqueado por style-src 'self'). ----
   document.querySelectorAll("[data-sla-pct]").forEach(function (el) {

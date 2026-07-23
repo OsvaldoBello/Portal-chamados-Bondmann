@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Portal de Chamados — Bondmann{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/css/app.css">
-  <link rel="stylesheet" href="/static/css/anim.css">
+  <link rel="stylesheet" href="{{ static_url('/static/css/app.css') }}">
+  <link rel="stylesheet" href="{{ static_url('/static/css/anim.css') }}">
   {# Assets self-hosted com SRI (Seção 3.8 / vendoring). CSP: script-src 'self'.
      HTMX 2.0 (fragmentos) + Alpine CSP build (UI, sem eval). #}
   <script defer src="/static/vendor/htmx.min.js"
           integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"></script>
   <script defer src="/static/vendor/alpine-csp.min.js"
           integrity="sha384-ToFwPnlRgZIoDDSatKvWLkecUR4Py5dma633TT4TVBQfs4nHKXXexI3v72xi5LnC"></script>
-  <script defer src="/static/js/shell.js"></script>
+  <script defer src="{{ static_url('/static/js/shell.js') }}"></script>
   {% block head_scripts %}{% endblock %}
 </head>
 <body class="min-h-screen bg-surface text-ink font-sans antialiased"
@@ -119,7 +119,7 @@
      Degrada para o sino por clique se o Realtime não estiver configurado. #}
   <script src="/static/vendor/supabase.min.js"
           integrity="sha384-8ljL080xacUYrqBXUJRcP68fd1dVCh9qK/xi9QMzxUgOVNycXp0s6mBZAjBMp9W0"></script>
-  <script src="/static/js/notificacoes.js"></script>
+  <script src="{{ static_url('/static/js/notificacoes.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

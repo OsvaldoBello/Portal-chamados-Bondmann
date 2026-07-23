@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Portal de Chamados — Bondmann{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="{{ static_url('/static/css/app.css') }}">
   {# Token CSRF disponível globalmente para mutações HTMX (Seção 3.5).
      Em 2.0, hx-headers lê via expressão; aqui injetamos o valor já assinado. #}
 </head>

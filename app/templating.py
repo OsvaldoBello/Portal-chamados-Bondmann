@@ -16,7 +16,31 @@ from app.domain.sla_visual import barra_sla, estado_sla
 from app.security.csrf import CSRF_HEADER, get_csrf
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+_STATIC_DIR = Path(__file__).parent / "static"
 _TZ = ZoneInfo("America/Sao_Paulo")  # exibição em horário de Brasília (Seção 5.2)
+
+
+def static_url(path: str) -> str:
+    """``/static/js/shell.js`` → ``/static/js/shell.js?v=<mtime>`` (cache-busting).
+
+    Sem isso, o navegador de quem já visitou o site antes segue servindo do
+    cache HTTP a versão ANTIGA de um `.js`/`.css` próprio (não os `vendor/*`,
+    que são pinados por versão/SRI e imutáveis de propósito) mesmo depois do
+    deploy trocar o conteúdo do arquivo no servidor — o HTML sempre vem
+    fresco (SSR a cada request), mas o script/CSS referenciado por ele fica
+    "grudado" na versão cacheada até um refresh forçado (bug real, 2026-07-23:
+    lightbox de foto não abria pro usuário porque o `shell.js` antigo, sem a
+    função, ainda estava em cache do navegador). ``mtime`` (não hash de
+    conteúdo) é suficiente aqui: barato, sem I/O de leitura do arquivo
+    inteiro, e muda a cada deploy que toca o arquivo. Arquivo ausente
+    (ex.: erro de digitação do path) devolve a URL sem `?v=` — a 404
+    resultante é mais fácil de depurar do que uma exceção aqui."""
+    caminho = _STATIC_DIR / path.removeprefix("/static/")
+    try:
+        versao = int(caminho.stat().st_mtime)
+    except OSError:
+        return path
+    return f"{path}?v={versao}"
 
 # Metadados de UI por status/prioridade (tokens da marca; Seção 5.1).
 STATUS_META = {
@@ -144,6 +168,7 @@ templates.env.globals.update(
     barra_sla=barra_sla,     # barra de progresso de SLA (Fase 3 do usuário)
     avatar_url=avatar_public_url,  # bolinha de avatar nos cards (Fase 7)
     paragrafos_mensagem=paragrafos_mensagem,  # quebra de parágrafo consistente no chat
+    static_url=static_url,  # cache-busting de js/css próprio (2026-07-23)
 )
 
 
