@@ -592,6 +592,10 @@ def test_atualizar_avatar_usuario_admin_de_outro_setor(monkeypatch):
         chamadas.append((token, path, mime))
 
     monkeypatch.setattr(admin_mod, "enviar_avatar", _fake_enviar)
+    # A rota exige `settings.supabase_service_role_key` truthy — não depende
+    # do `.env` local (que tem uma chave real; CI não tem), então fixamos
+    # explicitamente no singleton cacheado por `get_settings()`.
+    monkeypatch.setattr(admin_mod.get_settings(), "supabase_service_role_key", "fake-service-role")
 
     perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
     repo = FakeAdmin(is_ti=False)
@@ -617,6 +621,7 @@ def test_atualizar_avatar_usuario_operador_do_marketing(monkeypatch):
         pass
 
     monkeypatch.setattr(admin_mod, "enviar_avatar", _fake_enviar)
+    monkeypatch.setattr(admin_mod.get_settings(), "supabase_service_role_key", "fake-service-role")
 
     perfil = FakePerfilRepo(is_ti=False, role="OPERADOR", departamento="Marketing")
     repo = FakeAdmin(is_ti=False)
