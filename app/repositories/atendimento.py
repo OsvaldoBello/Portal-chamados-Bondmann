@@ -34,6 +34,7 @@ class AtendimentoRepo:
                        dep.nome AS departamento, dep.autoatendimento,
                        autor.nome AS cliente_nome, autor.avatar_path AS cliente_avatar_path,
                        autor.updated_at AS cliente_avatar_atualizado_em,
+                       autor.departamento_id AS cliente_departamento_id,
                        op.nome AS operador_nome
                   FROM chamados c
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
@@ -139,20 +140,28 @@ class AtendimentoRepo:
         ``cliente_id`` (a rota que consome isto é aberta a qualquer papel
         autenticado, não só CLIENTE — RLS por si só não estreita o bastante).
 
-        Autoatendimento (``operador_id = cliente_id``) não entra: quem resolveu
-        a própria demanda não precisa avaliar a si mesmo (mesma regra de
-        ``PortalService.pode_avaliar``) — sem isso, o autor ficava travado na
-        tela de avaliação para sempre, já que nunca vai preencher a própria nota."""
+        Chamado aberto para o PRÓPRIO departamento do autor (``chamados.
+        departamento_id = perfis.departamento_id``, ex.: alguém do Marketing
+        pedindo pro Marketing) não entra: ali o setor se autoatende num quadro
+        estilo Trello, sem uma relação real de "quem prestou o serviço" — a
+        trava de avaliação só faz sentido pra quem pediu algo a OUTRO
+        departamento (2026-07-23, ex.: BOND-2026-00027 — recorrente no
+        Marketing, travava a abertura de um novo chamado mesmo sem ninguém
+        pra avaliar). Antes disso a regra comparava ``operador_id`` com
+        ``cliente_id``, mas isso falhava sempre que o card era resolvido por
+        um colega do mesmo setor (ou arrastado direto até "Resolvido" sem
+        nunca ser reivindicado, deixando ``operador_id`` nulo)."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, codigo, titulo
-                  FROM chamados
-                 WHERE cliente_id = $1::uuid
-                   AND status = 'RESOLVIDO'
-                   AND avaliacao_nota IS NULL
-                   AND operador_id IS DISTINCT FROM cliente_id
-                 ORDER BY resolvido_em ASC NULLS LAST
+                SELECT c.id, c.codigo, c.titulo
+                  FROM chamados c
+                  JOIN perfis cli ON cli.id = c.cliente_id
+                 WHERE c.cliente_id = $1::uuid
+                   AND c.status = 'RESOLVIDO'
+                   AND c.avaliacao_nota IS NULL
+                   AND c.departamento_id IS DISTINCT FROM cli.departamento_id
+                 ORDER BY c.resolvido_em ASC NULLS LAST
                  LIMIT 1
                 """,
                 claims["sub"],

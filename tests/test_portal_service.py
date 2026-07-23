@@ -15,9 +15,15 @@ MARKETING_ID = "d3"
 OUTRO_ID = "d1"
 
 
-def test_pode_avaliar_autor_resolvido():
+def test_pode_avaliar_autor_resolvido_para_outro_departamento():
     assert PortalService.pode_avaliar(
-        {"status": "RESOLVIDO", "cliente_id": "u1"}, "u1"
+        {
+            "status": "RESOLVIDO",
+            "cliente_id": "u1",
+            "departamento_id": "ti",
+            "cliente_departamento_id": "marketing",
+        },
+        "u1",
     )
 
 
@@ -33,18 +39,36 @@ def test_pode_avaliar_falso_se_nao_autor():
     )
 
 
-def test_pode_avaliar_falso_se_autoatendimento():
-    """Autor que também atendeu (operador_id == cliente_id) não precisa avaliar
-    a própria demanda — CSAT mede a experiência de quem foi atendido por outra
-    pessoa/setor."""
+def test_pode_avaliar_falso_se_chamado_para_o_proprio_departamento():
+    """Chamado aberto para o próprio departamento do autor (ex.: alguém do
+    Marketing pedindo pro Marketing) não precisa avaliação — ali o setor se
+    autoatende num quadro estilo Trello, sem uma relação real de "quem
+    prestou o serviço" (bug real recorrente no Marketing, BOND-2026-00027)."""
     assert not PortalService.pode_avaliar(
-        {"status": "RESOLVIDO", "cliente_id": "u1", "operador_id": "u1"}, "u1"
+        {
+            "status": "RESOLVIDO",
+            "cliente_id": "u1",
+            "departamento_id": "marketing",
+            "cliente_departamento_id": "marketing",
+        },
+        "u1",
     )
 
 
-def test_pode_avaliar_verdadeiro_se_atendido_por_outro():
+def test_pode_avaliar_verdadeiro_mesmo_se_atendido_por_colega_do_setor():
+    """O que importa é o departamento de DESTINO do chamado, não quem
+    especificamente atendeu — mesmo resolvido por um colega do próprio setor
+    do autor, se o chamado foi endereçado a OUTRO departamento, avalia-se
+    normalmente."""
     assert PortalService.pode_avaliar(
-        {"status": "RESOLVIDO", "cliente_id": "u1", "operador_id": "u2"}, "u1"
+        {
+            "status": "RESOLVIDO",
+            "cliente_id": "u1",
+            "operador_id": "colega_do_ti",
+            "departamento_id": "ti",
+            "cliente_departamento_id": "marketing",
+        },
+        "u1",
     )
 
 

@@ -53,10 +53,11 @@
       </button>
     </form>
 
-  {% elif chamado.status == "RESOLVIDO" and chamado.operador_id and (chamado.operador_id | string) == (chamado.cliente_id | string) %}
-    {# Autoatendimento: o próprio autor também atendeu — nada a avaliar. #}
+  {% elif chamado.status == "RESOLVIDO" and (chamado.departamento_id | string) == (chamado.cliente_departamento_id | string) %}
+    {# Chamado para o próprio departamento do autor (ex.: Marketing pedindo
+       pro Marketing) — sem outro setor prestando serviço, nada a avaliar. #}
     <p class="text-sm text-muted">
-      Você mesmo atendeu esta demanda — avaliação não se aplica aqui.
+      Chamado do seu próprio setor — avaliação não se aplica aqui.
     </p>
 
   {% else %}

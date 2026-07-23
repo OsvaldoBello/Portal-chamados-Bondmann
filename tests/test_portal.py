@@ -164,6 +164,11 @@ def _chamado(status="RESOLVIDO", cliente_id=UID, **extra):
         "created_at": datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
         "limite_resposta": None, "limite_resolucao": None, "resolvido_em": None,
         "avaliacao_nota": None, "avaliacao_comentario": None, "avaliacao_em": None,
+        # Departamento de destino diferente do departamento do autor por padrão
+        # (pedido a OUTRO setor — cenário em que a avaliação é exigida; ver
+        # PortalService.pode_avaliar). Testes do caso "autoatendimento" (pedido
+        # para o próprio setor) sobrescrevem os dois para o mesmo valor.
+        "departamento_id": "d-ti", "cliente_departamento_id": "d-marketing",
     }
     base.update(extra)
     return base
@@ -611,6 +616,24 @@ def test_post_avaliacao_valida_persiste_e_mostra_estrelas():
     assert resp.status_code == 200
     assert repo.avaliacoes == [{"nota": 5, "comentario": "Muito bom"}]
     assert "5/5" in resp.text
+
+
+def test_post_avaliacao_chamado_para_o_proprio_departamento_e_bloqueada():
+    """Chamado aberto para o PRÓPRIO departamento do autor (ex.: Marketing
+    pedindo pro Marketing, recorrente na prática) não exige avaliação — a
+    trava só vale pra chamados abertos a OUTRO departamento (2026-07-23)."""
+    repo = FakeRepo(chamado=_chamado(
+        status="RESOLVIDO", departamento_id="d-marketing", cliente_departamento_id="d-marketing",
+    ))
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/avaliacao",
+            data={"nota": "5"},
+            headers={"X-CSRF-Token": token, "HX-Request": "true"},
+        )
+    assert resp.status_code == 403
+    assert repo.avaliacoes == []
 
 
 def test_post_avaliacao_nao_autor_e_bloqueada():

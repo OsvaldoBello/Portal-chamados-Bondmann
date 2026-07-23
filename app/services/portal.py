@@ -38,14 +38,19 @@ class PortalService:
     def pode_avaliar(chamado: dict, user_id: str) -> bool:
         """Regra de UI: autor + RESOLVIDO podem avaliar (RLS reforça no banco).
 
-        Autoatendimento (o próprio autor também atendeu, ``operador_id ==
-        cliente_id``) fica de fora: não faz sentido pedir CSAT de quem resolveu
-        a própria demanda — CSAT mede a experiência de quem foi atendido por
-        outra pessoa/setor."""
+        Chamado aberto para o PRÓPRIO departamento do autor (``departamento_id
+        == cliente_departamento_id``, ex.: alguém do Marketing pedindo pro
+        Marketing) fica de fora: ali o setor se autoatende num quadro estilo
+        Trello, sem uma relação real de "quem prestou o serviço" — CSAT só faz
+        sentido pra quem pediu algo a OUTRO departamento (2026-07-23, recorrente
+        no Marketing: a trava de avaliação travava a abertura de um novo
+        chamado mesmo quando quem resolveu foi um colega do próprio setor).
+        Requer ``chamado["cliente_departamento_id"]`` no dict (join feito em
+        ``AtendimentoRepo.obter``)."""
         return (
             chamado.get("status") == "RESOLVIDO"
             and str(chamado.get("cliente_id")) == str(user_id)
-            and str(chamado.get("operador_id")) != str(chamado.get("cliente_id"))
+            and str(chamado.get("departamento_id")) != str(chamado.get("cliente_departamento_id"))
         )
 
     @staticmethod

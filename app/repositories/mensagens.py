@@ -122,10 +122,16 @@ class MensagensRepo:
         chamados **não resolvidos** + **resolvidos-não-avaliados** do próprio autor.
         Serve tanto ao sino do staff (fila do setor) quanto ao do funcionário.
 
-        Autoatendimento (``operador_id = cliente_id``) fica de fora do segundo
-        recorte: quem resolveu a própria demanda nunca vai avaliá-la (mesma regra
-        de ``PortalService.pode_avaliar``) — sem essa exclusão, o chamado ficava
-        pendente pra sempre e o sino nunca apagava a bolinha de aviso."""
+        Chamado aberto para o PRÓPRIO departamento do autor (``chamados.
+        departamento_id = perfis.departamento_id``) fica de fora do segundo
+        recorte: ali o setor se autoatende num quadro estilo Trello (ex.:
+        Marketing pedindo pro Marketing), sem uma relação real de "quem
+        prestou o serviço" — a trava de avaliação só faz sentido pra quem
+        pediu algo a OUTRO departamento (2026-07-23). Sem essa exclusão, o
+        chamado ficava pendente pra sempre e o sino nunca apagava a bolinha de
+        aviso. Antes disso a regra comparava ``operador_id`` com
+        ``cliente_id``, mas isso falhava sempre que o card era resolvido por
+        um colega do mesmo setor."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
@@ -133,10 +139,11 @@ class MensagensRepo:
                        c.created_at, c.limite_resolucao, c.resolvido_em,
                        c.avaliacao_nota, (c.cliente_id = auth.uid()) AS meu
                   FROM chamados c
+                  LEFT JOIN perfis cli ON cli.id = c.cliente_id
                  WHERE c.status <> 'RESOLVIDO'
                     OR (c.resolvido_em IS NOT NULL AND c.avaliacao_nota IS NULL
                         AND c.cliente_id = auth.uid()
-                        AND c.operador_id IS DISTINCT FROM c.cliente_id)
+                        AND c.departamento_id IS DISTINCT FROM cli.departamento_id)
                  ORDER BY COALESCE(c.updated_at, c.created_at) DESC
                  LIMIT $1
                 """,
