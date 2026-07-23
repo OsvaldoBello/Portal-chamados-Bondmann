@@ -25,11 +25,23 @@ import io
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import RedirectResponse, Response
 
 from app import cache
 from app.auth.dependencies import CurrentUser, enforce_admin_mfa, get_current_user
+from app.avatar_storage import AvatarStorageError, avatar_path, enviar_avatar, preparar_avatar
+from app.config import get_settings
 from app.db import rls_request_scope
 from app.repositories.admin import AdminRepo, get_admin_repo
 from app.repositories.chamados import (
@@ -41,6 +53,7 @@ from app.repositories.chamados import (
 )
 from app.security.csrf import get_csrf
 from app.security.password_policy import SENHA_MIN_CHARS
+from app.security.uploads import UploadInvalido
 from app.services.admin import AdminService
 from app.templating import render
 
@@ -55,6 +68,12 @@ class AdminCtx:
     escopo: str  # rótulo do escopo dos indicadores (setor ou "Todos os setores")
     # Item 3.3 (Fase 1): ADMIN que ainda não habilitou MFA — a UI avisa, não bloqueia.
     mfa_nudge: bool = False
+    # 2026-07-23: TI, qualquer ADMIN de setor e o OPERADOR do Marketing podem
+    # enviar/trocar a foto de perfil de usuários já criados (ver `usuarios()`
+    # e `atualizar_avatar_usuario`) — sempre True para quem passa por
+    # `admin_context` hoje, mas mantido explícito para não acoplar o gate de
+    # avatar ao de acesso geral se este último ganhar mais grupos no futuro.
+    pode_editar_avatares: bool = False
 
 
 async def admin_context(
@@ -63,9 +82,13 @@ async def admin_context(
 ):
     """Autoriza o acesso ao painel e resolve o **escopo** dos indicadores.
 
-    Entra o **TI** (acesso total) e o **ADMIN de departamento** (gestor do
-    próprio setor). OPERADOR/CLIENTE recebem 403. Um ADMIN sem setor não tem
-    escopo de relatório → 403 (o único "admin global" é o TI).
+    Entra o **TI** (acesso total), o **ADMIN de departamento** (gestor do
+    próprio setor) e, desde 2026-07-23, o **OPERADOR do Marketing** — este
+    último só para poder enviar foto de perfil de usuários já criados
+    (`_require_pode_editar_avatares`); as demais rotas seguem exigindo
+    `_require_ti` ou `is_admin_dep`. Qualquer outro OPERADOR/CLIENTE recebe
+    403. Um ADMIN sem setor não tem escopo de relatório → 403 (o único "admin
+    global" é o TI).
 
     Dependência ``yield``: uma conexão RLS por request, reusada pelas queries
     (perfil, KPIs, catálogos, export) — performance (Seção 2.1)."""
@@ -80,16 +103,23 @@ async def admin_context(
         is_admin_dep = bool(
             perfil and perfil.get("role") == "ADMIN" and perfil.get("departamento")
         )
-        if not (is_ti or is_admin_dep):
+        # Pedido do usuário (2026-07-23): OPERADOR do Marketing ganha uma porta de
+        # entrada estreita no painel — só para poder tratar foto de perfil de
+        # usuários já criados (ver migration 0052, mesma regra na RLS).
+        is_mkt_operador = bool(
+            perfil and perfil.get("role") == "OPERADOR" and perfil.get("departamento") == "Marketing"
+        )
+        if not (is_ti or is_admin_dep or is_mkt_operador):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Área restrita a gestores (Admin do setor) e ao TI.",
+                detail="Área restrita a gestores (Admin do setor), TI e Operador do Marketing.",
             )
         # MFA (item 3.3, Fase 1): o painel é a superfície de maior privilégio, então
         # é aqui que o aal2 é exigido do papel ADMIN. Levanta MfaChallengeRequired
         # (→ redirect para /mfa/verify) se o ADMIN tem MFA mas a sessão está em aal1;
-        # devolve o nudge se ele ainda não habilitou. OPERADOR do TI (que também
-        # entra aqui) fica de fora — nesta fatia o MFA só é imposto ao ADMIN.
+        # devolve o nudge se ele ainda não habilitou. OPERADOR (TI ou Marketing),
+        # que também entra aqui, fica de fora — nesta fatia o MFA só é imposto ao
+        # papel ADMIN.
         mfa_nudge = enforce_admin_mfa(user)
 
         # Indicadores só do PRÓPRIO setor (decisão 2026-07-09) — TI passa a ser
@@ -97,7 +127,8 @@ async def admin_context(
         # deixou de existir. TI segue sendo o único que GERE catálogos (_require_ti).
         escopo = perfil.get("departamento") or "—"
         yield AdminCtx(
-            user=user, perfil=perfil, is_ti=is_ti, escopo=escopo, mfa_nudge=mfa_nudge
+            user=user, perfil=perfil, is_ti=is_ti, escopo=escopo, mfa_nudge=mfa_nudge,
+            pode_editar_avatares=(is_ti or is_admin_dep or is_mkt_operador),
         )
 
 
@@ -107,6 +138,18 @@ def _require_ti(ctx: AdminCtx) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Gestão de catálogos é restrita ao TI.",
+        )
+
+
+def _require_pode_editar_avatares(ctx: AdminCtx) -> None:
+    """Ver/editar foto de perfil de usuários já criados: TI, ADMIN de qualquer
+    setor ou OPERADOR do Marketing (2026-07-23) — quem passou por
+    `admin_context` hoje sempre atende isso; a checagem existe para não
+    depender implicitamente do gate de acesso geral."""
+    if not ctx.pode_editar_avatares:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sem permissão para alterar fotos de perfil.",
         )
 
 
@@ -592,7 +635,7 @@ async def usuarios(
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
 ):
-    _require_ti(ctx)
+    _require_pode_editar_avatares(ctx)
     from app.auth.supabase_client import ensure_admin_client
 
     lista = await repo.usuarios(ctx.user.claims)
@@ -716,20 +759,11 @@ async def criar_usuario(
     avatar = form_data.get("avatar")
     aviso_avatar = ""
     if avatar is not None and getattr(avatar, "filename", ""):
-        from app.avatar_storage import (
-            AvatarStorageError,
-            avatar_path as _avatar_path,
-            enviar_avatar,
-            preparar_avatar,
-        )
-        from app.config import get_settings
-        from app.security.uploads import UploadInvalido
-
         settings = get_settings()
         conteudo = await avatar.read(settings.avatar_max_bytes + 1)
         try:
             processada = preparar_avatar(avatar.filename, conteudo, max_bytes=settings.avatar_max_bytes)
-            path = _avatar_path(str(novo.id), "png")
+            path = avatar_path(str(novo.id), "png")
             await enviar_avatar(
                 settings.supabase_service_role_key, path, processada, "image/png"
             )
@@ -738,6 +772,55 @@ async def criar_usuario(
             aviso_avatar = f" (a foto não foi salva: {exc})"
 
     return _volta(ok=f"Conta {email} criada como {_PAPEL_LABEL[papel]}.{aviso_avatar}")
+
+
+@router.post("/usuarios/{user_id}/avatar")
+async def atualizar_avatar_usuario(
+    request: Request,
+    user_id: str,
+    arquivo: UploadFile = File(...),
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Envia/substitui a foto de perfil de um usuário JÁ CRIADO (2026-07-23):
+    pedido do usuário — além do TI, qualquer ADMIN de setor e o OPERADOR do
+    Marketing podem fazer isso para QUALQUER usuário, não só na criação da
+    conta. `_require_pode_editar_avatares` é o gate de app; a RLS (migration
+    0052, mesma regra) é quem garante isso também no banco, caso essa checagem
+    de app tenha algum furo. Upload no Storage via service_role: a policy de
+    `storage.objects` só libera cada um escrever no PRÓPRIO path (0033), então
+    o alvo aqui (path de OUTRO usuário) precisa bypassar a RLS de Storage —
+    mesmo padrão já usado em `criar_usuario`."""
+    _require_pode_editar_avatares(ctx)
+
+    def _volta(*, ok: str = "", erro: str = ""):
+        from urllib.parse import urlencode
+
+        qs = urlencode({k: v for k, v in {"ok": ok, "erro": erro}.items() if v})
+        return RedirectResponse(f"/admin/usuarios?{qs}", status_code=status.HTTP_303_SEE_OTHER)
+
+    if not arquivo or not arquivo.filename:
+        return _volta(erro="Selecione uma imagem.")
+
+    settings = get_settings()
+    if not settings.supabase_service_role_key:
+        return _volta(erro="Upload indisponível: service_role não configurada no servidor.")
+
+    conteudo = await arquivo.read(settings.avatar_max_bytes + 1)
+    try:
+        processada = preparar_avatar(arquivo.filename, conteudo, max_bytes=settings.avatar_max_bytes)
+    except UploadInvalido as exc:
+        return _volta(erro=str(exc))
+
+    path = avatar_path(user_id, "png")
+    try:
+        await enviar_avatar(settings.supabase_service_role_key, path, processada, "image/png")
+    except AvatarStorageError:
+        return _volta(erro="Falha ao enviar a foto. Tente novamente.")
+
+    await repo.atualizar_avatar(ctx.user.claims, user_id, avatar_path=path)
+    return _volta(ok="Foto de perfil atualizada.")
 
 
 @router.post("/usuarios/{user_id}/papel")

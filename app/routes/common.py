@@ -24,6 +24,7 @@ from app.anexos import MAX_ANEXOS
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.auth.session import current_access_token
 from app.config import get_settings
+from app.ia import triagem
 from app.repositories.chamados import ChamadosRepo, get_chamados_repo
 from app.security.uploads import UploadInvalido, validar_anexo
 from app.storage import AnexosStorage, StorageError, ensure_storage
@@ -273,8 +274,10 @@ async def inbound_email(
         # 1. Recupera informações do chamado
         chamado_row = await conn.fetchrow(
             """
-            SELECT c.id, c.codigo, c.titulo, c.cliente_id, c.operador_id, c.empresa_id
+            SELECT c.id, c.codigo, c.titulo, c.cliente_id, c.operador_id, c.empresa_id,
+                   d.nome AS departamento
               FROM chamados c
+              LEFT JOIN departamentos d ON d.id = c.departamento_id
              WHERE c.codigo = $1
             """,
             codigo
@@ -345,6 +348,11 @@ async def inbound_email(
         sender_id,
         cleaned_content or "[Imagem anexada]"
     )
+
+    # 7. Re-triagem por IA (F2): resposta do AUTOR por e-mail num depto habilitado
+    # reagenda a triagem — o motor revalida rodada/estado antes de agir.
+    if is_client and triagem.deve_triar(chamado.get("departamento"), settings):
+        triagem.agendar_triagem(str(chamado["id"]))
 
     return JSONResponse({"success": True, "message_id": str(msg_row["id"])})
 

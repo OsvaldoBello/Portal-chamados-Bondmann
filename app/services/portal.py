@@ -73,6 +73,21 @@ class PortalService:
             "",
         )
 
+    @staticmethod
+    def quimico_dep_id(departamentos: list[dict]) -> str:
+        """Id do departamento Químico ("Dpto Químico", migration 0027/0049) na
+        lista, ou "" se ausente. O front usa para exibir o bloco de campos
+        dinâmicos por categoria; o POST, para decidir se valida/monta o
+        ``dados_formulario``."""
+        return next(
+            (
+                str(d["id"])
+                for d in departamentos
+                if (d.get("nome") or "").strip().lower() == "dpto químico"
+            ),
+            "",
+        )
+
     @classmethod
     def regras_marketing(
         cls,

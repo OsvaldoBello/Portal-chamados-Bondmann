@@ -6,12 +6,17 @@
  * `chamados` e `mensagens`. A RLS aplica na entrega — o usuário só recebe
  * eventos do seu escopo (funcionário: os seus; staff: o setor; TI: tudo).
  *
- * A bolinha vermelha reflete se HÁ algo pendente (lista de /notificacoes
- * não-vazia) — não é só um "toque" de evento Realtime que nunca se apaga.
- * Ela é recalculada: (a) no carregamento da página; (b) toda vez que a lista
- * é recarregada (clique no sino ou refresh disparado por um evento Realtime).
- * Assim, ao ler/resolver todos os chamados pendentes, a bolinha some sozinha
- * na próxima recarga da lista, sem depender de um clique "apagar aviso".
+ * A bolinha vermelha reflete se HÁ chamado NOVO (ou resolvido aguardando
+ * avaliação) na lista de /notificacoes — não qualquer item pendente. Um
+ * chamado antigo que só ficou com SLA estourado enquanto já em atendimento
+ * NÃO conta (2026-07-23: SLA estourado não deve manter o sino "apitando"
+ * nem a bolinha vermelha acesa — isso é reservado pra CHAMADOS NOVOS de
+ * verdade; ver o marcador `data-notif-novo` em `_notificacoes.html`). A
+ * bolinha não é só um "toque" de evento Realtime que nunca se apaga: é
+ * recalculada (a) no carregamento da página; (b) toda vez que a lista é
+ * recarregada (clique no sino ou refresh disparado por um evento Realtime).
+ * Assim, ao ler/resolver todos os chamados novos, a bolinha some sozinha na
+ * próxima recarga da lista, sem depender de um clique "apagar aviso".
  *
  * Sem Realtime (config ausente/off), o sino segue funcionando por clique
  * (carrega a lista sob demanda — comportamento base do shell).
@@ -24,14 +29,15 @@
   var dot = document.querySelector("[data-notif-dot]");
   var list = document.getElementById("notif-list");
 
-  // A lista renderiza <a> por item pendente (ver _notificacoes.html); vazia,
-  // ela só tem o parágrafo "Nada pendente por aqui". Contar âncoras é o sinal
-  // mais barato de "ainda há algo a fazer" sem duplicar a regra do backend.
+  // Só os itens marcados `data-notif-novo` (chamado NOVO ou resolvido
+  // aguardando avaliação — ver _notificacoes.html) acendem a bolinha. Um
+  // chamado com SLA estourado mas já em atendimento aparece na lista, porém
+  // sem esse marcador, então não conta aqui.
   function atualizarDot(html) {
     if (!dot) return;
-    var vazio = !/<a\s/i.test(html);
-    dot.classList.toggle("hidden", vazio);
-    if (vazio) dot.classList.remove("notif-dot-ping");
+    var aceso = /data-notif-novo="1"/.test(html);
+    dot.classList.toggle("hidden", !aceso);
+    if (!aceso) dot.classList.remove("notif-dot-ping");
   }
 
   function recarregarLista() {
@@ -98,9 +104,13 @@
       });
       if (client.realtime && client.realtime.setAuth) client.realtime.setAuth(cfg.token);
 
+      // event: "INSERT" (não "*"): só chamado NOVO de verdade toca o sino.
+      // Um UPDATE em `chamados` (status, prioridade recalculada por SLA,
+      // atribuição, resolução...) não deve reacender o sino — 2026-07-23,
+      // esse era o gatilho do sino "apitando" toda vez que o SLA estourava.
       var channel = client
         .channel("notif-" + (cfg.uid || "user"))
-        .on("postgres_changes", { event: "*", schema: "public", table: "chamados" }, sinalizar)
+        .on("postgres_changes", { event: "INSERT", schema: "public", table: "chamados" }, sinalizar)
         .on("postgres_changes", { event: "INSERT", schema: "public", table: "mensagens" }, sinalizar)
         .subscribe();
 

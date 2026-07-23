@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_SESSION_SECRET = "dev-insecure-session-secret-change-me"
@@ -104,6 +104,63 @@ class Settings(BaseSettings):
     # App Secret do app da Meta, usado para validar a assinatura HMAC
     # (header X-Hub-Signature-256) de cada POST recebido no webhook.
     whatsapp_app_secret: str = Field(default="")
+
+    # --- IA (triagem de chamados + resumo do Químico) ---
+    # Frente de IA de triagem (plano_md_mestre_IA.md, Seção 2.4): TODAS as flags
+    # entram de uma vez com defaults DESLIGADOS — ligar/desligar fases seguintes
+    # é só env no Railway, sem deploy. Provedor plugável via API compatível com
+    # o formato OpenAI (/chat/completions); decisão C5 (2026-07-22): OpenAI /
+    # gpt-5.4-mini (Groq descontinuado). Trocar de provedor = trocar
+    # IA_TRIAGEM_BASE_URL + IA_TRIAGEM_MODEL.
+    #
+    # `[DECISÃO DE ENGENHARIA — F0]` rename groq_* → ia_triagem_* (C5) com
+    # fallback de alias para os nomes antigos (GROQ_API_KEY/GROQ_MODEL/
+    # GROQ_BASE_URL): o ambiente de produção que ainda tiver os envs antigos
+    # continua funcionando até o gestor migrar os nomes no Railway.
+
+    # Kill switch geral da TRIAGEM: false = nenhum agente roda (nem em sombra).
+    # (Não afeta o resumo do Químico, que depende só da api_key — ver
+    # `ia_resumo_ativo`.)
+    ia_triagem_ativa: bool = Field(default=False)
+    # CSV de nomes de departamentos com triagem (ex.: "TI" ou "TI,Dpto Químico").
+    # Vazio = nenhum.
+    ia_triagem_departamentos: str = Field(default="")
+    # Modo sombra: o motor roda tudo, mas SÓ grava notas internas — nunca
+    # mensagens públicas nem e-mail. É o modo da F1.
+    ia_triagem_modo_sombra: bool = Field(default=True)
+    ia_triagem_model: str = Field(
+        default="gpt-5.4-mini",
+        validation_alias=AliasChoices("ia_triagem_model", "groq_model"),
+    )
+    # Opcional; vazio = usa `ia_triagem_model` (Passe B do Químico, F4).
+    ia_triagem_model_passe_b: str = Field(default="")
+    ia_triagem_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        validation_alias=AliasChoices("ia_triagem_base_url", "groq_base_url"),
+    )
+    # Chave do provedor. Vazia = toda IA desligada (triagem E resumo). SÓ via
+    # env — nunca em código/doc/commit (REGRA DURA Seção 6.2 + C5).
+    ia_triagem_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ia_triagem_api_key", "groq_api_key"),
+    )
+    # Timeout por passe (C6: 30 s unificado; ia_resumo herda este valor).
+    ia_triagem_timeout_s: float = Field(default=30.0)
+    # Teto de rodadas de perguntas ao usuário (Regra de Ouro #3).
+    ia_triagem_max_rodadas: int = Field(default=2)
+    # Conexão do role Postgres `ia_worker` (C7) — obrigatória só para o
+    # Químico (F4). Vazia = contexto sigiloso indisponível.
+    ia_worker_database_url: str = Field(default="")
+
+    @property
+    def ia_resumo_ativo(self) -> bool:
+        """A geração de resumo por IA está configurada (há chave)?"""
+        return bool(self.ia_triagem_api_key)
+
+    @property
+    def ia_triagem_departamentos_lista(self) -> list[str]:
+        """Nomes de departamentos com triagem ativa (CSV → lista, sem vazios)."""
+        return [d.strip() for d in self.ia_triagem_departamentos.split(",") if d.strip()]
 
     @property
     def email_from(self) -> str:

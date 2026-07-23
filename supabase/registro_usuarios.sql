@@ -79,6 +79,70 @@ UPDATE auth.users
        COALESCE(raw_app_meta_data, '{}'::jsonb) || jsonb_build_object('role', 'ADMIN')
  WHERE email = 'ti@bondmann.com.br';
 
+-- ---------------------------------------------------------------------------
+-- PERFIL DE SERVIÇO "Assistente IA" (frente de IA de triagem — F0, decisão C4
+-- do plano_md_mestre_IA.md). `perfis.id` tem FK para `auth.users(id)`, então o
+-- perfil exige um usuário real no Supabase Auth:
+--   1) Criar em Authentication > Users (Add user) — ou via Admin API — com:
+--        e-mail: assistente-ia@bondmann.internal
+--        senha:  aleatória e DESCARTADA (ninguém jamais loga com este usuário;
+--                pode marcar "Auto Confirm"). Ex.: `openssl rand -hex 24`.
+--      O trigger `handle_new_user` cria o `perfis` como CLIENTE.
+--   2) Promover com o SQL abaixo (SQL Editor). role=OPERADOR permite que a RLS
+--      trate as mensagens dele como staff; departamento_id=NULL — ele "atende"
+--      qualquer departamento com IA ativa, e NÃO aparece nas filas de nenhum.
+--      (O guarda-corpo `enforce_departamento_recebe_chamados` só vale para
+--      chamados.departamento_id, não para perfis — NULL é aceito aqui.)
+--
+-- O app NUNCA autentica com esse usuário: as escritas da IA (mensagens de
+-- triagem, ia_triagens) usam admin_connection() com remetente_id apontando
+-- para este perfil. O UUID é resolvido por lookup de nome ("Assistente IA")
+-- com cache em memória — sem env var, sem hardcode (Seção 4.2 do plano IA).
+--
+-- >>> BLOCO PRONTO — copiar e rodar INTEIRO no SQL Editor (uma única vez).
+--     Alternativa ao passo 1 acima: cria o usuário direto por SQL (mesmo
+--     padrão validado na suíte e2e), sem passar pelo painel. Idempotente:
+--     reexecutar não duplica (o INSERT é pulado se o e-mail já existe).
+BEGIN;
+
+INSERT INTO auth.users (
+  instance_id, id, aud, role, email, encrypted_password,
+  email_confirmed_at, created_at, updated_at,
+  raw_app_meta_data, raw_user_meta_data,
+  confirmation_token, recovery_token, email_change_token_new, email_change
+)
+SELECT
+  '00000000-0000-0000-0000-000000000000', gen_random_uuid(), 'authenticated', 'authenticated',
+  'assistente-ia@bondmann.internal',
+  crypt(encode(gen_random_bytes(32), 'hex'), gen_salt('bf')),  -- senha aleatória, descartada
+  now(), now(), now(),
+  jsonb_build_object('provider', 'email', 'providers', ARRAY['email'], 'role', 'OPERADOR'),
+  jsonb_build_object('nome', 'Assistente IA'),
+  '', '', '', ''
+WHERE NOT EXISTS (
+  SELECT 1 FROM auth.users WHERE email = 'assistente-ia@bondmann.internal'
+);
+
+-- Promoção: o trigger perfis_self_so_avatar (0033) bloqueia UPDATE de
+-- nome/role sem auth_is_ti(); desabilitado SÓ dentro desta transação.
+ALTER TABLE perfis DISABLE TRIGGER perfis_self_so_avatar;
+UPDATE perfis
+   SET nome = 'Assistente IA',
+       role = 'OPERADOR',
+       departamento_id = NULL
+ WHERE id = (SELECT id FROM auth.users WHERE email = 'assistente-ia@bondmann.internal');
+ALTER TABLE perfis ENABLE TRIGGER perfis_self_so_avatar;
+
+UPDATE auth.users
+   SET raw_app_meta_data =
+       COALESCE(raw_app_meta_data, '{}'::jsonb) || jsonb_build_object('role', 'OPERADOR')
+ WHERE email = 'assistente-ia@bondmann.internal';
+
+COMMIT;
+
+-- Conferência (deve devolver 1 linha: Assistente IA · OPERADOR · depto NULL):
+-- SELECT p.nome, p.role, p.departamento_id FROM perfis p WHERE p.nome = 'Assistente IA';
+
 -- Reverter para funcionário comum (CLIENTE, sem departamento):
 -- UPDATE perfis SET role = 'CLIENTE', departamento_id = NULL
 --  WHERE id = (SELECT id FROM auth.users WHERE email = '...');

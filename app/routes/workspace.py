@@ -29,6 +29,7 @@ from app.anexos import assinar_anexos, processar_uploads
 from app.auth.dependencies import CurrentUser, require_role
 from app.config import get_settings
 from app.db import rls_request_scope
+from app.domain.formularios_quimico import rotular
 from app.domain.sla_visual import estado_sla
 from app.repositories.chamados import PRIORIDADES, ChamadosRepo, get_chamados_repo
 from app.security.csrf import get_csrf
@@ -440,11 +441,16 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         await repo.subcategorias_ativas(ctx.user.claims, str(chamado["categoria_id"]))
         if chamado.get("categoria_id") else []
     )
+    # Triagem por IA (frente plano_md_mestre_IA.md): a última nota interna da
+    # IA ganha um bloco de avaliação 1–5 ★ (KPI "notas úteis ≥ 70%", Seção
+    # 10.2). Sob RLS: quem não é staff do departamento recebe None.
+    ia_triagem = await repo.ia_triagem_nota(ctx.user.claims, chamado_id)
     settings = get_settings()
     ctx_render = {
         "perfil": ctx.perfil,
         "chamado": chamado,
         "mensagens": mensagens,
+        "dados_formulario": rotular(chamado.get("categoria"), chamado.get("dados_formulario") or {}),
         "operadores": operadores,
         "departamentos": departamentos,
         "categorias_edit": categorias_edit,
@@ -459,6 +465,7 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         "anon_key": settings.supabase_anon_key or None,
         "access_token": _access_token(request),
         "origem": origem,
+        "ia_triagem": ia_triagem,
     }
     ctx_render.update(extra)
     return render(request, "workspace/atendimento.html", ctx_render)
@@ -571,6 +578,36 @@ async def salvar_marketing_meta(
         origem_demanda=origem_demanda,
         causa_atraso=causa_atraso.strip() or None
     )
+    return _voltar(chamado_id, origem)
+
+
+@router.post("/chamados/{chamado_id}/ia/avaliacao")
+async def avaliar_triagem_ia(
+    request: Request,
+    chamado_id: str,
+    nota: int = Form(...),
+    triagem_id: int = Form(...),
+    origem: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Avaliação 1–5 ★ da pré-análise da IA pelo staff (plano IA, Seção 10.2).
+
+    O escopo é provado no repositório: a triagem precisa estar visível sob a
+    RLS do avaliador (staff do departamento do chamado). Reavaliar sobrescreve.
+    """
+    if not 1 <= nota <= 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Nota deve ser de 1 a 5."
+        )
+    ok = await repo.avaliar_ia_triagem(
+        ctx.user.claims, chamado_id, triagem_id=triagem_id, nota=nota, avaliador_id=ctx.user.id
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Triagem não encontrada."
+        )
     return _voltar(chamado_id, origem)
 
 

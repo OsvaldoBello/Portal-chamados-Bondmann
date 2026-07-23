@@ -16,10 +16,25 @@ from fastapi.testclient import TestClient
 
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.main import app
+from app.ratelimit import limiter
 from app.repositories.chamados import get_chamados_repo, validar_nota
 
 UID = "11111111-1111-1111-1111-111111111111"
 EMPRESA = "22222222-2222-2222-2222-222222222222"
+
+
+@pytest.fixture(autouse=True)
+def _sem_rate_limit():
+    """Desliga o rate limit da abertura (@limiter.limit) durante os testes: o
+    storage in-memory é por processo e compartilhado entre os casos, então a
+    soma de POSTs do arquivo estouraria o teto de 15/min e causaria 429 espúrio.
+    Nenhum teste aqui verifica rate limit (isso é coberto em test_ratelimit.py)."""
+    anterior = limiter.enabled
+    limiter.enabled = False
+    try:
+        yield
+    finally:
+        limiter.enabled = anterior
 
 
 def _cliente() -> CurrentUser:
@@ -123,6 +138,11 @@ class FakeRepo:
         return any(
             str(s["id"]) == str(subcategoria_id)
             for s in self._subcategorias.get(categoria_id, [])
+        )
+
+    async def nome_categoria(self, claims, categoria_id):
+        return next(
+            (c["nome"] for c in self._categorias if str(c["id"]) == str(categoria_id)), None
         )
 
     async def criar(self, claims, **kwargs):
@@ -726,3 +746,344 @@ def test_detalhe_com_avaliar_pendente_mostra_aviso():
         resp = client.get("/portal/chamados/aaa?avaliar_pendente=1")
     assert resp.status_code == 200
     assert "Antes de abrir um novo chamado" in resp.text
+
+
+# --------------------------------------------------------------------------
+# Abertura dinâmica do departamento Químico (campos por categoria + IA)
+# --------------------------------------------------------------------------
+def _repo_quimico(categoria_nome="Registro de Ocorrência", **kw):
+    """FakeRepo com o Químico recebendo chamados e a categoria indicada."""
+    return FakeRepo(
+        departamentos=[
+            {"id": "d1", "nome": "TI", "recebe_chamados": True},
+            {"id": "dq", "nome": "Dpto Químico", "recebe_chamados": True},
+            {"id": "d4", "nome": "Financeiro", "recebe_chamados": False},
+        ],
+        categorias=[{"id": "cq", "nome": categoria_nome}],
+        subcategorias={"cq": []},  # categorias do Químico não usam subcategoria
+        **kw,
+    )
+
+
+def _abertura_ocorrencia(**over):
+    """Payload de abertura válido para a categoria Registro de Ocorrência."""
+    base = {
+        "titulo": "Vazamento na linha 3",
+        "descricao": "Detalhes do ocorrido",
+        "departamento_id": "dq",
+        "categoria_id": "cq",
+        "setor": "Financeiro",
+        # campos dinâmicos (namespace campo__) — schema real do FB033
+        "campo__representante": "Zeca",
+        "campo__regiao": "001-COLOMBO",
+        "campo__supervisor": "CHRISTIAN ALVES SEVERO",
+        "campo__gerente": "ANDRE LUIZ MANDELLI",
+        "campo__nome_empresa_cliente": "Cliente X",
+        "campo__cidade": "Canoas",
+        "campo__nome_contato_cliente": "Fulano",
+        "campo__cargo": "Comprador",
+        "campo__setor_contato": "Compras",
+        "campo__fone": "51999998888",
+        "campo__email": "fulano@cliente.com",
+        "campo__tipo_ocorrencia": "PRODUTO",
+        "campo__produto": "ALKARES",
+        "campo__lote": "LOTE1234567890",
+        "campo__descricao_situacao": "Produto vazou no piso",
+        "campo__produto_funcao_especifica": "Sim",
+        "campo__ambiente_apropriado": "Sim",
+        "campo__operadores_treinados": "Sim",
+        "campo__procedimentos_medicao": "Sim",
+        "campo__ocorrencia_pontual": "Sim",
+        "campo__processos_anteriores_afetam": "Não",
+        "campo__outras_informacoes": "Não",
+    }
+    base.update(over)
+    return base
+
+
+def test_campos_fragmento_do_quimico_renderiza_campos():
+    repo = _repo_quimico()
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/campos", params={"categoria_id": "cq"})
+    assert resp.status_code == 200
+    assert 'name="campo__tipo_ocorrencia"' in resp.text
+    assert "Descrição da Situação" in resp.text
+
+
+def test_criar_quimico_grava_dados_formulario():
+    repo = _repo_quimico()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_ocorrencia(),
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert len(repo.criados) == 1
+    dados = repo.criados[0]["dados_formulario"]
+    assert dados["tipo_ocorrencia"] == "PRODUTO"
+    assert dados["nome_empresa_cliente"] == "Cliente X"
+    # Campo de detalhe opcional (não enviado) não é gravado.
+    assert "produto_funcao_especifica_detalhe" not in dados
+    # Campo forjado fora do schema não é gravado.
+    assert "campo_forjado" not in dados
+
+
+def test_criar_quimico_sem_assunto_e_descricao_deriva_automaticamente():
+    """A tela de abertura esconde Assunto/Descrição pro Químico (2026-07-22) —
+    o navegador ainda manda os dois campos (vazios, sem `required`); o servidor
+    precisa aceitar e derivar os dois a partir do formulário dinâmico."""
+    repo = _repo_quimico()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_ocorrencia(titulo="", descricao=""),
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    criado = repo.criados[0]
+    assert criado["titulo"] == "Registro de Ocorrência — Cliente X"
+    assert criado["descricao"] == "Produto vazou no piso"
+
+
+def test_criar_quimico_sem_campo_obrigatorio_retorna_erro():
+    repo = _repo_quimico()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_ocorrencia(campo__descricao_situacao=""),
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 400
+    assert "Descrição da Situação" in resp.text
+    assert repo.criados == []  # nada gravado quando a validação falha
+
+
+def test_criar_quimico_lote_curto_retorna_erro_min_chars():
+    repo = _repo_quimico()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_ocorrencia(campo__lote="ABC"),
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 400
+    assert "Lote" in resp.text
+    assert repo.criados == []
+
+
+def test_criar_fora_do_quimico_nao_grava_dados_formulario():
+    repo = _repo_quimico()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        # Departamento TI: mesmo enviando campo__*, nada de dados_formulario.
+        resp = client.post(
+            "/portal/chamados",
+            data={
+                "titulo": "Impressora", "descricao": "não liga", "departamento_id": "d1",
+                "categoria_id": "cq", "setor": "Financeiro", "campo__representante": "x",
+            },
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert repo.criados[0]["dados_formulario"] == {}
+
+
+def test_criar_quimico_analise_laboratorial_com_checkbox_multiplo():
+    """Análise Laboratorial usa checkbox_multi (`analises_solicitadas`) — o
+    HTML manda várias entradas com o MESMO name; confirma que o agrupamento em
+    portal.py preserva todas (não só a última) e grava como lista."""
+    repo = _repo_quimico(categoria_nome="Solicitação de Análise Laboratorial")
+    data = {
+        "titulo": "Amostra de óleo",
+        "descricao": "Verificar especificação",
+        "departamento_id": "dq",
+        "categoria_id": "cq",
+        "setor": "Financeiro",
+        "campo__identificacao_solicitante": "Zeca",
+        "campo__unidade_entrega": "Matriz Canoas/RS",
+        "campo__identificacao_cliente": "Cliente Z",
+        "campo__descricao_amostra": "Óleo, lote 123, aspecto turvo",
+        "campo__objetivo_analises": "Confirmar especificação",
+    }
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data={
+                **data,
+                # httpx serializa valor-lista como múltiplas entradas do mesmo
+                # campo — simula os checkboxes marcados do form real.
+                "campo__analises_solicitadas": [
+                    "Determinação de pH", "Determinação de densidade",
+                ],
+            },
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    dados = repo.criados[0]["dados_formulario"]
+    assert dados["analises_solicitadas"] == ["Determinação de pH", "Determinação de densidade"]
+
+
+def test_criar_quimico_analise_laboratorial_sem_checkbox_retorna_erro():
+    repo = _repo_quimico(categoria_nome="Solicitação de Análise Laboratorial")
+    data = {
+        "titulo": "Amostra de óleo",
+        "descricao": "Verificar especificação",
+        "departamento_id": "dq",
+        "categoria_id": "cq",
+        "setor": "Financeiro",
+        "campo__identificacao_solicitante": "Zeca",
+        "campo__unidade_entrega": "Matriz Canoas/RS",
+        "campo__identificacao_cliente": "Cliente Z",
+        "campo__descricao_amostra": "Óleo, lote 123",
+        "campo__objetivo_analises": "Confirmar especificação",
+    }
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data={**data, "csrf_token": token},
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 400
+    assert "Análises solicitadas" in resp.text
+    assert repo.criados == []
+
+
+# --------------------------------------------------------------------------
+# Hook de triagem por IA na abertura (F1 — plano_md_mestre_IA.md, Seção 2.3)
+# --------------------------------------------------------------------------
+def _settings_triagem(**over):
+    from app.config import Settings
+
+    base = dict(
+        session_secret="segredo-real-de-teste-nao-default",
+        csrf_secret="outro-segredo-real-de-teste-nao-default",
+        ia_triagem_ativa=True,
+        ia_triagem_api_key="k-triagem",
+        ia_triagem_departamentos="TI",
+    )
+    base.update(over)
+    return Settings(**base)
+
+
+@contextmanager
+def _hook_triagem(settings):
+    """Patcha settings da rota + agendador da triagem (disparo imediato via
+    ``agendar_triagem``/create_task desde a otimização de latência 2026-07-23;
+    o mock evita task real de asyncio no TestClient)."""
+    from unittest.mock import MagicMock, patch
+
+    from app.ia import triagem
+    from app.routes import portal as portal_mod
+
+    agendar = MagicMock()
+    with (
+        patch.object(portal_mod, "get_settings", return_value=settings),
+        patch.object(triagem, "agendar_triagem", agendar),
+    ):
+        yield agendar
+
+
+def test_criar_chamado_ti_agenda_triagem_em_background():
+    repo = FakeRepo()
+    with _hook_triagem(_settings_triagem()) as executar:
+        with portal_client(repo) as client:
+            token = _csrf_token(client)
+            resp = client.post(
+                "/portal/chamados",
+                data=_abertura_valida(departamento_id="d1", categoria_id="c1"),
+                headers={"X-CSRF-Token": token},
+                follow_redirects=False,
+            )
+    assert resp.status_code == 303
+    executar.assert_called_once_with("novo-id")
+
+
+def test_criar_chamado_departamento_nao_habilitado_nao_agenda_triagem():
+    repo = FakeRepo()
+    with _hook_triagem(_settings_triagem(ia_triagem_departamentos="TI")) as executar:
+        with portal_client(repo) as client:
+            token = _csrf_token(client)
+            resp = client.post(
+                "/portal/chamados",
+                data=_abertura_valida(departamento_id="d2"),  # RH: fora da lista
+                headers={"X-CSRF-Token": token},
+                follow_redirects=False,
+            )
+    assert resp.status_code == 303
+    executar.assert_not_called()
+
+
+def test_criar_chamado_com_kill_switch_desligado_nao_agenda_triagem():
+    repo = FakeRepo()
+    with _hook_triagem(_settings_triagem(ia_triagem_ativa=False)) as executar:
+        with portal_client(repo) as client:
+            token = _csrf_token(client)
+            resp = client.post(
+                "/portal/chamados",
+                data=_abertura_valida(departamento_id="d1", categoria_id="c1"),
+                headers={"X-CSRF-Token": token},
+                follow_redirects=False,
+            )
+    assert resp.status_code == 303
+    executar.assert_not_called()
+
+
+def test_responder_como_autor_agenda_re_triagem():
+    """F2: resposta do AUTOR num chamado de depto habilitado reagenda a triagem."""
+    repo = FakeRepo(chamado=_chamado(status="NOVO", departamento="TI"))
+    with _hook_triagem(_settings_triagem()) as executar:
+        with portal_client(repo) as client:
+            token = _csrf_token(client)
+            resp = client.post(
+                "/portal/chamados/aaa/mensagens",
+                data={"conteudo": "O monitor acende sim."},
+                headers={"X-CSRF-Token": token},
+                follow_redirects=False,
+            )
+    assert resp.status_code == 303
+    executar.assert_called_once_with("aaa")
+
+
+def test_responder_em_depto_nao_habilitado_nao_agenda_re_triagem():
+    repo = FakeRepo(chamado=_chamado(status="NOVO", departamento="RH"))
+    with _hook_triagem(_settings_triagem(ia_triagem_departamentos="TI")) as executar:
+        with portal_client(repo) as client:
+            token = _csrf_token(client)
+            resp = client.post(
+                "/portal/chamados/aaa/mensagens",
+                data={"conteudo": "Alguma resposta."},
+                headers={"X-CSRF-Token": token},
+                follow_redirects=False,
+            )
+    assert resp.status_code == 303
+    executar.assert_not_called()
+
+
+def test_responder_como_nao_autor_nao_agenda_re_triagem():
+    """Só a resposta do AUTOR reagenda (observador/terceiro não conta)."""
+    repo = FakeRepo(chamado=_chamado(status="NOVO", departamento="TI", cliente_id="outro-uuid"))
+    with _hook_triagem(_settings_triagem()) as executar:
+        with portal_client(repo) as client:
+            token = _csrf_token(client)
+            resp = client.post(
+                "/portal/chamados/aaa/mensagens",
+                data={"conteudo": "Mensagem de observador."},
+                headers={"X-CSRF-Token": token},
+                follow_redirects=False,
+            )
+    assert resp.status_code == 303
+    executar.assert_not_called()

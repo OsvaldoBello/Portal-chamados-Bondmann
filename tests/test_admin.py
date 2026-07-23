@@ -124,6 +124,9 @@ class FakeAdmin:
         self.acoes.append(("papel", user_id, role, departamento_id))
         self._papeis[user_id] = role
 
+    async def atualizar_avatar(self, claims, user_id, *, avatar_path):
+        self.acoes.append(("avatar", user_id, avatar_path))
+
     async def obter_papel(self, claims, user_id):
         """Simula ``perfis.role`` após a escrita — usado pela releitura pós-
         promoção (Sprint 1 / item 1.5, M12)."""
@@ -539,10 +542,132 @@ def test_usuarios_lista_e_form_de_criar():
     assert 'action="/admin/usuarios"' in r.text
 
 
-def test_usuarios_restrito_ao_ti():
+def test_usuarios_acessivel_a_qualquer_admin_de_setor_mas_sem_acoes_de_ti():
+    # 2026-07-23: qualquer ADMIN (não só o TI) pode ver a tela de contas — mas
+    # só para tratar foto de perfil; criar conta, mudar papel, resetar MFA e
+    # excluir seguem exclusivos do TI (escondidos na própria tela).
     perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
     with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin/usuarios")
+    assert r.status_code == 200
+    assert "Nova conta" not in r.text
+    assert 'action="/admin/usuarios/u1/papel"' not in r.text
+    assert 'action="/admin/usuarios/u1/reset-mfa"' not in r.text
+    assert "Excluir conta" not in r.text
+    assert 'action="/admin/usuarios/u1/avatar"' in r.text
+
+
+def test_usuarios_operador_fora_do_marketing_recebe_403():
+    # OPERADOR de um setor que não é Marketing continua de fora do painel.
+    perfil = FakePerfilRepo(is_ti=False, role="OPERADOR", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="OPERADOR"), perfil=perfil) as c:
         assert c.get("/admin/usuarios").status_code == 403
+
+
+def test_usuarios_operador_do_marketing_acessa_so_para_foto():
+    perfil = FakePerfilRepo(is_ti=False, role="OPERADOR", departamento="Marketing")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="OPERADOR"), perfil=perfil) as c:
+        r = c.get("/admin/usuarios")
+    assert r.status_code == 200
+    assert "Nova conta" not in r.text
+    assert 'action="/admin/usuarios/u1/avatar"' in r.text
+
+
+# PNG 3x5 válido e decodificável pelo Pillow (mesmo fixture de test_perfil.py).
+_PNG_3X5 = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000030000000508020000000f13c1"
+    "f50000001349444154789c633c6164c400064c108a200b003a0201364f97f8f4"
+    "0000000049454e44ae426082"
+)
+
+
+def test_atualizar_avatar_usuario_admin_de_outro_setor(monkeypatch):
+    # ADMIN do RH (não-TI) pode trocar o avatar de OUTRO usuário (u1, que na
+    # fixture do FakeAdmin é do RH) — pedido do usuário, 2026-07-23.
+    import app.routes.admin as admin_mod
+
+    chamadas = []
+
+    async def _fake_enviar(token, path, conteudo, mime):
+        chamadas.append((token, path, mime))
+
+    monkeypatch.setattr(admin_mod, "enviar_avatar", _fake_enviar)
+
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    repo = FakeAdmin(is_ti=False)
+    with admin_client(repo, user=_user(role="ADMIN"), perfil=perfil) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/admin/usuarios/u1/avatar",
+            files={"arquivo": ("foto.png", _PNG_3X5, "image/png")},
+            headers={"X-CSRF-Token": t},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "ok=" in r.headers["location"]
+    assert len(chamadas) == 1
+    assert chamadas[0][1] == "u1/avatar.png"
+    assert ("avatar", "u1", "u1/avatar.png") in repo.acoes
+
+
+def test_atualizar_avatar_usuario_operador_do_marketing(monkeypatch):
+    import app.routes.admin as admin_mod
+
+    async def _fake_enviar(token, path, conteudo, mime):
+        pass
+
+    monkeypatch.setattr(admin_mod, "enviar_avatar", _fake_enviar)
+
+    perfil = FakePerfilRepo(is_ti=False, role="OPERADOR", departamento="Marketing")
+    repo = FakeAdmin(is_ti=False)
+    with admin_client(repo, user=_user(role="OPERADOR"), perfil=perfil) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/admin/usuarios/u1/avatar",
+            files={"arquivo": ("foto.png", _PNG_3X5, "image/png")},
+            headers={"X-CSRF-Token": t},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "ok=" in r.headers["location"]
+    assert ("avatar", "u1", "u1/avatar.png") in repo.acoes
+
+
+def test_atualizar_avatar_usuario_operador_fora_do_marketing_recebe_403():
+    # OPERADOR do RH não acessa /admin (403) — pega o CSRF via /login, que
+    # não exige autorização, para isolar o teste no 403 desta rota.
+    perfil = FakePerfilRepo(is_ti=False, role="OPERADOR", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="OPERADOR"), perfil=perfil) as c:
+        c.get("/login")
+        t = c.cookies.get("csrf_token")
+        r = c.post(
+            "/admin/usuarios/u1/avatar",
+            files={"arquivo": ("foto.png", _PNG_3X5, "image/png")},
+            headers={"X-CSRF-Token": t},
+        )
+    assert r.status_code == 403
+
+
+def test_atualizar_avatar_usuario_tipo_invalido_e_rejeitado(monkeypatch):
+    import app.routes.admin as admin_mod
+
+    async def _fake_enviar(*a, **k):
+        raise AssertionError("não deveria chegar a enviar ao Storage")
+
+    monkeypatch.setattr(admin_mod, "enviar_avatar", _fake_enviar)
+
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/admin/usuarios/u1/avatar",
+            files={"arquivo": ("documento.pdf", b"%PDF-1.4 conteudo", "application/pdf")},
+            headers={"X-CSRF-Token": t},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "erro=" in r.headers["location"]
+    assert not any(a[0] == "avatar" for a in repo.acoes)
 
 
 def test_mudar_papel_grava_no_perfil():

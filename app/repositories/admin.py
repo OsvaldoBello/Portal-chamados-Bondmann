@@ -426,16 +426,18 @@ class AdminRepo:
                 *valores,
             )
 
-    # ---- Usuários (gestão de contas — só TI) ----------------------------
+    # ---- Usuários (criar/promover/excluir conta — só TI; foto — ver abaixo) ----
     async def usuarios(self, claims: dict) -> list[dict[str, Any]]:
-        """Lista os perfis (nome, papel, setor) para a gestão de contas do TI.
+        """Lista os perfis (nome, papel, setor, avatar) para a tela de contas.
 
         O e-mail vive em ``auth.users`` (fora do alcance do papel ``authenticated``)
-        e é resolvido na rota via Admin API; aqui devolvemos o que a RLS permite."""
+        e é resolvido na rota via Admin API; aqui devolvemos o que a RLS permite.
+        ``avatar_path``/``updated_at`` alimentam a miniatura + cache-busting da
+        foto (``app.avatar_storage.avatar_public_url``) na própria listagem."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
-                SELECT p.id, p.nome, p.role, p.ativo,
+                SELECT p.id, p.nome, p.role, p.ativo, p.avatar_path, p.updated_at,
                        d.nome AS departamento, p.departamento_id
                   FROM perfis p
                   LEFT JOIN departamentos d ON d.id = p.departamento_id
@@ -470,10 +472,13 @@ class AdminRepo:
             return row["role"] if row else None
 
     async def atualizar_avatar(self, claims: dict, user_id: str, *, avatar_path: str) -> None:
-        """Grava o ``avatar_path`` de OUTRO usuário — só o TI pode (o trigger
-        ``enforce_perfil_self_so_avatar``, migration 0033, libera qualquer coluna
-        para quem é TI; para os demais, só a própria linha). Usado na criação de
-        conta pela tela de admin (Fase 7), quando o TI já envia a foto junto."""
+        """Grava o ``avatar_path`` de OUTRO usuário — TI, qualquer ADMIN de setor
+        ou o OPERADOR do Marketing podem (policy ``perfis_update_avatar_staff``,
+        migration 0052; o TI segue coberto por ``perfis_admin_all``, que também
+        libera as demais colunas). Para os papéis não-TI, o trigger
+        ``enforce_perfil_self_so_avatar`` (migration 0033) segue vetando
+        qualquer coluna além de ``avatar_path``/``updated_at`` — é a única coisa
+        que dá pra alterar no perfil de outra pessoa por essa via."""
         async with rls_connection(claims) as conn:
             await conn.execute(
                 "UPDATE perfis SET avatar_path = $2 WHERE id = $1::uuid",

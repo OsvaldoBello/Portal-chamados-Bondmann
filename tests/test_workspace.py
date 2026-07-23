@@ -43,8 +43,9 @@ def _chamado(**extra):
 class FakeRepo:
     def __init__(self, *, is_ti=True, status="NOVO", perfil_departamento_id="d1",
                  operador_id=None, cliente_id="aaa", observadores=None, departamento="TI",
-                 recebe_chamados=True):
+                 recebe_chamados=True, ia_triagem=None):
         self.acoes = []
+        self._ia_triagem = ia_triagem
         self._is_ti = is_ti
         self._status = status
         self._perfil_departamento_id = perfil_departamento_id
@@ -152,6 +153,13 @@ class FakeRepo:
 
     async def excluir(self, claims, cid):
         self.acoes.append(("excluir", cid)); return True
+
+    async def ia_triagem_nota(self, claims, cid):
+        return self._ia_triagem
+
+    async def avaliar_ia_triagem(self, claims, cid, *, triagem_id, nota, avaliador_id):
+        self.acoes.append(("ia_avaliacao", cid, triagem_id, nota, avaliador_id))
+        return self._ia_triagem is not None and triagem_id == self._ia_triagem["id"]
 
 
 @contextmanager
@@ -288,6 +296,73 @@ def test_kanban_cartao_fora_do_setor_sem_drag_e_sem_excluir():
     cartao_c2 = _cartao("c2")
     assert "kanban-card-locked" in cartao_c2
     assert 'data-codigo="BOND-2026-00002"' not in cartao_c2
+
+
+# ------------------------------------------------------------------
+# Avaliação da triagem por IA (1–5 ★ — plano_md_mestre_IA.md, Seção 10.2)
+# ------------------------------------------------------------------
+
+_IA_TRIAGEM = {"id": 7, "rodada": 1, "modelo": "gpt-5.4-mini", "created_at": NOW,
+               "avaliacao": None, "avaliado_em": None, "avaliado_por_nome": None}
+
+
+def test_atendimento_mostra_bloco_de_avaliacao_da_ia():
+    with ws_client(FakeRepo(ia_triagem=dict(_IA_TRIAGEM))) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert r.status_code == 200
+    assert "Pré-análise da IA" in r.text
+    assert "Avalie de 1 a 5 estrelas" in r.text
+    assert 'name="triagem_id" value="7"' in r.text
+
+
+def test_atendimento_sem_triagem_nao_mostra_bloco():
+    with ws_client(FakeRepo()) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert r.status_code == 200
+    assert "Pré-análise da IA" not in r.text
+
+
+def test_atendimento_mostra_avaliacao_existente():
+    triagem = dict(_IA_TRIAGEM, avaliacao=4, avaliado_por_nome="Op TI")
+    with ws_client(FakeRepo(ia_triagem=triagem)) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert r.status_code == 200
+    assert "4/5" in r.text
+    assert "reavaliar" in r.text
+
+
+def test_avaliar_triagem_ia_grava_e_redireciona():
+    repo = FakeRepo(ia_triagem=dict(_IA_TRIAGEM))
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/ia/avaliacao",
+                   data={"nota": "5", "triagem_id": "7"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ("ia_avaliacao", "c1", 7, 5, OP) in repo.acoes
+
+
+def test_avaliar_triagem_ia_nota_fora_da_faixa_rejeita():
+    repo = FakeRepo(ia_triagem=dict(_IA_TRIAGEM))
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/ia/avaliacao",
+                   data={"nota": "6", "triagem_id": "7"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 400
+    assert not any(a[0] == "ia_avaliacao" for a in repo.acoes)
+
+
+def test_avaliar_triagem_ia_fora_do_escopo_404():
+    """Triagem invisível sob a RLS do avaliador (outro departamento ou id
+    trocado) → o repositório devolve False e a rota responde 404."""
+    repo = FakeRepo(ia_triagem=dict(_IA_TRIAGEM))
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/ia/avaliacao",
+                   data={"nota": "3", "triagem_id": "99"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 404
 
 
 def test_mudar_status_registra_e_redireciona():

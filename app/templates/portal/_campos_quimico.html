@@ -1,0 +1,55 @@
+{# Campos dinâmicos por categoria (Químico) — recarregado via HTMX ao trocar a
+   categoria. Cada input usa name="campo__<name>" (namespacing lido no POST).
+   `campos_quimico` = lista de CampoDef; `dados_form` = valores já preenchidos
+   (prefill no re-render de erro) — string para a maioria dos tipos, lista para
+   `checkbox_multi`. Vazio quando a categoria não é do Químico. #}
+{% if campos_quimico %}
+<div class="rounded-lg border border-navy-100 bg-navy-100/40 p-4 space-y-4">
+  <p class="text-[13px] font-semibold text-navy">Informações da solicitação</p>
+  {% for campo in campos_quimico %}
+  {% if campo.tipo == 'checkbox_multi' %}
+  {% set selecionados = dados_form.get(campo.name, []) if dados_form else [] %}
+  <fieldset class="block">
+    <legend class="block text-[13px] font-semibold text-navy mb-1.5">
+      {{ campo.label }}{% if campo.obrigatorio %} <span class="text-pr_urgente">*</span>{% endif %}
+    </legend>
+    <div class="space-y-1.5">
+      {% for op in campo.opcoes %}
+      <label class="flex items-start gap-2 text-sm text-ink">
+        <input type="checkbox" name="campo__{{ campo.name }}" value="{{ op }}"
+          {% if op in selecionados %}checked{% endif %}
+          class="mt-0.5 rounded ring-1 ring-line text-navy-700 focus:ring-navy-500">
+        <span>{{ op }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  {% else %}
+  {% set valor = dados_form.get(campo.name, '') if dados_form else '' %}
+  <label class="block">
+    <span class="block text-[13px] font-semibold text-navy mb-1.5">
+      {{ campo.label }}{% if campo.obrigatorio %} <span class="text-pr_urgente">*</span>{% endif %}
+    </span>
+    {% if campo.tipo == 'textarea' %}
+    <textarea name="campo__{{ campo.name }}" rows="4" {% if campo.obrigatorio %}required{% endif %}
+      class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint resize-none">{{ valor }}</textarea>
+    {% elif campo.tipo == 'select' %}
+    <select name="campo__{{ campo.name }}" {% if campo.obrigatorio %}required{% endif %}
+      class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
+      <option value="">Selecione…</option>
+      {% for op in campo.opcoes %}
+      <option value="{{ op }}" {% if op == valor %}selected{% endif %}>{{ op }}</option>
+      {% endfor %}
+    </select>
+    {% else %}
+    <input type="{{ campo.tipo }}" name="campo__{{ campo.name }}" value="{{ valor }}"
+      {% if campo.obrigatorio %}required{% endif %}{% if campo.tipo == 'number' %} min="0"{% endif %}
+      {% if campo.min_chars %} minlength="{{ campo.min_chars }}"{% endif %}
+      class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+    {% endif %}
+    {% if campo.ajuda %}<span class="block text-xs text-muted mt-1">{{ campo.ajuda }}</span>{% endif %}
+  </label>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endif %}

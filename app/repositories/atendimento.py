@@ -11,7 +11,7 @@ import json
 from datetime import date
 from typing import Any
 
-from app.db import rls_connection
+from app.db import admin_connection, rls_connection
 
 
 class AtendimentoRepo:
@@ -30,6 +30,7 @@ class AtendimentoRepo:
                        c.respondido_em, c.resolvido_em,
                        c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
                        c.volume, c.origem_demanda, c.causa_atraso,
+                       c.dados_formulario, c.resumo_ia, c.resumo_ia_em,
                        cat.nome AS categoria, sub.nome AS subcategoria,
                        dep.nome AS departamento, dep.autoatendimento,
                        autor.nome AS cliente_nome, autor.avatar_path AS cliente_avatar_path,
@@ -46,7 +47,13 @@ class AtendimentoRepo:
                 """,
                 chamado_id,
             )
-            return dict(row) if row else None
+            if row is None:
+                return None
+            d = dict(row)
+            # asyncpg devolve jsonb como texto; normaliza para dict de respostas.
+            bruto = d.get("dados_formulario")
+            d["dados_formulario"] = json.loads(bruto) if isinstance(bruto, str) else (bruto or {})
+            return d
 
     async def criar(
         self,
@@ -65,6 +72,7 @@ class AtendimentoRepo:
         volume: int = 1,
         origem_demanda: str = "Solicitação",
         sem_prazo: bool = False,
+        dados_formulario: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Cria um chamado endereçado a um departamento. Código/SLA via triggers.
 
@@ -72,16 +80,21 @@ class AtendimentoRepo:
         diretamente — o trigger ``calcular_sla_chamado`` usa a data em vez da
         prioridade quando ela é informada (migration 0022). ``sem_prazo`` (0040)
         é o oposto: demanda sem urgência nem prazo, o trigger não calcula SLA
-        nenhum (tem prioridade sobre ``data_entrega``)."""
+        nenhum (tem prioridade sobre ``data_entrega``).
+
+        ``dados_formulario`` (0049) guarda as respostas dos campos dinâmicos por
+        categoria (ex.: Químico) como objeto ``{name: valor}``; ``{}`` para
+        chamados sem layout específico."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO chamados
                     (empresa_id, cliente_id, categoria_id, subcategoria_id, departamento_id,
                      titulo, descricao, prioridade, data_entrega, setor, volume, origem_demanda,
-                     sem_prazo)
+                     sem_prazo, dados_formulario)
                 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7,
-                        $8::prioridade_chamado, $9::date, $10, $11::integer, $12, $13::boolean)
+                        $8::prioridade_chamado, $9::date, $10, $11::integer, $12, $13::boolean,
+                        $14::jsonb)
                 RETURNING id, codigo
                 """,
                 empresa_id,
@@ -97,6 +110,7 @@ class AtendimentoRepo:
                 volume,
                 origem_demanda,
                 sem_prazo,
+                json.dumps(dados_formulario or {}),
             )
             return dict(row)
 
@@ -167,6 +181,62 @@ class AtendimentoRepo:
                 claims["sub"],
             )
             return dict(row) if row else None
+
+    async def ia_triagem_nota(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
+        """Última triagem por IA que gerou nota interna no chamado, com a
+        avaliação atual do staff (1–5 ★), se houver.
+
+        Roda sob RLS: a policy `ia_triagens_select_staff` (0050) já restringe a
+        leitura ao staff do departamento do chamado — quem não é do escopo
+        recebe `None` e o bloco de avaliação nem aparece na tela."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT t.id, t.rodada, t.modelo, t.created_at,
+                       t.avaliacao, t.avaliado_em, p.nome AS avaliado_por_nome
+                  FROM ia_triagens t
+                  LEFT JOIN perfis p ON p.id = t.avaliado_por
+                 WHERE t.chamado_id = $1::uuid AND t.acao = 'NOTA_INTERNA'
+                 ORDER BY t.rodada DESC, t.id DESC
+                 LIMIT 1
+                """,
+                chamado_id,
+            )
+            return dict(row) if row else None
+
+    async def avaliar_ia_triagem(
+        self, claims: dict, chamado_id: str, *, triagem_id: int, nota: int, avaliador_id: str
+    ) -> bool:
+        """Avaliação 1–5 ★ da pré-análise da IA pelo staff (KPI Seção 10.2).
+
+        `ia_triagens` não tem policy de escrita (decisão da 0050): o escopo é
+        provado ANTES, lendo a triagem sob RLS com os claims do avaliador — se
+        ele enxerga a linha, é staff do departamento do chamado. Só então a
+        escrita acontece pela conexão administrativa. Reavaliar sobrescreve
+        (vale a última opinião do time)."""
+        async with rls_connection(claims) as conn:
+            visivel = await conn.fetchval(
+                """
+                SELECT 1 FROM ia_triagens
+                 WHERE id = $1 AND chamado_id = $2::uuid AND acao = 'NOTA_INTERNA'
+                """,
+                triagem_id,
+                chamado_id,
+            )
+        if not visivel:
+            return False
+        async with admin_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE ia_triagens
+                   SET avaliacao = $2, avaliado_por = $3::uuid, avaliado_em = now()
+                 WHERE id = $1
+                """,
+                triagem_id,
+                nota,
+                avaliador_id,
+            )
+        return True
 
     async def iniciar_atendimento(
         self, claims: dict, chamado_id: str, *, operador_id: str, novo_status: str = "EM_ATENDIMENTO"

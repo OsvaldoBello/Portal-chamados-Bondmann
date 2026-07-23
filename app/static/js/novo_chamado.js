@@ -10,6 +10,13 @@
   var form = document.querySelector("form[data-marketing-dep]");
   if (!form) return;
   var marketingId = form.getAttribute("data-marketing-dep") || "";
+  var quimicoId = form.getAttribute("data-quimico-dep") || "";
+  var camposDinamicos = document.getElementById("campos-dinamicos");
+  var campoSubcategoria = document.getElementById("campo-subcategoria");
+  var categoriaLabel = document.getElementById("categoria-label");
+  var campoAssunto = document.getElementById("campo-assunto");
+  var campoDescricao = document.getElementById("campo-descricao");
+  var tituloInput = document.querySelector('input[name="titulo"]');
   var depSelect = document.getElementById("departamento-select");
   var aviso = document.getElementById("marketing-aviso");
   var descricao = document.getElementById("descricao-input");
@@ -23,8 +30,13 @@
     return marketingId !== "" && depSelect && depSelect.value === marketingId;
   }
 
+  function ehQuimico() {
+    return quimicoId !== "" && depSelect && depSelect.value === quimicoId;
+  }
+
   function aplicar() {
     var marketing = ehMarketing();
+    var quimico = ehQuimico();
     // Controla a visibilidade via style.display (CSSOM, permitido pela CSP): o
     // atributo `hidden` sozinho é sobreposto pela classe .block do Tailwind.
     if (aviso) aviso.style.display = marketing ? "block" : "none";
@@ -33,10 +45,28 @@
       var mkt = descricao.getAttribute("data-placeholder-marketing") || "";
       descricao.setAttribute("placeholder", marketing ? mkt : padrao);
     }
-    // Marketing → data de entrega (por demanda); demais → prioridade.
-    if (campoPrioridade) campoPrioridade.style.display = marketing ? "none" : "block";
+    // Marketing → data de entrega (por demanda); demais → prioridade. Químico
+    // não pergunta prioridade (esconde e mantém o valor padrão MEDIA do select).
+    if (campoPrioridade) campoPrioridade.style.display = (marketing || quimico) ? "none" : "block";
     if (campoData) campoData.style.display = marketing ? "block" : "none";
     if (campoVolume) campoVolume.style.display = marketing ? "block" : "none";
+    // Químico → bloco de campos dinâmicos por categoria (carregados via HTMX).
+    if (camposDinamicos) camposDinamicos.style.display = quimico ? "block" : "none";
+    // Químico → nenhuma categoria do setor tem subcategoria (0049): esconde o
+    // campo em vez de deixá-lo parado em "Escolha a categoria primeiro".
+    if (campoSubcategoria) campoSubcategoria.style.display = quimico ? "none" : "block";
+    // Químico → rótulo "Categoria" vira "Formulários" (são os 3 formulários do
+    // setor, não uma categoria genérica).
+    if (categoriaLabel) categoriaLabel.textContent = quimico ? "Formulários" : "Categoria";
+    // Químico → esconde Assunto/Descrição (o servidor deriva os dois das
+    // respostas do formulário dinâmico, app/domain/formularios_quimico.py).
+    // Tira o `required` junto: um campo obrigatório escondido via display:none
+    // continua bloqueando o envio nativo do formulário (a barra de validação do
+    // HTML5 não isenta elementos só por estarem sem `display`).
+    if (campoAssunto) campoAssunto.style.display = quimico ? "none" : "block";
+    if (tituloInput) tituloInput.required = !quimico;
+    if (campoDescricao) campoDescricao.style.display = quimico ? "none" : "block";
+    if (descricao) descricao.required = !quimico;
   }
 
   // "Sem data limite": desabilita (e limpa) o campo de data enquanto marcado,

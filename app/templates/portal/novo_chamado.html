@@ -15,13 +15,14 @@
 
     <form method="post" action="/portal/chamados" enctype="multipart/form-data"
       data-marketing-dep="{{ marketing_dep_id }}"
+      data-quimico-dep="{{ quimico_dep_id }}"
       class="bg-white rounded-xl shadow-card border border-line/60 p-6 space-y-5">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
       <div>
         <h3 class="font-display font-bold text-lg text-navy">Dados do chamado</h3>
         <p class="text-xs text-muted mt-1">
-          Escolha o <strong>departamento</strong> responsável (TI, RH ou Marketing) e descreva o
+          Escolha o <strong>departamento</strong> responsável e descreva o
           <strong>assunto</strong>.
           Todos os campos são obrigatórios.
         </p>
@@ -62,9 +63,10 @@
         sempre respeitando o período mínimo de <strong>48h</strong> para início de desenvolvimento.
       </div>
 
-      {# Categoria (recarregada conforme o departamento; dispara o cascade de subcategoria) #}
+      {# Categoria (recarregada conforme o departamento; dispara o cascade de subcategoria).
+      Rótulo vira "Formulários" quando o departamento é o Químico (novo_chamado.js). #}
       <label class="block">
-        <span class="block text-[13px] font-semibold text-navy mb-1.5">Categoria</span>
+        <span class="block text-[13px] font-semibold text-navy mb-1.5" id="categoria-label">Categoria</span>
         <select name="categoria_id" id="categoria-select" required hx-get="/portal/chamados/subcategorias"
           hx-target="#subcategoria-select" hx-swap="innerHTML" hx-trigger="change"
           class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
@@ -74,8 +76,10 @@
 
       {# Subcategoria — options carregados conforme a categoria. Sem `required` no
       HTML: algumas categorias (ex.: Identidade Visual) não têm subcategoria; a
-      obrigatoriedade condicional é validada no servidor. #}
-      <label class="block">
+      obrigatoriedade condicional é validada no servidor. Escondido quando o
+      departamento é o Químico (novo_chamado.js): nenhuma categoria do setor tem
+      subcategoria, o campo só ficaria parado em "Escolha a categoria primeiro". #}
+      <label class="block" id="campo-subcategoria">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Subcategoria</span>
         <select id="subcategoria-select" name="subcategoria_id"
           class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
@@ -83,8 +87,20 @@
         </select>
       </label>
 
-      {# Assunto #}
-      <label class="block">
+      {# Campos dinâmicos por categoria (Químico). Recarregados via HTMX ao trocar
+         a categoria (evento `change` vindo do #categoria-select). Visibilidade
+         controlada por novo_chamado.js conforme o departamento de destino. #}
+      <div id="campos-dinamicos" style="display:none"
+        hx-get="/portal/chamados/campos" hx-trigger="change from:#categoria-select"
+        hx-include="#categoria-select" hx-target="#campos-dinamicos" hx-swap="innerHTML">
+        {% include "portal/_campos_quimico.html" %}
+      </div>
+
+      {# Assunto — escondido quando o departamento é o Químico (novo_chamado.js
+      também tira o `required`, senão o navegador bloquearia o envio de um campo
+      obrigatório invisível): nesse caso o Assunto é derivado das respostas do
+      formulário dinâmico no servidor (app/domain/formularios_quimico.py). #}
+      <label class="block" id="campo-assunto">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Assunto</span>
         <input type="text" name="titulo" required maxlength="160" value="{{ f.get('titulo', '') }}"
           placeholder="Resuma o problema em uma frase"
@@ -92,7 +108,8 @@
       </label>
 
       {# Prioridade (TI/RH) OU Data de entrega (Marketing) — alternado por
-      novo_chamado.js conforme o departamento escolhido. #}
+      novo_chamado.js conforme o departamento escolhido; escondido por completo
+      para o Químico (mantém o valor padrão MEDIA, só não pergunta). #}
       <label class="block" id="campo-prioridade">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Prioridade</span>
         <select name="prioridade"
@@ -135,8 +152,9 @@
          operador/admin na tela de atendimento. #}
 
       {# Descrição — o placeholder muda para o texto do Marketing (via novo_chamado.js)
-      quando o departamento de destino é o Marketing. #}
-      <label class="block">
+      quando o departamento de destino é o Marketing; escondida por completo pro
+      Químico (mesmo motivo do Assunto: derivada no servidor). #}
+      <label class="block" id="campo-descricao">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Descrição detalhada</span>
         <textarea name="descricao" id="descricao-input" rows="5" required
           data-placeholder-padrao="Descreva o que aconteceu, lote, linha de produção, etc."
@@ -218,6 +236,6 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/novo_chamado.js"></script>
-<script src="/static/js/pessoas_picker.js"></script>
+<script src="{{ static_url('/static/js/novo_chamado.js') }}"></script>
+<script src="{{ static_url('/static/js/pessoas_picker.js') }}"></script>
 {% endblock %}

@@ -145,6 +145,9 @@ class ChamadosRepo:
             claims, categoria_id=categoria_id, departamento_id=departamento_id
         )
 
+    async def nome_categoria(self, claims: dict, categoria_id: str) -> str | None:
+        return await self._catalogo.nome_categoria(claims, categoria_id)
+
     async def departamentos_ativos(self, claims: dict) -> list[dict[str, Any]]:
         return await self._catalogo.departamentos_ativos(claims)
 
@@ -308,6 +311,7 @@ class ChamadosRepo:
         volume: int = 1,
         origem_demanda: str = "Solicitação",
         sem_prazo: bool = False,
+        dados_formulario: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return await self._atendimento.criar(
             claims,
@@ -324,12 +328,23 @@ class ChamadosRepo:
             volume=volume,
             origem_demanda=origem_demanda,
             sem_prazo=sem_prazo,
+            dados_formulario=dados_formulario,
         )
 
     async def avaliar(
         self, claims: dict, chamado_id: str, *, nota: int, comentario: str | None
     ) -> dict[str, Any] | None:
         return await self._atendimento.avaliar(claims, chamado_id, nota=nota, comentario=comentario)
+
+    async def ia_triagem_nota(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
+        return await self._atendimento.ia_triagem_nota(claims, chamado_id)
+
+    async def avaliar_ia_triagem(
+        self, claims: dict, chamado_id: str, *, triagem_id: int, nota: int, avaliador_id: str
+    ) -> bool:
+        return await self._atendimento.avaliar_ia_triagem(
+            claims, chamado_id, triagem_id=triagem_id, nota=nota, avaliador_id=avaliador_id
+        )
 
     async def iniciar_atendimento(
         self, claims: dict, chamado_id: str, *, operador_id: str, novo_status: str = "EM_ATENDIMENTO"

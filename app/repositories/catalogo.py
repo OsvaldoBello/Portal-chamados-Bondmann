@@ -54,6 +54,17 @@ class CatalogoRepo:
         cats = await self.categorias_ativas(claims, departamento_id)
         return any(str(c["id"]) == str(categoria_id) for c in cats)
 
+    async def nome_categoria(self, claims: dict, categoria_id: str) -> str | None:
+        """Nome de uma categoria pelo id (ou ``None`` se não existir/for visível).
+
+        Usado para resolver o layout dinâmico do Químico, cujo schema é indexado
+        pelo nome da categoria (app/domain/formularios_quimico.py)."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                "SELECT nome FROM categorias WHERE id = $1::uuid", categoria_id
+            )
+        return row["nome"] if row else None
+
     async def departamentos_ativos(self, claims: dict) -> list[dict[str, Any]]:
         """Todos os setores ativos da empresa (catálogo unificado — 0027). Cada um
         traz ``recebe_chamados``: só os que têm fila de atendimento (TI/RH/Marketing,

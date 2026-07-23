@@ -35,6 +35,14 @@ from app.anexos import (
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.config import get_settings
 from app.db import rls_request_scope
+from app.domain.formularios_quimico import (
+    campos_da_categoria,
+    rotular,
+    titulo_e_descricao_automaticos,
+    validar_payload,
+    valores_para_template,
+)
+from app.ia import triagem
 from app.ratelimit import limiter
 from app.repositories.chamados import (
     PRIORIDADES,
@@ -44,6 +52,7 @@ from app.repositories.chamados import (
 )
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
+from app.services.ia_resumo import gerar_e_salvar_resumo
 from app.services.portal import PortalService
 from app.templating import portal_base_template, render
 
@@ -162,6 +171,17 @@ async def _render_form(
     # Id do departamento "Marketing" — o front usa para exibir o aviso de prazo (48h)
     # e o texto de ajuda específico da descrição (ver novo_chamado.js).
     marketing_dep_id = PortalService.marketing_dep_id(departamentos)
+    # Id do departamento Químico — o front usa para exibir o bloco de campos
+    # dinâmicos por categoria (novo_chamado.js).
+    quimico_dep_id = PortalService.quimico_dep_id(departamentos)
+    # Re-render de erro: se a categoria escolhida é do Químico, reexibe os campos
+    # dinâmicos já preenchidos (para o usuário não perder o que digitou).
+    campos_quimico: tuple = ()
+    dados_form: dict = {}
+    if quimico_dep_id and dep_sel == quimico_dep_id and form.get("categoria_id"):
+        nome_cat = await repo.nome_categoria(ctx.user.claims, form["categoria_id"])
+        campos_quimico = campos_da_categoria(nome_cat)
+        dados_form = valores_para_template(nome_cat, form.get("dados_formulario") or {})
     usuarios_copia = await repo.usuarios_para_copia(ctx.user.claims, excluir_id=ctx.user.id)
     return render(
         request,
@@ -172,6 +192,9 @@ async def _render_form(
             "departamentos": departamentos,
             "subcategorias": subcategorias,
             "marketing_dep_id": marketing_dep_id,
+            "quimico_dep_id": quimico_dep_id,
+            "campos_quimico": campos_quimico,
+            "dados_form": dados_form,
             "prioridades": PRIORIDADES,
             "data_entrega_min": PortalService.data_entrega_min().isoformat(),
             "form": form,
@@ -240,6 +263,29 @@ async def subcategorias_fragmento(
     return render(request, "portal/_subcategorias_options.html", {"subcategorias": subs})
 
 
+@router.get("/chamados/campos")
+async def campos_fragmento(
+    request: Request,
+    categoria_id: str = "",
+    ctx: PortalCtx = Depends(portal_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+):
+    """Cascade da abertura (Químico): campos dinâmicos da categoria escolhida
+    (carregado via HTMX quando o usuário muda a categoria). Categorias sem layout
+    específico devolvem fragmento vazio. Declarado ANTES da rota dinâmica
+    ``/chamados/{chamado_id}``."""
+    categoria_id = categoria_id.strip()
+    nome_cat = (
+        await repo.nome_categoria(ctx.user.claims, categoria_id) if categoria_id else None
+    )
+    campos = campos_da_categoria(nome_cat)
+    return render(
+        request,
+        "portal/_campos_quimico.html",
+        {"campos_quimico": campos, "dados_form": {}},
+    )
+
+
 @router.post("/chamados")
 @limiter.limit("15/minute")
 async def criar_chamado(
@@ -280,6 +326,20 @@ async def criar_chamado(
         "data_entrega": data_entrega,
         "sem_prazo": sem_prazo_marcado,
     }
+
+    # Campos dinâmicos por categoria (Químico): lidos cedo, do multipart, para
+    # preservar o que o usuário digitou em QUALQUER re-render de erro. O prefixo
+    # ``campo__`` isola-os dos campos fixos do formulário. `request.form()` é
+    # cacheado pelo Starlette, então a releitura posterior (anexos) não recusteia.
+    # Agrupado em listas (não um dict simples) porque `checkbox_multi` manda
+    # várias entradas com o MESMO nome — um dict simples perderia todas menos
+    # a última marcada.
+    form_data = await request.form()
+    dados_brutos: dict[str, list[str]] = {}
+    for chave, valor in form_data.multi_items():
+        if chave.startswith("campo__") and isinstance(valor, str):
+            dados_brutos.setdefault(chave[len("campo__") :], []).append(valor)
+    form["dados_formulario"] = dados_brutos
 
     async def _erro(msg: str, code: int = status.HTTP_400_BAD_REQUEST):
         return await _render_form(request, ctx, repo, erro=msg, form=form, status_code=code)
@@ -329,14 +389,32 @@ async def criar_chamado(
             return await _erro("A subcategoria não pertence à categoria escolhida.")
     else:
         subcategoria_id = ""  # categoria sem subcategorias → chamado sem subcategoria
+
+    # Layout dinâmico do Químico: valida os campos da categoria escolhida e monta
+    # o `dados_formulario` (só chaves conhecidas do schema — defesa em profundidade
+    # contra `campo__*` forjados). Fora do Químico, fica `{}`. Calculado ANTES da
+    # checagem de assunto/descrição porque a tela de abertura esconde esses dois
+    # campos para o Químico (usuário pediu 2026-07-22) — são derivados das
+    # respostas do formulário em vez de digitados.
+    quimico_dep_id = PortalService.quimico_dep_id(setores_ativos)
+    eh_quimico = bool(quimico_dep_id) and departamento_id == quimico_dep_id
+    nome_categoria_val: str | None = None
+    dados_formulario_val: dict[str, object] = {}
+    if eh_quimico:
+        nome_categoria_val = await repo.nome_categoria(ctx.user.claims, categoria_id)
+        ok, erro_campo, limpo = validar_payload(nome_categoria_val, dados_brutos)
+        if not ok:
+            return await _erro(erro_campo or "Preencha os campos do formulário.")
+        dados_formulario_val = limpo
+        titulo, descricao = titulo_e_descricao_automaticos(nome_categoria_val, limpo)
+
     if not titulo or not descricao:
         return await _erro("Informe o assunto e a descrição do chamado.")
 
-    # Anexos lidos direto do multipart. Não declaramos ``UploadFile`` como parâmetro
-    # aqui porque, neste endpoint com ``@limiter.limit`` (slowapi embrulha a função)
-    # + ``from __future__ import annotations``, o FastAPI não resolve ``list[UploadFile]``
-    # e quebra na introspecção. Ler do form evita a annotation problemática.
-    form_data = await request.form()
+    # Anexos lidos direto do multipart (form_data já lido acima). Não declaramos
+    # ``UploadFile`` como parâmetro aqui porque, neste endpoint com ``@limiter.limit``
+    # (slowapi embrulha a função) + ``from __future__ import annotations``, o FastAPI
+    # não resolve ``list[UploadFile]`` e quebra na introspecção.
     arquivos = [f for f in form_data.getlist("arquivos") if getattr(f, "filename", "")]
 
     volume_str = form_data.get("volume") or "1"
@@ -372,7 +450,35 @@ async def criar_chamado(
         volume=volume_val,
         origem_demanda=origem_demanda_val,
         sem_prazo=sem_prazo_val,
+        dados_formulario=dados_formulario_val,
     )
+
+    # IA: tarefas rodadas APÓS a resposta (BackgroundTasks anexada ao redirect).
+    # Não bloqueiam o redirect e nunca derrubam a abertura se a IA falhar/estiver
+    # off. Usa a BackgroundTasks do Starlette (via `background=`) em vez do
+    # parâmetro `BackgroundTasks` do FastAPI porque, neste endpoint embrulhado
+    # pelo slowapi + ``from __future__ import annotations``, o FastAPI não
+    # resolve o parâmetro injetado (mesma limitação do ``UploadFile``).
+    tarefa_ia = BackgroundTasks()
+    # (1) Resumo do Químico (F0–F3 intocado — C2; será absorvido pelo Passe B na F4).
+    if eh_quimico:
+        tarefa_ia.add_task(
+            gerar_e_salvar_resumo,
+            str(novo["id"]),
+            titulo,
+            descricao,
+            nome_categoria_val,
+            dados_formulario_val,
+        )
+    # (2) Triagem por IA (F1 — plano_md_mestre_IA.md, Seção 2.3): disparo
+    # IMEDIATO via create_task (latência p95 < 2 min — não espera o ciclo da
+    # resposta como BackgroundTasks); o motor revalida tudo (kill switch,
+    # status NOVO, idempotência) ao executar.
+    dep_destino_nome = next(
+        (d["nome"] for d in setores_ativos if str(d["id"]) == departamento_id), None
+    )
+    if triagem.deve_triar(dep_destino_nome, get_settings()):
+        triagem.agendar_triagem(str(novo["id"]))
 
     # "Em cópia" (Fase 8): observadores escolhidos já na abertura — multi-setorial,
     # qualquer pessoa da organização (não só do departamento de destino).
@@ -396,7 +502,9 @@ async def criar_chamado(
             log.warning("Anexo da abertura falhou (chamado %s): %s", novo["id"], exc)
 
     return RedirectResponse(
-        f"/portal/chamados/{novo['id']}", status_code=status.HTTP_303_SEE_OTHER
+        f"/portal/chamados/{novo['id']}",
+        status_code=status.HTTP_303_SEE_OTHER,
+        background=tarefa_ia,
     )
 
 
@@ -429,6 +537,7 @@ async def detalhe_chamado(
             "perfil": ctx.perfil,
             "chamado": chamado,
             "mensagens": mensagens,
+            "dados_formulario": rotular(chamado.get("categoria"), chamado.get("dados_formulario") or {}),
             "pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id),
             "avaliar_pendente": bool(avaliar_pendente),
             "observadores": observadores,
@@ -513,8 +622,6 @@ async def responder_chamado(
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
 ):
-    from app.config import get_settings
-
     conteudo = conteudo.strip()
 
     def _erro(msg: str, code: int):
@@ -555,6 +662,13 @@ async def responder_chamado(
         await agendar_notificacao_email(
             background_tasks, chamado, ctx.user.id, conteudo or "[Arquivo anexo]"
         )
+        # Re-triagem por IA (F2): resposta do AUTOR num depto habilitado reagenda
+        # a triagem (disparo imediato) — o motor decide se há mesmo rodada nova
+        # (última ação foi PERGUNTAS, chamado ainda NOVO/sem operador, teto).
+        if str(chamado.get("cliente_id")) == str(ctx.user.id) and triagem.deve_triar(
+            chamado.get("departamento"), get_settings()
+        ):
+            triagem.agendar_triagem(chamado_id)
 
     return RedirectResponse(
         f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER

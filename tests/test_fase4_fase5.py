@@ -67,6 +67,38 @@ def test_notificacoes_exige_login():
         assert c.get("/notificacoes").status_code == 401
 
 
+class FakeNotifMisto:
+    """Um chamado NOVO (deve acender o sino) e um EM_ATENDIMENTO com SLA
+    estourado (aparece na lista, mas não deve acender o sino — 2026-07-23)."""
+
+    async def notificacoes(self, claims, *, limite=6):
+        agora = datetime.now(UTC)
+        return [
+            {"id": "novo1", "codigo": "BOND-2026-00100", "titulo": "Chamado novo",
+             "status": "NOVO", "created_at": agora - timedelta(minutes=5),
+             "limite_resolucao": agora + timedelta(hours=20), "resolvido_em": None,
+             "avaliacao_nota": None, "meu": False},
+            {"id": "atrasado1", "codigo": "BOND-2026-00099", "titulo": "Chamado atrasado",
+             "status": "EM_ATENDIMENTO", "created_at": agora - timedelta(days=5),
+             "limite_resolucao": agora - timedelta(hours=3), "resolvido_em": None,
+             "avaliacao_nota": None, "meu": False},
+        ]
+
+
+def test_notificacoes_marca_novo_mas_nao_sla_estourado_em_atendimento():
+    # SLA estourado num chamado já em atendimento não deve acender/apitar o
+    # sino (só chamado NOVO ou resolvido-aguardando-avaliação devem).
+    with client(user=_user(role="OPERADOR"), repo=FakeNotifMisto()) as c:
+        r = c.get("/notificacoes")
+    assert r.status_code == 200
+    import re
+
+    marcados = re.findall(r'<a href="[^"]*/(\w+)"\s+data-notif-novo="1"', r.text)
+    assert marcados == ["novo1"]
+    assert "atrasado1" not in "".join(marcados)
+    assert "Chamado atrasado" in r.text  # segue aparecendo na lista, só sem o marcador
+
+
 def test_realtime_config_autenticado_retorna_json():
     with client(user=_user()) as c:
         r = c.get("/realtime/config")

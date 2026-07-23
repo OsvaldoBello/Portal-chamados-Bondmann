@@ -36,6 +36,21 @@
   <p class="mt-4 text-sm text-ink whitespace-pre-line">{{ chamado.descricao }}</p>
 </div>
 
+{# Dados do formulário (categorias com layout dinâmico — ex.: Químico). #}
+{% if dados_formulario %}
+<div class="bg-white rounded-xl shadow-card border border-line/60 p-6 mb-5">
+  <h3 class="font-display font-bold text-navy mb-3">Informações da solicitação</h3>
+  <dl class="grid sm:grid-cols-2 gap-x-6 gap-y-3">
+    {% for label, valor in dados_formulario %}
+    <div>
+      <dt class="text-[11px] font-semibold uppercase tracking-wide text-muted">{{ label }}</dt>
+      <dd class="text-sm text-ink whitespace-pre-line mt-0.5">{{ valor }}</dd>
+    </div>
+    {% endfor %}
+  </dl>
+</div>
+{% endif %}
+
 {# Em cópia (Fase 8) — observadores multi-setoriais: leitura + notificação,
    sem poder responder/alterar o chamado. Quem já vê o chamado pode gerenciar. #}
 <div class="bg-white rounded-xl shadow-card border border-line/60 p-6 mb-5">
@@ -126,9 +141,9 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/pessoas_picker.js"></script>
+<script src="{{ static_url('/static/js/pessoas_picker.js') }}"></script>
 {% if supabase_url and anon_key and access_token %}
 {# chat.js liga o Realtime da conversa; supabase-js já é carregado pelo app_base. #}
-<script src="/static/js/chat.js"></script>
+<script src="{{ static_url('/static/js/chat.js') }}"></script>
 {% endif %}
 {% endblock %}
