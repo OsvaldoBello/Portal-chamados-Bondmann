@@ -135,6 +135,12 @@ class Settings(BaseSettings):
     # sombra até o red team (F5/F6, gate de zero vazamentos). Vazio = ninguém
     # sai; irrelevante quando `ia_triagem_modo_sombra=false`.
     ia_triagem_perguntas_departamentos: str = Field(default="")
+    # Confiança mínima da saída do modelo para perguntar ao autor
+    # (BAIXA/MEDIA/ALTA). Era ALTA fixa em código (mitigação 10.1); decisão do
+    # usuário 2026-07-24 (BOND-2026-00601 saiu com BAIXA e não perguntou):
+    # baixa e média também perguntam ⇒ default BAIXA. Reapertar é só env;
+    # valor inválido degrada para ALTA (conservador).
+    ia_triagem_perguntas_confianca_minima: str = Field(default="BAIXA")
     ia_triagem_model: str = Field(
         default="gpt-5.4-mini",
         validation_alias=AliasChoices("ia_triagem_model", "groq_model"),

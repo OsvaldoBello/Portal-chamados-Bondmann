@@ -23,7 +23,8 @@ class SaidaTriagem(BaseModel):
 
     # O chamado tem informação suficiente para o atendente agir?
     informacoes_suficientes: bool
-    # Confiança geral da análise — perguntas ao usuário (F2) só saem com ALTA.
+    # Confiança geral da análise — perguntas ao usuário (F2) exigem o limiar
+    # `IA_TRIAGEM_PERGUNTAS_CONFIANCA_MINIMA` (default BAIXA desde 2026-07-24).
     confianca: Literal["ALTA", "MEDIA", "BAIXA"] = "MEDIA"
     # Pré-análise técnica para a nota interna (2–6 frases, pt-BR).
     pre_analise: str = Field(min_length=1)

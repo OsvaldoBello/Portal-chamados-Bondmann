@@ -503,14 +503,36 @@ def test_decidir_acao_matrix():
     assert triagem.decidir_acao(s_alta, 1, _sombra_off()) == "PERGUNTAS"
     # Última rodada (== teto): nota com lacunas, nunca pergunta.
     assert triagem.decidir_acao(s_alta, 2, _sombra_off()) == "NOTA_INTERNA"
-    # Confiança abaixo de ALTA não pergunta (mitigação 10.1).
+    # Limiar de confiança default BAIXA (decisão do usuário 2026-07-24):
+    # MEDIA/BAIXA também perguntam; o limiar por env é coberto em
+    # `test_decidir_acao_limiar_de_confianca_configuravel`.
     s_media = SaidaTriagem.model_validate(_SAIDA_OK)
-    assert triagem.decidir_acao(s_media, 1, _sombra_off()) == "NOTA_INTERNA"
+    assert triagem.decidir_acao(s_media, 1, _sombra_off()) == "PERGUNTAS"
     # Informação suficiente: nota direto.
     s_ok = SaidaTriagem.model_validate(
         {**_SAIDA_PERGUNTAVEL, "informacoes_suficientes": True, "perguntas": []}
     )
     assert triagem.decidir_acao(s_ok, 1, _sombra_off()) == "NOTA_INTERNA"
+
+
+def test_decidir_acao_limiar_de_confianca_configuravel():
+    """Decisão do usuário 2026-07-24: BAIXA e MÉDIA também perguntam (default
+    BAIXA). O limiar `IA_TRIAGEM_PERGUNTAS_CONFIANCA_MINIMA` reaperta sem
+    deploy; valor inválido degrada para ALTA (conservador)."""
+    s_baixa = SaidaTriagem.model_validate({**_SAIDA_OK, "confianca": "BAIXA"})
+    s_media = SaidaTriagem.model_validate(_SAIDA_OK)  # confiança MEDIA
+    # Default BAIXA: toda confiança pergunta.
+    assert triagem.decidir_acao(s_baixa, 1, _sombra_off()) == "PERGUNTAS"
+    # Limiar MEDIA: BAIXA fica na nota; MEDIA pergunta.
+    cfg_media = _sombra_off(ia_triagem_perguntas_confianca_minima="MEDIA")
+    assert triagem.decidir_acao(s_baixa, 1, cfg_media) == "NOTA_INTERNA"
+    assert triagem.decidir_acao(s_media, 1, cfg_media) == "PERGUNTAS"
+    # Limiar ALTA restaura a guarda antiga (mitigação 10.1).
+    cfg_alta = _sombra_off(ia_triagem_perguntas_confianca_minima="ALTA")
+    assert triagem.decidir_acao(s_media, 1, cfg_alta) == "NOTA_INTERNA"
+    # Env com valor desconhecido = ALTA.
+    cfg_invalida = _sombra_off(ia_triagem_perguntas_confianca_minima="qualquer")
+    assert triagem.decidir_acao(s_media, 1, cfg_invalida) == "NOTA_INTERNA"
 
 
 def test_decidir_acao_sombra_por_departamento():

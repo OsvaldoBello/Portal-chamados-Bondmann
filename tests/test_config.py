@@ -89,6 +89,8 @@ def test_ia_triagem_defaults_desligados(monkeypatch: pytest.MonkeyPatch):
     assert s.ia_triagem_perguntas_departamentos == ""
     assert s.ia_triagem_perguntas_departamentos_lista == []
     assert s.ia_triagem_em_sombra("TI") is True
+    # Limiar de confiança das perguntas: BAIXA (decisão do usuário 2026-07-24).
+    assert s.ia_triagem_perguntas_confianca_minima == "BAIXA"
     assert s.ia_triagem_model == "gpt-5.4-mini"
     assert s.ia_triagem_model_passe_b == ""
     assert s.ia_triagem_base_url == "https://api.openai.com/v1"

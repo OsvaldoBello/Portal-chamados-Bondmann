@@ -81,6 +81,10 @@ def _eh_quimico(departamento_nome: str | None) -> bool:
 
 _SaidaT = TypeVar("_SaidaT", bound=BaseModel)
 
+# Ranking do limiar de confiança para perguntas públicas
+# (`IA_TRIAGEM_PERGUNTAS_CONFIANCA_MINIMA`, Seção 2.4 do plano IA).
+_CONFIANCA_ORDEM = {"BAIXA": 0, "MEDIA": 1, "ALTA": 2}
+
 # Cache em memória do UUID do perfil de serviço (Seção 4.2 — lookup por nome,
 # sem env extra, sem hardcode). O perfil nunca muda em runtime.
 _perfil_ia_id: str | None = None
@@ -204,16 +208,21 @@ def decidir_acao(
     sombra — avaliado POR DEPARTAMENTO (F2, 2026-07-24:
     ``Settings.ia_triagem_em_sombra`` — o TI liberado pergunta enquanto o
     Químico segue em sombra até o red team); informação insuficiente; há
-    perguntas; confiança ALTA (mitigação 10.1 — não irritar usuário com
-    pergunta especulativa); e ainda há rodada disponível (na última, a nota
-    interna sai com as lacunas sinalizadas)."""
+    perguntas; confiança no mínimo `IA_TRIAGEM_PERGUNTAS_CONFIANCA_MINIMA`
+    (decisão do usuário 2026-07-24: default BAIXA — todas perguntam; era ALTA
+    fixa, mitigação 10.1, e reapertar é só env); e ainda há rodada disponível
+    (na última, a nota interna sai com as lacunas sinalizadas)."""
     if atendimento_iniciado:
         return "NOTA_INTERNA"
     if settings.ia_triagem_em_sombra(departamento):
         return "NOTA_INTERNA"
     if saida.informacoes_suficientes or not saida.perguntas:
         return "NOTA_INTERNA"
-    if saida.confianca != "ALTA":
+    minima = settings.ia_triagem_perguntas_confianca_minima.strip().upper()
+    # Env com valor desconhecido degrada para o mais conservador (só ALTA).
+    if _CONFIANCA_ORDEM.get(saida.confianca, 0) < _CONFIANCA_ORDEM.get(
+        minima, _CONFIANCA_ORDEM["ALTA"]
+    ):
         return "NOTA_INTERNA"
     if rodada >= settings.ia_triagem_max_rodadas:
         return "NOTA_INTERNA"
