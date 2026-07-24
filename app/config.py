@@ -151,13 +151,6 @@ class Settings(BaseSettings):
     # Conexão do role Postgres `ia_worker` (C7) — obrigatória só para o
     # Químico (F4). Vazia = contexto sigiloso indisponível.
     ia_worker_database_url: str = Field(default="")
-    # Intervalo (segundos) da varredura de reconciliação — rede de segurança
-    # para triagens perdidas: `agendar_triagem` roda via `asyncio.create_task`,
-    # que NÃO é durável (um restart/redeploy entre o agendamento e o primeiro
-    # INSERT em `ia_triagens` apaga a tarefa sem deixar rastro — caso real do
-    # BOND-2026-00593, 2026-07-23). `<= 0` desliga a varredura; o kill switch
-    # geral (`ia_triagem_ativa`) também a desliga (Regra de Ouro #5).
-    ia_triagem_reconciliacao_intervalo_s: float = Field(default=300.0)
 
     @property
     def ia_resumo_ativo(self) -> bool:
