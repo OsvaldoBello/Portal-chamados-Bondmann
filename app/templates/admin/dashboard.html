@@ -80,6 +80,27 @@
   {{ kpi("Resolvidos", kpis.resolvidos) }}
 </div>
 
+{% if escopo == "TI" %}
+{# Coluna "Projetos" do Kanban (migration 0057) é trabalho mais robusto —
+   pedido do usuário (2026-07-24): TMA separado do TMA geral acima (que já
+   exclui esses chamados), pra não misturar/distorcer a velocidade do time
+   nos chamados normais. Só existe pro TI (única fila com essa coluna) — ver
+   AdminRepo.kpis (identifica via historico_chamados, sem coluna nova). #}
+<div class="anim-stagger grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  <div class="bg-white rounded-xl shadow-card border border-st_projetos/40 p-5">
+    <div class="text-3xl font-display font-bold text-st_projetos">
+      {{ (kpis.tma_projetos_horas ~ "h") if kpis.tma_projetos_horas is not none else "—" }}
+    </div>
+    <div class="text-xs text-muted mt-1">TMA (Projetos)</div>
+    <div class="text-[11px] text-faint mt-0.5">separado do TMA geral</div>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-st_projetos/40 p-5">
+    <div class="text-3xl font-display font-bold text-st_projetos">{{ kpis.projetos_resolvidos or 0 }}</div>
+    <div class="text-xs text-muted mt-1">Projetos concluídos</div>
+  </div>
+</div>
+{% endif %}
+
 {# Gráficos #}
 <div class="grid lg:grid-cols-2 gap-5">
   <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">

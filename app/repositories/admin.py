@@ -47,10 +47,40 @@ class AdminRepo:
         pela data de ABERTURA, então um chamado fechado no mês corrente mas aberto
         num mês anterior simplesmente desaparecia dos resolvidos/CSAT/TMA do mês —
         números de "resolvidos este mês" ficavam sistematicamente baixos.
+
+        **TMA de "Projetos" separado do TMA geral (2026-07-24, pedido do usuário):**
+        chamados finalizados a partir da coluna "Projetos" do Kanban do TI
+        (migration `0057`) são trabalho mais robusto — misturar o tempo de
+        resolução deles no TMA geral distorceria pra cima a métrica de
+        velocidade do time nos chamados normais. Não existe uma coluna
+        ``chamados.eh_projeto`` (o status muda pra `RESOLVIDO` na conclusão,
+        perdendo o valor `PROJETOS`) — a identificação usa `historico_chamados`
+        (`STATUS_ALTERADO`, `detalhes = {"de": ..., "para": ...}`, gravado em
+        `AtendimentoRepo.alterar_status`): um chamado só conta como "Projeto"
+        se a transição mais recente que o levou a `RESOLVIDO` partiu de
+        `PROJETOS` (subquery correlacionada `resolvido_de`, usa o índice
+        `idx_historico_chamado (chamado_id, created_at)`). ``resolvidos``/
+        ``resolvidos_no_prazo``/``conformidade_sla`` continuam somando Projetos
+        junto dos demais (o usuário só pediu separação no TMA); só ``tma_seg``
+        passa a EXCLUIR Projetos, com ``tma_projetos_seg``/``projetos_resolvidos``
+        como métricas próprias.
         """
         async with self._kpi_scope(claims, todos_setores) as conn:
             row = await conn.fetchrow(
                 """
+                WITH base AS (
+                  SELECT c.status, c.created_at, c.resolvido_em, c.limite_resolucao,
+                         c.avaliacao_nota, c.avaliacao_em,
+                         (SELECT h.detalhes->>'de'
+                            FROM historico_chamados h
+                           WHERE h.chamado_id = c.id
+                             AND h.acao = 'STATUS_ALTERADO'
+                             AND h.detalhes->>'para' = 'RESOLVIDO'
+                           ORDER BY h.created_at DESC
+                           LIMIT 1)                                   AS resolvido_de
+                    FROM chamados c
+                   WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                )
                 SELECT
                   count(*) FILTER (
                     WHERE ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
@@ -84,11 +114,21 @@ class AdminRepo:
                                                                         AS csat_respostas,
                   avg(EXTRACT(EPOCH FROM (resolvido_em - created_at))) FILTER (
                     WHERE resolvido_em IS NOT NULL
+                      AND resolvido_de IS DISTINCT FROM 'PROJETOS'
                       AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
                       AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))
-                                                                        AS tma_seg
-                FROM chamados
-                WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                                                                        AS tma_seg,
+                  count(*) FILTER (
+                    WHERE resolvido_em IS NOT NULL AND resolvido_de = 'PROJETOS'
+                      AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))
+                                                                        AS projetos_resolvidos,
+                  avg(EXTRACT(EPOCH FROM (resolvido_em - created_at))) FILTER (
+                    WHERE resolvido_em IS NOT NULL AND resolvido_de = 'PROJETOS'
+                      AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))
+                                                                        AS tma_projetos_seg
+                FROM base
                 """,
                 departamento_id,
                 periodo_inicio,
@@ -100,6 +140,9 @@ class AdminRepo:
             round(100.0 * (d["resolvidos_no_prazo"] or 0) / resolvidos, 1) if resolvidos else None
         )
         d["tma_horas"] = round((d["tma_seg"] or 0) / 3600, 1) if d["tma_seg"] else None
+        d["tma_projetos_horas"] = (
+            round((d["tma_projetos_seg"] or 0) / 3600, 1) if d["tma_projetos_seg"] else None
+        )
         return d
 
     async def por_status(
@@ -128,7 +171,7 @@ class AdminRepo:
                 periodo_fim,
             )
         por = {r["status"]: r["n"] for r in rows}
-        return {s: por.get(s, 0) for s in ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")}
+        return {s: por.get(s, 0) for s in ("NOVO", "PROJETOS", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")}
 
     async def csat_distribuicao(
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,

@@ -47,11 +47,12 @@ class FakeAdmin:
                    periodo_inicio=None, periodo_fim=None):
         return {"total": 10, "abertos": 4, "resolvidos": 6, "resolvidos_no_prazo": 5,
                 "conformidade_sla": 83.3, "csat_media": 4.5, "csat_respostas": 4,
-                "tma_horas": 12.0, "tma_seg": 43200}
+                "tma_horas": 12.0, "tma_seg": 43200,
+                "projetos_resolvidos": 1, "tma_projetos_seg": 288000, "tma_projetos_horas": 80.0}
 
     async def por_status(self, claims, *, departamento_id=None, todos_setores=False,
                           periodo_inicio=None, periodo_fim=None):
-        return {"NOVO": 2, "EM_ATENDIMENTO": 2, "AGUARDANDO": 0, "RESOLVIDO": 6}
+        return {"NOVO": 2, "PROJETOS": 1, "EM_ATENDIMENTO": 2, "AGUARDANDO": 0, "RESOLVIDO": 6}
 
     async def csat_distribuicao(self, claims, *, departamento_id=None, todos_setores=False,
                                  periodo_inicio=None, periodo_fim=None):
@@ -255,6 +256,28 @@ def test_dashboard_mostra_kpis_e_dados_grafico():
     assert "4.5" in r.text                    # CSAT médio
     assert 'id="chart-data"' in r.text        # JSON inerte p/ Chart.js
     assert "/static/vendor/chart.umd.js" in r.text
+
+
+def test_dashboard_ti_mostra_tma_projetos_separado():
+    # TMA de "Projetos" (Kanban do TI, migration 0057) vem separado do TMA
+    # geral, com card próprio — pedido do usuário 2026-07-24.
+    with admin_client(FakeAdmin()) as c:  # FakeAdmin/FakePerfilRepo padrão = TI
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert "TMA (Projetos)" in r.text
+    assert "80.0h" in r.text
+    assert "Projetos concluídos" in r.text
+
+
+def test_dashboard_fora_do_ti_nao_mostra_card_de_projetos():
+    # A coluna "Projetos" é exclusiva do TI (0057) — outros setores não têm
+    # card nenhum de Projetos no painel, mesmo que o repo devolva algo (fake).
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert "TMA (Projetos)" not in r.text
+    assert "Projetos concluídos" not in r.text
 
 
 def test_ti_dashboard_nao_tem_seletor_e_mostra_so_o_proprio_setor():

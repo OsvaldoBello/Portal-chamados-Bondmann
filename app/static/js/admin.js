@@ -9,7 +9,10 @@
   try { d = JSON.parse(el.textContent); } catch (e) { return; }
 
   var NAVY = "#2E466F", GREEN = "#7FA53D";
-  var STATUS_COR = { NOVO: "#2563EB", EM_ATENDIMENTO: "#6366F1", AGUARDANDO: "#F59E0B", RESOLVIDO: "#16A34A" };
+  var STATUS_COR = {
+    NOVO: "#2563EB", PROJETOS: "#7C3AED", EM_ATENDIMENTO: "#6366F1",
+    AGUARDANDO: "#F59E0B", RESOLVIDO: "#16A34A",
+  };
 
   function bar(id, labels, data, cor, horizontal) {
     var c = document.getElementById(id);
