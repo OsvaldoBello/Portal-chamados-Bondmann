@@ -75,8 +75,12 @@ async def test_ia_worker_le_o_permitido_e_formulacoes_da_erro_de_permissao(conn)
         == 1
     )
     # 2) Quantidades: sem GRANT ⇒ ERRO de permissão (C7 — garantia de banco).
+    # SAVEPOINT (conn.transaction() aninhado) porque qualquer erro do Postgres aborta a
+    # transação inteira, não só o statement — mesmo padrão de tests/e2e/test_rls_matrix.py
+    # (commit ba6991d).
     with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
-        await conn.fetchval("SELECT count(*) FROM base_quimico_formulacoes")
+        async with conn.transaction():
+            await conn.fetchval("SELECT count(*) FROM base_quimico_formulacoes")
 
 
 async def test_usuario_autenticado_nao_enxerga_nenhuma_linha_da_base(conn, seed):
@@ -97,7 +101,13 @@ async def test_usuario_autenticado_nao_enxerga_nenhuma_linha_da_base(conn, seed)
             "base_quimico_formulacoes",
         ):
             try:
-                linhas = await conn.fetchval(f"SELECT count(*) FROM {tabela}")  # noqa: S608
+                # SAVEPOINT por tabela: sem isso, o InsufficientPrivilegeError da 1ª
+                # tabela sem GRANT aborta a transação inteira e a 2ª tabela (mesmo
+                # que também deva dar erro) quebra com InFailedSQLTransactionError
+                # em vez do erro esperado — mesmo padrão de test_rls_matrix.py
+                # (commit ba6991d).
+                async with conn.transaction():
+                    linhas = await conn.fetchval(f"SELECT count(*) FROM {tabela}")  # noqa: S608
             except asyncpg.exceptions.InsufficientPrivilegeError:
                 continue  # sem GRANT também serve — inacessível de qualquer jeito
             assert linhas == 0, f"{tabela} visível para usuário autenticado"
