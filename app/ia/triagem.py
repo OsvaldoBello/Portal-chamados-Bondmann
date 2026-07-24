@@ -45,8 +45,8 @@ from pydantic import ValidationError
 from app.config import Settings, get_settings
 from app.db import admin_connection
 from app.domain.formularios_quimico import rotular
-from app.ia import cliente
-from app.ia.schemas import SaidaTriagem
+from app.ia import cliente, contexto_quimico
+from app.ia.schemas import SaidaPasseB, SaidaTriagem
 from app.notification import notificar_nova_mensagem_email
 from app.repositories import ia_busca
 
@@ -55,6 +55,11 @@ log = logging.getLogger("app.ia_triagem")
 PERFIL_IA_NOME = "Assistente IA"
 _PASSE_UNICO = "UNICO"
 _MAX_TOKENS_SAIDA = 900
+# Passe B (F4): pré-análise 6M é mais longa que o JSON de triagem.
+_MAX_TOKENS_SAIDA_B = 1400
+# Departamento com agente de DOIS PASSES (Seção 3 do plano IA). Os demais usam
+# o passe único. Nome canônico do banco (migrations 0027/0049).
+_DEPTO_QUIMICO = "Dpto Químico"
 
 # Cache em memória do UUID do perfil de serviço (Seção 4.2 — lookup por nome,
 # sem env extra, sem hardcode). O perfil nunca muda em runtime.
@@ -85,11 +90,18 @@ def montar_mensagens(
     chamado: dict[str, Any],
     categorias: list[str],
     conversa: list[dict[str, str]] | None = None,
+    *,
+    prompt_nome: str = "ti",
+    playbook: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
-    """Mensagens system+user do passe único (função pura, testável).
+    """Mensagens system+user do passe único / Passe A (função pura, testável).
 
     ``conversa`` (rodadas > 1): lista de ``{"papel": ..., "conteudo": ...}`` com
-    a troca pública até aqui — perguntas da IA e respostas do autor."""
+    a troca pública até aqui — perguntas da IA e respostas do autor.
+
+    ``playbook`` (Químico, F4): roteiro de perguntas de investigação por
+    cenário — SEM qualquer dado de produto/ficha (invariante do Passe A,
+    Seção 3.1). É a única informação da base que este payload pode conter."""
     linhas = [
         "## Chamado",
         f"Departamento: {chamado.get('departamento') or '—'}",
@@ -111,11 +123,65 @@ def montar_mensagens(
             "",
             "Considere as respostas do autor acima; não repita perguntas já respondidas.",
         ]
+    if playbook:
+        linhas += ["", "## Roteiro de investigação (perguntas por cenário)"]
+        for item in playbook:
+            detalhes = [str(item.get("cenario") or "")]
+            pergunta = item.get("Pergunta obrigatória da IA")
+            if pergunta:
+                detalhes.append(f"pergunta: {pergunta}")
+            alerta = item.get("Resposta crítica / alerta")
+            if alerta:
+                detalhes.append(f"alerta: {alerta}")
+            linhas.append("- " + " · ".join(d for d in detalhes if d))
     if categorias:
         linhas += ["", "## Catálogo de categorias do departamento"]
         linhas += [f"- {nome}" for nome in categorias]
     return [
-        {"role": "system", "content": _prompt("ti")},
+        {"role": "system", "content": _prompt(prompt_nome)},
+        {"role": "user", "content": "\n".join(linhas)},
+    ]
+
+
+def montar_mensagens_passe_b(
+    chamado: dict[str, Any],
+    conversa: list[dict[str, str]] | None,
+    contexto_texto: str,
+) -> list[dict[str, str]]:
+    """Mensagens system+user do Passe B do Químico (função pura, testável).
+
+    ``contexto_texto`` é a recuperação seletiva formatada por
+    :func:`app.ia.contexto_quimico.formatar_contexto` — produto(s) citado(s)
+    sem proporções, ficha técnica, diagnósticos e regras de sigilo. Vazio =
+    base indisponível/produto não identificado (o passe analisa só o chamado).
+    """
+    linhas = [
+        "## Chamado",
+        f"Categoria: {chamado.get('categoria') or '—'}",
+        f"Prioridade declarada: {chamado.get('prioridade') or '—'}",
+        f"Assunto: {chamado.get('titulo') or '—'}",
+        "",
+        "Descrição:",
+        str(chamado.get("descricao") or ""),
+    ]
+    pares = rotular(chamado.get("categoria"), chamado.get("dados_formulario") or {})
+    if pares:
+        linhas += ["", "Campos do formulário:"]
+        linhas += [f"- {rotulo}: {valor}" for rotulo, valor in pares]
+    if conversa:
+        linhas += ["", "## Conversa pública até agora"]
+        linhas += [f"[{m['papel']}] {m['conteudo']}" for m in conversa]
+    if contexto_texto:
+        linhas += ["", contexto_texto]
+    else:
+        linhas += [
+            "",
+            "## Base interna",
+            "Indisponível nesta execução — analise apenas com os dados do chamado "
+            "e sinalize explicitamente essa limitação.",
+        ]
+    return [
+        {"role": "system", "content": _prompt("quimico_passe_b")},
         {"role": "user", "content": "\n".join(linhas)},
     ]
 
@@ -169,6 +235,22 @@ def montar_nota(
     (DoD F3: seção omitida, nunca inventada)."""
     partes = ["Triagem automática — pré-análise da IA", "", saida.pre_analise.strip()]
 
+    sugestoes = _secao_sugestoes(saida, chamado)
+    if sugestoes:
+        partes += ["", *sugestoes]
+
+    partes += _secao_semelhantes(semelhantes)
+
+    if not saida.informacoes_suficientes and saida.perguntas:
+        partes += ["", "Informações faltantes — perguntas que a IA faria ao autor:"]
+        partes += [f"{i}. {p}" for i, p in enumerate(saida.perguntas, start=1)]
+
+    partes += ["", f"Confiança: {saida.confianca} · Gerado por IA — valide antes de agir."]
+    return "\n".join(partes)
+
+
+def _secao_sugestoes(saida: SaidaTriagem, chamado: dict[str, Any]) -> list[str]:
+    """Sugestões de categoria/prioridade APENAS quando divergem (Regra #3)."""
     sugestoes = []
     if saida.categoria_sugerida and saida.categoria_sugerida != (chamado.get("categoria") or ""):
         sugestoes.append(
@@ -182,23 +264,51 @@ def montar_nota(
             f"Prioridade sugerida: {saida.prioridade_sugerida}"
             f" (declarada: {chamado.get('prioridade') or '—'})"
         )
+    return sugestoes
+
+
+def _secao_semelhantes(semelhantes: list[dict[str, Any]] | None) -> list[str]:
+    """Seção "Casos semelhantes" (F3) — vazia quando não há (nunca inventada)."""
+    if not semelhantes:
+        return []
+    partes = ["", "Casos semelhantes já resolvidos:"]
+    for s in semelhantes:
+        linha = f"- {s.get('codigo') or '?'} — {s.get('titulo') or ''}".rstrip(" —")
+        resolucao = _resumir_resolucao(s.get("resolucao"))
+        if resolucao:
+            linha += f" · resolução registrada: {resolucao}"
+        partes.append(linha)
+    return partes
+
+
+def montar_nota_quimico(
+    saida_a: SaidaTriagem,
+    saida_b: SaidaPasseB,
+    chamado: dict[str, Any],
+    semelhantes: list[dict[str, Any]] | None = None,
+) -> str:
+    """Nota interna do Químico (F4): pré-análise técnica do Passe B + triagem
+    do Passe A (função pura).
+
+    A pré-análise 6M vem do Passe B (que leu a base sigilosa); as sugestões de
+    categoria/prioridade vêm do Passe A (que fez a triagem). Este texto é
+    persistido EXCLUSIVAMENTE via :func:`_salvar_nota_interna` (invariante 8.2).
+    """
+    partes = [
+        "Triagem automática — pré-análise do Assistente Químico (IA)",
+        "",
+        saida_b.pre_analise.strip(),
+    ]
+    sugestoes = _secao_sugestoes(saida_a, chamado)
     if sugestoes:
         partes += ["", *sugestoes]
-
-    if semelhantes:
-        partes += ["", "Casos semelhantes já resolvidos:"]
-        for s in semelhantes:
-            linha = f"- {s.get('codigo') or '?'} — {s.get('titulo') or ''}".rstrip(" —")
-            resolucao = _resumir_resolucao(s.get("resolucao"))
-            if resolucao:
-                linha += f" · resolução registrada: {resolucao}"
-            partes.append(linha)
-
-    if not saida.informacoes_suficientes and saida.perguntas:
-        partes += ["", "Informações faltantes — perguntas que a IA faria ao autor:"]
-        partes += [f"{i}. {p}" for i, p in enumerate(saida.perguntas, start=1)]
-
-    partes += ["", f"Confiança: {saida.confianca} · Gerado por IA — valide antes de agir."]
+    if saida_b.escalar_para_quimico:
+        partes += ["", "⚠️ Playbook indica ESCALAR este caso ao químico responsável."]
+    if saida_b.dados_faltantes:
+        partes += ["", "Dados a confirmar antes de concluir:"]
+        partes += [f"- {d}" for d in saida_b.dados_faltantes]
+    partes += _secao_semelhantes(semelhantes)
+    partes += ["", f"Confiança: {saida_b.confianca} · Gerado por IA — valide antes de agir."]
     return "\n".join(partes)
 
 
@@ -266,13 +376,22 @@ def _soma_tokens(acumulado: int | None, novo: int | None) -> int | None:
 
 
 async def _chamar_modelo(
-    mensagens: list[dict[str, str]], settings: Settings
-) -> tuple[SaidaTriagem | None, str | None, int | None, int | None]:
+    mensagens: list[dict[str, str]],
+    settings: Settings,
+    *,
+    model: str | None = None,
+    schema: type = SaidaTriagem,
+    max_tokens: int = _MAX_TOKENS_SAIDA,
+) -> tuple[Any | None, str | None, int | None, int | None]:
     """Uma chamada estruturada + 1 retry em JSON inválido (Seção 2.1).
 
     Devolve ``(saida, erro, tokens_entrada, tokens_saida)`` — tokens somados
     entre tentativas (custo real). Falha de provedor não tem retry: vira erro
-    silencioso direto (a triagem nunca segura a abertura)."""
+    silencioso direto (a triagem nunca segura a abertura).
+
+    ``model``/``schema``/``max_tokens`` parametrizam o passe (F4): o Passe B do
+    Químico valida :class:`SaidaPasseB` e pode usar ``IA_TRIAGEM_MODEL_PASSE_B``.
+    """
     tokens_in: int | None = None
     tokens_out: int | None = None
     erro: str | None = None
@@ -280,11 +399,11 @@ async def _chamar_modelo(
         try:
             resposta = await cliente.completar_chat(
                 mensagens=mensagens,
-                model=settings.ia_triagem_model,
+                model=model or settings.ia_triagem_model,
                 api_key=settings.ia_triagem_api_key,
                 base_url=settings.ia_triagem_base_url,
                 timeout_s=settings.ia_triagem_timeout_s,
-                max_tokens=_MAX_TOKENS_SAIDA,
+                max_tokens=max_tokens,
                 json_mode=True,
             )
         except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
@@ -292,7 +411,7 @@ async def _chamar_modelo(
         tokens_in = _soma_tokens(tokens_in, resposta.tokens_entrada)
         tokens_out = _soma_tokens(tokens_out, resposta.tokens_saida)
         try:
-            return SaidaTriagem.model_validate_json(resposta.conteudo), None, tokens_in, tokens_out
+            return schema.model_validate_json(resposta.conteudo), None, tokens_in, tokens_out
         except ValidationError as exc:
             erro = f"json_invalido: {exc.error_count()} erro(s) de schema"
             continue
@@ -453,12 +572,58 @@ async def _executar(chamado_id: str) -> None:
     if isinstance(chamado.get("dados_formulario"), str):  # jsonb chega como str no asyncpg
         chamado["dados_formulario"] = json.loads(chamado["dados_formulario"])
 
-    # 2) Uma chamada estruturada (+1 retry de JSON) — custo previsível (Regra #9).
+    # 2) Passe único (TI) ou Passe A (Químico, F4) — uma chamada estruturada
+    #    (+1 retry de JSON), custo previsível (Regra #9). O Passe A do Químico
+    #    recebe SÓ o chamado + o playbook de perguntas — nunca a base sigilosa
+    #    (invariante 8.2; o playbook não contém dado de produto).
+    eh_quimico = chamado["departamento"] == _DEPTO_QUIMICO
+    playbook = await contexto_quimico.playbook_perguntas(settings) if eh_quimico else []
     inicio = time.monotonic()
     saida, erro, tokens_in, tokens_out = await _chamar_modelo(
-        montar_mensagens(chamado, categorias, conversa or None), settings
+        montar_mensagens(
+            chamado,
+            categorias,
+            conversa or None,
+            prompt_nome="quimico_passe_a" if eh_quimico else "ti",
+            playbook=playbook or None,
+        ),
+        settings,
     )
     duracao_ms = int((time.monotonic() - inicio) * 1000)
+
+    # 2b) Passe B do Químico (F4): só quando a rodada vai fechar em NOTA
+    #     INTERNA (a pergunta pública nunca passa pelo canal com base sigilosa).
+    #     A decisão aqui usa o estado carregado no passo 1; a guarda definitiva
+    #     é reavaliada na persistência — ela só muda no sentido PERGUNTAS →
+    #     NOTA_INTERNA, caso em que a nota degrada para o fallback do Passe A.
+    saida_b: SaidaPasseB | None = None
+    erro_b: str | None = None
+    tokens_b_in: int | None = None
+    tokens_b_out: int | None = None
+    duracao_b_ms: int | None = None
+    passe_b_tentado = False
+    modelo_b = settings.ia_triagem_model_passe_b or settings.ia_triagem_model
+    if (
+        eh_quimico
+        and saida is not None
+        and decidir_acao(saida, rodada, settings, atendimento_iniciado) == "NOTA_INTERNA"
+    ):
+        passe_b_tentado = True
+        ctx = await contexto_quimico.montar_contexto_passe_b(
+            settings,
+            (chamado.get("dados_formulario") or {}).get("produto"),
+            f"{chamado.get('titulo') or ''}\n{chamado.get('descricao') or ''}",
+        )
+        contexto_texto = contexto_quimico.formatar_contexto(ctx) if ctx is not None else ""
+        inicio_b = time.monotonic()
+        saida_b, erro_b, tokens_b_in, tokens_b_out = await _chamar_modelo(
+            montar_mensagens_passe_b(chamado, conversa or None, contexto_texto),
+            settings,
+            model=modelo_b,
+            schema=SaidaPasseB,
+            max_tokens=_MAX_TOKENS_SAIDA_B,
+        )
+        duracao_b_ms = int((time.monotonic() - inicio_b) * 1000)
 
     # 3) Persistência atômica: auditoria + mensagem (nota OU pergunta) + histórico.
     email_pergunta: str | None = None
@@ -503,6 +668,7 @@ async def _executar(chamado_id: str) -> None:
         if semelhantes:
             # Auditável em `ia_triagens.resultado`: QUAIS casos foram citados.
             resultado["semelhantes_codigos"] = [s.get("codigo") for s in semelhantes]
+        passe_principal = "A" if eh_quimico else _PASSE_UNICO
         triagem_id = await conn.fetchval(
             """
             INSERT INTO ia_triagens
@@ -514,7 +680,7 @@ async def _executar(chamado_id: str) -> None:
             """,
             chamado_id,
             rodada,
-            _PASSE_UNICO,
+            passe_principal,
             acao,
             json.dumps(resultado, ensure_ascii=False),
             settings.ia_triagem_model,
@@ -527,6 +693,40 @@ async def _executar(chamado_id: str) -> None:
             # Corrida com outra execução (retry duplicado): quem chegou antes já
             # gravou a mensagem — não duplica (UNIQUE + verificação de rodada).
             return
+        if passe_b_tentado:
+            # Auditoria do Passe B (Seção 4.1): METADADOS apenas — o texto da
+            # pré-análise vive só na `mensagens` interna (RLS validada), nunca
+            # em `resultado` (evita um segundo lugar sensível a proteger).
+            resultado_b = (
+                {
+                    "confianca": saida_b.confianca,
+                    "escalar_para_quimico": saida_b.escalar_para_quimico,
+                    "produto_reconhecido": saida_b.produto_reconhecido,
+                    "dados_faltantes": saida_b.dados_faltantes,
+                }
+                if saida_b is not None
+                else {"erro": erro_b or "desconhecido"}
+            )
+            await conn.fetchval(
+                """
+                INSERT INTO ia_triagens
+                  (chamado_id, rodada, passe, acao, resultado, modelo,
+                   tokens_entrada, tokens_saida, custo_usd, duracao_ms)
+                VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)
+                ON CONFLICT (chamado_id, rodada, passe) DO NOTHING
+                RETURNING id
+                """,
+                chamado_id,
+                rodada,
+                "B",
+                "NOTA_INTERNA" if saida_b is not None else "ERRO",
+                json.dumps(resultado_b, ensure_ascii=False),
+                modelo_b,
+                tokens_b_in,
+                tokens_b_out,
+                cliente.custo_usd(modelo_b, tokens_b_in, tokens_b_out),
+                duracao_b_ms,
+            )
         if saida is None:
             log.warning("[IA TRIAGEM] Chamado %s sem triagem útil: %s", chamado_id, erro)
             return
@@ -536,10 +736,34 @@ async def _executar(chamado_id: str) -> None:
             # autor) ou teto de rodadas, com as lacunas sinalizadas.
             email_pergunta = montar_pergunta_publica(saida, chamado)
             await _enviar_pergunta_publica(conn, chamado_id, perfil_id, email_pergunta)
+        elif eh_quimico and saida_b is not None:
+            # Nota do Químico: pré-análise do Passe B (com base sigilosa) +
+            # triagem do Passe A. Persistência SEMPRE via _salvar_nota_interna
+            # (is_interna=true fixado — invariante 8.2).
+            await _salvar_nota_interna(
+                conn, chamado_id, perfil_id, montar_nota_quimico(saida, saida_b, chamado, semelhantes)
+            )
         else:
+            # TI, ou fallback do Químico com Passe B indisponível (degradação
+            # graciosa — a nota do Passe A sai sem a base, nunca deixa de sair).
+            if passe_b_tentado and saida_b is None:
+                log.warning(
+                    "[IA TRIAGEM] Passe B falhou no chamado %s (%s) — nota via Passe A.",
+                    chamado_id,
+                    erro_b,
+                )
             await _salvar_nota_interna(
                 conn, chamado_id, perfil_id, montar_nota(saida, chamado, semelhantes)
             )
+        detalhes_historico = {
+            "rodada": rodada,
+            "passe": passe_principal,
+            "acao": acao,
+            "modelo": settings.ia_triagem_model,
+            "modo_sombra": settings.ia_triagem_modo_sombra,
+        }
+        if passe_b_tentado:
+            detalhes_historico["passe_b"] = "NOTA_INTERNA" if saida_b is not None else "ERRO"
         await conn.execute(
             """
             INSERT INTO historico_chamados (chamado_id, ator_id, acao, detalhes)
@@ -547,15 +771,7 @@ async def _executar(chamado_id: str) -> None:
             """,
             chamado_id,
             perfil_id,
-            json.dumps(
-                {
-                    "rodada": rodada,
-                    "passe": _PASSE_UNICO,
-                    "acao": acao,
-                    "modelo": settings.ia_triagem_model,
-                    "modo_sombra": settings.ia_triagem_modo_sombra,
-                }
-            ),
+            json.dumps(detalhes_historico),
         )
 
     # 4) E-mail da pergunta (fora da transação — a mensagem já está visível).
@@ -568,3 +784,116 @@ async def _executar(chamado_id: str) -> None:
             log.warning("[IA TRIAGEM] Falha ao notificar pergunta por e-mail: %s", exc)
 
     log.info("[IA TRIAGEM] Chamado %s triado (rodada %s, %s ms).", chamado_id, rodada, duracao_ms)
+
+
+# ------------------------------------------------------------------
+# Reconciliação (rede de segurança do agendamento em memória)
+# ------------------------------------------------------------------
+
+
+async def _chamados_orfaos(conn: Any, settings: Settings) -> list[str]:
+    """IDs de chamados com uma rodada de triagem "presa" (nunca rodou).
+
+    ``agendar_triagem`` dispara via ``asyncio.create_task`` — rápido (latência
+    p95 < 2 min), mas NÃO durável: um restart/redeploy do processo entre o
+    agendamento e o primeiro INSERT em ``ia_triagens`` apaga a tarefa sem
+    deixar rastro algum (caso real: BOND-2026-00593, 2026-07-23 — chamado de
+    TI elegível com ZERO linhas em ``ia_triagens``/``historico_chamados``,
+    enquanto o chamado imediatamente anterior e o seguinte foram triados
+    normalmente em poucos segundos). Duas formas de "órfão", espelhando as
+    mesmas guardas de :func:`_executar`:
+
+    1. rodada 1 nunca rodou (chamado criado há mais de 3 min, nenhuma linha
+       em ``ia_triagens``);
+    2. a IA perguntou (rodada N), o autor respondeu há mais de 3 min, e a
+       rodada N+1 nunca rodou (mesma guarda de re-triagem: ``NOVO`` + sem
+       operador + dentro do teto de rodadas).
+
+    A margem de 3 min evita corrida com o ``create_task`` recém-agendado de
+    um chamado que acabou de abrir ou responder.
+    """
+    departamentos = settings.ia_triagem_departamentos_lista
+    if not departamentos:
+        return []
+    linhas = await conn.fetch(
+        """
+        SELECT c.id::text AS id
+          FROM chamados c
+          JOIN departamentos d ON d.id = c.departamento_id
+         WHERE d.nome = ANY($1::text[])
+           AND c.status <> 'RESOLVIDO'
+           AND c.created_at < now() - interval '3 minutes'
+           AND NOT EXISTS (SELECT 1 FROM ia_triagens t WHERE t.chamado_id = c.id)
+        UNION
+        SELECT c.id::text AS id
+          FROM chamados c
+          JOIN departamentos d ON d.id = c.departamento_id
+          JOIN LATERAL (
+                 SELECT t.rodada, t.acao, t.created_at
+                   FROM ia_triagens t
+                  WHERE t.chamado_id = c.id
+                  ORDER BY t.rodada DESC, t.id DESC
+                  LIMIT 1
+               ) ultima ON true
+         WHERE d.nome = ANY($1::text[])
+           AND c.status = 'NOVO' AND c.operador_id IS NULL
+           AND ultima.acao = 'PERGUNTAS'
+           AND ultima.rodada < $2
+           AND EXISTS (
+                 SELECT 1 FROM mensagens m
+                  WHERE m.chamado_id = c.id AND m.remetente_id = c.cliente_id
+                    AND m.is_interna = false AND m.created_at > ultima.created_at
+                    AND m.created_at < now() - interval '3 minutes'
+               )
+        """,
+        departamentos,
+        settings.ia_triagem_max_rodadas,
+    )
+    return [r["id"] for r in linhas]
+
+
+async def reconciliar_triagens_perdidas() -> int:
+    """Varredura periódica: reexecuta a triagem dos chamados órfãos.
+
+    Segura por construção — ``executar_triagem`` reavalida tudo no banco e é
+    idempotente (Seção 2.3); processar de novo um chamado que já foi
+    resolvido por outra via (corrida com o agendamento original) é um no-op
+    barato (uma consulta, sem chamar o modelo). Nunca lança — mesma tolerância
+    a falha do motor (Regra #5). Devolve quantos chamados foram reprocessados
+    (só para log/observação)."""
+    settings = get_settings()
+    if not settings.ia_triagem_ativa or not settings.ia_triagem_api_key:
+        return 0
+    async with admin_connection() as conn:
+        ids = await _chamados_orfaos(conn, settings)
+    for chamado_id in ids:
+        await executar_triagem(chamado_id)
+    if ids:
+        log.warning(
+            "[IA TRIAGEM] Reconciliação reexecutou %d chamado(s) órfão(s): %s",
+            len(ids),
+            ", ".join(ids),
+        )
+    return len(ids)
+
+
+async def _loop_reconciliacao(intervalo_s: float) -> None:
+    """Roda :func:`reconciliar_triagens_perdidas` a cada ``intervalo_s``, até
+    a task ser cancelada no shutdown do app (Regra #5: nunca derruba nada)."""
+    while True:
+        await asyncio.sleep(intervalo_s)
+        try:
+            await reconciliar_triagens_perdidas()
+        except Exception as exc:  # noqa: BLE001 — loop de fundo nunca morre por erro de uma volta
+            log.warning("[IA TRIAGEM] Ciclo de reconciliação falhou: %s", exc)
+
+
+def iniciar_reconciliacao(settings: Settings) -> asyncio.Task | None:
+    """Inicia o loop de reconciliação (chamado pelo lifespan do app).
+
+    ``None`` se a triagem estiver desligada ou o intervalo for ``<= 0`` — a
+    rede de segurança segue o mesmo kill switch geral (Regra de Ouro #5): sem
+    ``IA_TRIAGEM_ATIVA``, nem a varredura roda."""
+    if not settings.ia_triagem_ativa or settings.ia_triagem_reconciliacao_intervalo_s <= 0:
+        return None
+    return asyncio.create_task(_loop_reconciliacao(settings.ia_triagem_reconciliacao_intervalo_s))
