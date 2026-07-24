@@ -24,7 +24,6 @@ from app.domain.formularios_quimico import (
 def _payload_ocorrencia_valido(**over: list[str]) -> dict[str, list[str]]:
     """Payload mínimo válido para o Registro de Ocorrência (todos os obrigatórios)."""
     base = {
-        "representante": ["Zeca"],
         "regiao": ["001-COLOMBO"],
         "supervisor": ["CHRISTIAN ALVES SEVERO"],
         "gerente": ["ANDRE LUIZ MANDELLI"],
@@ -35,17 +34,9 @@ def _payload_ocorrencia_valido(**over: list[str]) -> dict[str, list[str]]:
         "setor_contato": ["Compras"],
         "fone": ["51999998888"],
         "email": ["fulano@cliente.com"],
-        "tipo_ocorrencia": ["PRODUTO"],
         "produto": ["ALKARES"],
         "lote": ["LOTE1234567890"],
         "descricao_situacao": ["Vazou no piso"],
-        "produto_funcao_especifica": ["Sim"],
-        "ambiente_apropriado": ["Sim"],
-        "operadores_treinados": ["Sim"],
-        "procedimentos_medicao": ["Sim"],
-        "ocorrencia_pontual": ["Sim"],
-        "processos_anteriores_afetam": ["Não"],
-        "outras_informacoes": ["Não"],
     }
     base.update(over)
     return base
@@ -73,16 +64,14 @@ def test_ocorrencia_payload_valido():
     ok, erro, limpo = validar_payload(CAT_OCORRENCIA, _payload_ocorrencia_valido())
     assert ok and erro is None
     assert limpo["nome_empresa_cliente"] == "Cliente X"
-    assert limpo["produto_funcao_especifica"] == "Sim"
-    # Campo de detalhe opcional não preenchido não entra no resultado.
-    assert "produto_funcao_especifica_detalhe" not in limpo
+    assert limpo["descricao_situacao"] == "Vazou no piso"
 
 
 def test_ocorrencia_obrigatorio_vazio_falha():
-    dados = _payload_ocorrencia_valido(representante=[""])
+    dados = _payload_ocorrencia_valido(cidade=[""])
     ok, erro, limpo = validar_payload(CAT_OCORRENCIA, dados)
     assert not ok
-    assert erro and "Representante" in erro
+    assert erro and "Cidade" in erro
     assert limpo == {}
 
 
@@ -107,31 +96,12 @@ def test_ocorrencia_email_invalido_falha():
     assert "E-mail" in (erro or "")
 
 
-def test_ocorrencia_causal_opcao_invalida_falha():
-    dados = _payload_ocorrencia_valido(produto_funcao_especifica=["Talvez"])
-    ok, erro, _ = validar_payload(CAT_OCORRENCIA, dados)
-    assert not ok
-    assert "função específica" in (erro or "")
-
-
-def test_ocorrencia_causal_com_detalhe():
-    dados = _payload_ocorrencia_valido(
-        produto_funcao_especifica=["Outra"],
-        produto_funcao_especifica_detalhe=["Usado fora do recomendado"],
-    )
-    ok, _, limpo = validar_payload(CAT_OCORRENCIA, dados)
-    assert ok
-    assert limpo["produto_funcao_especifica"] == "Outra"
-    assert limpo["produto_funcao_especifica_detalhe"] == "Usado fora do recomendado"
-
-
 def test_visita_tecnica_payload_valido_e_campos_forjados_ignorados():
     dados = {
-        "solicitante": ["Zeca"],
         "cliente_visitado": ["Cliente Y"],
         "cidade": ["Indaiatuba"],
+        "estado": ["SP"],
         "regiao_cliente": ["001-COLOMBO"],
-        "unidade_atendimento": ["Matriz Canoas/RS"],
         "produtos_utilizados": ["Óleo X"],
         "ocorrencia_anterior": ["Não"],
         "objetivo_visita": ["Inspeção de rotina"],
@@ -140,25 +110,24 @@ def test_visita_tecnica_payload_valido_e_campos_forjados_ignorados():
     ok, erro, limpo = validar_payload(CAT_VISITA, dados)
     assert ok and erro is None
     assert "campo_forjado" not in limpo
-    assert limpo["unidade_atendimento"] == "Matriz Canoas/RS"
+    assert limpo["estado"] == "SP"
     assert "detalhe_ocorrencia_anterior" not in limpo  # opcional vazio
 
 
-def test_visita_tecnica_unidade_invalida_falha():
+def test_visita_tecnica_regiao_invalida_falha():
     dados = {
-        "solicitante": ["Zeca"], "cliente_visitado": ["Y"], "cidade": ["X"],
-        "regiao_cliente": ["001-COLOMBO"], "unidade_atendimento": ["Filial Fantasma"],
+        "cliente_visitado": ["Y"], "cidade": ["X"], "estado": ["SP"],
+        "regiao_cliente": ["Região Fantasma"],
         "produtos_utilizados": ["Óleo"], "ocorrencia_anterior": ["Sim"],
         "objetivo_visita": ["Visita"],
     }
     ok, erro, _ = validar_payload(CAT_VISITA, dados)
     assert not ok
-    assert "Unidade Bondmann de Atendimento" in (erro or "")
+    assert "Região do cliente" in (erro or "")
 
 
 def _payload_analise_valido(**over: list[str]) -> dict[str, list[str]]:
     base = {
-        "identificacao_solicitante": ["Zeca"],
         "unidade_entrega": ["Matriz Canoas/RS"],
         "identificacao_cliente": ["Cliente Z"],
         "descricao_amostra": ["Óleo, lote 123, aspecto turvo"],
@@ -191,11 +160,11 @@ def test_analise_laboratorial_checkbox_multi_opcao_invalida_falha():
 
 def test_valores_para_template_normaliza_para_prefill():
     brutos = {
-        "identificacao_solicitante": ["Zeca"],
+        "identificacao_cliente": ["Cliente Z"],
         "analises_solicitadas": ["Determinação de pH", "Determinação de densidade"],
     }
     valores = valores_para_template(CAT_ANALISE, brutos)
-    assert valores["identificacao_solicitante"] == "Zeca"
+    assert valores["identificacao_cliente"] == "Cliente Z"
     assert valores["analises_solicitadas"] == ["Determinação de pH", "Determinação de densidade"]
 
 
@@ -207,7 +176,7 @@ def test_rotular_ordena_pelo_schema_e_preserva_extras():
     dados = {"descricao_situacao": "vazou", "cidade": "Canoas", "sobra": "x"}
     pares = rotular(CAT_OCORRENCIA, dados)
     labels = [label for label, _ in pares]
-    assert labels.index("Cidade") < labels.index("Descrição da Situação")
+    assert labels.index("Cidade") < labels.index("Descrição da ocorrência")
     assert ("sobra", "x") in pares
 
 

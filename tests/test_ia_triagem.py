@@ -443,11 +443,11 @@ def test_montar_mensagens_rotula_campos_do_formulario_quimico():
         _CHAMADO,
         categoria="Registro de Ocorrência",
         departamento="Dpto Químico",
-        dados_formulario={"cidade": "Canoas", "tipo_ocorrencia": "PRODUTO"},
+        dados_formulario={"cidade": "Canoas", "produto": "ALKARES"},
     )
     user = triagem.montar_mensagens(chamado, [])[1]["content"]
     assert "Cidade: Canoas" in user
-    assert "Qual o tipo de Ocorrência?: PRODUTO" in user  # rótulo real do schema
+    assert "Produto: ALKARES" in user  # rótulo real do schema
 
 
 async def test_chamado_inexistente_nao_faz_nada():

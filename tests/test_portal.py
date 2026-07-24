@@ -777,7 +777,6 @@ def _abertura_ocorrencia(**over):
         "categoria_id": "cq",
         "setor": "Financeiro",
         # campos dinâmicos (namespace campo__) — schema real do FB033
-        "campo__representante": "Zeca",
         "campo__regiao": "001-COLOMBO",
         "campo__supervisor": "CHRISTIAN ALVES SEVERO",
         "campo__gerente": "ANDRE LUIZ MANDELLI",
@@ -788,17 +787,9 @@ def _abertura_ocorrencia(**over):
         "campo__setor_contato": "Compras",
         "campo__fone": "51999998888",
         "campo__email": "fulano@cliente.com",
-        "campo__tipo_ocorrencia": "PRODUTO",
         "campo__produto": "ALKARES",
         "campo__lote": "LOTE1234567890",
         "campo__descricao_situacao": "Produto vazou no piso",
-        "campo__produto_funcao_especifica": "Sim",
-        "campo__ambiente_apropriado": "Sim",
-        "campo__operadores_treinados": "Sim",
-        "campo__procedimentos_medicao": "Sim",
-        "campo__ocorrencia_pontual": "Sim",
-        "campo__processos_anteriores_afetam": "Não",
-        "campo__outras_informacoes": "Não",
     }
     base.update(over)
     return base
@@ -809,8 +800,8 @@ def test_campos_fragmento_do_quimico_renderiza_campos():
     with portal_client(repo) as client:
         resp = client.get("/portal/chamados/campos", params={"categoria_id": "cq"})
     assert resp.status_code == 200
-    assert 'name="campo__tipo_ocorrencia"' in resp.text
-    assert "Descrição da Situação" in resp.text
+    assert 'name="campo__descricao_situacao"' in resp.text
+    assert "Descrição da ocorrência" in resp.text
 
 
 def test_criar_quimico_grava_dados_formulario():
@@ -826,10 +817,8 @@ def test_criar_quimico_grava_dados_formulario():
     assert resp.status_code == 303
     assert len(repo.criados) == 1
     dados = repo.criados[0]["dados_formulario"]
-    assert dados["tipo_ocorrencia"] == "PRODUTO"
+    assert dados["descricao_situacao"] == "Produto vazou no piso"
     assert dados["nome_empresa_cliente"] == "Cliente X"
-    # Campo de detalhe opcional (não enviado) não é gravado.
-    assert "produto_funcao_especifica_detalhe" not in dados
     # Campo forjado fora do schema não é gravado.
     assert "campo_forjado" not in dados
 
@@ -864,7 +853,7 @@ def test_criar_quimico_sem_campo_obrigatorio_retorna_erro():
             follow_redirects=False,
         )
     assert resp.status_code == 400
-    assert "Descrição da Situação" in resp.text
+    assert "Descrição da ocorrência" in resp.text
     assert repo.criados == []  # nada gravado quando a validação falha
 
 
@@ -892,7 +881,7 @@ def test_criar_fora_do_quimico_nao_grava_dados_formulario():
             "/portal/chamados",
             data={
                 "titulo": "Impressora", "descricao": "não liga", "departamento_id": "d1",
-                "categoria_id": "cq", "setor": "Financeiro", "campo__representante": "x",
+                "categoria_id": "cq", "setor": "Financeiro", "campo__cidade": "x",
             },
             headers={"X-CSRF-Token": token},
             follow_redirects=False,
@@ -912,7 +901,6 @@ def test_criar_quimico_analise_laboratorial_com_checkbox_multiplo():
         "departamento_id": "dq",
         "categoria_id": "cq",
         "setor": "Financeiro",
-        "campo__identificacao_solicitante": "Zeca",
         "campo__unidade_entrega": "Matriz Canoas/RS",
         "campo__identificacao_cliente": "Cliente Z",
         "campo__descricao_amostra": "Óleo, lote 123, aspecto turvo",
@@ -946,7 +934,6 @@ def test_criar_quimico_analise_laboratorial_sem_checkbox_retorna_erro():
         "departamento_id": "dq",
         "categoria_id": "cq",
         "setor": "Financeiro",
-        "campo__identificacao_solicitante": "Zeca",
         "campo__unidade_entrega": "Matriz Canoas/RS",
         "campo__identificacao_cliente": "Cliente Z",
         "campo__descricao_amostra": "Óleo, lote 123",

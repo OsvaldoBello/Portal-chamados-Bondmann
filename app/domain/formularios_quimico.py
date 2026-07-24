@@ -12,11 +12,17 @@ gravadas em `chamados.dados_formulario` (jsonb, migration 0049) como um objeto
 ``{name: valor}``. Valores são ``str`` para a maioria dos tipos e ``list[str]``
 para ``checkbox_multi`` (perguntas de múltipla escolha).
 
-Todos os *dropdowns* do form original (Região, Supervisor, Gerente, Tipo de
-Ocorrência, Produto — no Registro de Ocorrência; Região do cliente — na
-Solicitação de Visita Técnica) já foram convertidos para `select` com as
-listas reais, anexadas pelo usuário em 2026-07-22. "Região do cliente" usa a
-mesma lista de `_REGIOES` (confirmado pelo usuário: é o mesmo dropdown).
+Todos os *dropdowns* do form original (Região, Supervisor, Gerente, Produto —
+no Registro de Ocorrência; Região do cliente — na Solicitação de Visita
+Técnica) já foram convertidos para `select` com as listas reais, anexadas
+pelo usuário em 2026-07-22. "Região do cliente" usa a mesma lista de
+`_REGIOES` (confirmado pelo usuário: é o mesmo dropdown).
+
+Ajustes solicitados pelo usuário no chamado BOND-2026-00569 (2026-07-23):
+Registro de Ocorrência perdeu Representante, Tipo de Ocorrência e as 7
+perguntas de Análise de Causa Provável; Solicitação de Visita Técnica perdeu
+Solicitante e Unidade Bondmann de Atendimento e ganhou Estado (após Cidade);
+Solicitação de Análise Laboratorial perdeu Identificação do solicitante.
 
 O `name` de cada campo é a chave estável em `dados_formulario` — trocar um
 `name` depois de ter chamados gravados exige cuidado/migração de dados.
@@ -106,10 +112,6 @@ _GERENTES = (
     "WALLYSSON ALEXSSANDRO DE ANDRADE MEDEIROS", "VENDA DIRETA",
 )
 
-# Tipo de Ocorrência (dropdown da pergunta 13 do FB033) — lista anexada pelo
-# usuário em 2026-07-22.
-_TIPOS_OCORRENCIA = ("PRODUTO", "PROCESSO", "NÃO IDENTIFICADA")
-
 # Produtos (dropdown "Produto" do FB033-Registro de Ocorrências) — lista
 # anexada pelo usuário em 2026-07-22, na ordem exibida no form (não é
 # estritamente alfabética no material original — ex.: as variantes de
@@ -163,13 +165,6 @@ def titulo_e_descricao_automaticos(
     return titulo[:160], descricao
 
 
-# As 7 perguntas "Sim/Não/Outra" de Análise de Causa Provável (Ocorrência) têm o
-# mesmo formato: escolha + detalhe opcional (o form original é um checkbox "no
-# máximo 2 opções" incluindo um campo de texto "Outra" — simplificado aqui para
-# select Sim/Não/Outra + campo de detalhe, mais direto de preencher e validar).
-_OPCOES_SIM_NAO_OUTRA = ("Sim", "Não", "Outra")
-
-
 @dataclass(frozen=True)
 class CampoDef:
     """Definição de um campo dinâmico de formulário.
@@ -188,20 +183,11 @@ class CampoDef:
     min_chars: int = 0
 
 
-def _pergunta_causal(name: str, label: str) -> tuple[CampoDef, CampoDef]:
-    """Par (escolha, detalhe) de uma pergunta de Análise de Causa Provável."""
-    return (
-        CampoDef(name, label, "select", obrigatorio=True, opcoes=_OPCOES_SIM_NAO_OUTRA),
-        CampoDef(f"{name}_detalhe", "Detalhe (se necessário)", "text"),
-    )
-
-
 # Ordem da lista = ordem de exibição no formulário.
 CAMPOS_POR_CATEGORIA: dict[str, tuple[CampoDef, ...]] = {
     # FB033-Registro de Ocorrências
     CAT_OCORRENCIA: (
         # Identificação da Região
-        CampoDef("representante", "Representante", "text", obrigatorio=True),
         CampoDef("regiao", "Região", "select", obrigatorio=True, opcoes=_REGIOES),
         CampoDef("supervisor", "Supervisor", "select", obrigatorio=True, opcoes=_SUPERVISORES),
         CampoDef("gerente", "Gerente", "select", obrigatorio=True, opcoes=_GERENTES),
@@ -215,56 +201,19 @@ CAMPOS_POR_CATEGORIA: dict[str, tuple[CampoDef, ...]] = {
         CampoDef("fone", "Fone", "tel", obrigatorio=True, min_chars=10),
         CampoDef("email", "E-mail", "email", obrigatorio=True),
         # Descrição da Ocorrência
-        CampoDef(
-            "tipo_ocorrencia", "Qual o tipo de Ocorrência?", "select",
-            obrigatorio=True, opcoes=_TIPOS_OCORRENCIA,
-        ),
         CampoDef("produto", "Produto", "select", obrigatorio=True, opcoes=_PRODUTOS),
         CampoDef("lote", "Lote", "text", obrigatorio=True, min_chars=13),
-        CampoDef("descricao_situacao", "Descrição da Situação", "textarea", obrigatorio=True),
-        # Análise de Causa Provável
-        *_pergunta_causal(
-            "produto_funcao_especifica",
-            "O produto está sendo utilizado na sua função específica para o qual foi "
-            "desenvolvido, considerando máquina, método e material?",
-        ),
-        *_pergunta_causal(
-            "ambiente_apropriado",
-            "O ambiente onde o produto está sendo utilizado é apropriado para a sua utilização?",
-        ),
-        *_pergunta_causal(
-            "operadores_treinados",
-            "Os operadores que utilizam o produto estão devidamente treinados e orientados?",
-        ),
-        *_pergunta_causal(
-            "procedimentos_medicao",
-            "Os procedimentos de medição e acompanhamento do processo estão sendo seguidos?",
-        ),
-        *_pergunta_causal(
-            "ocorrencia_pontual", "A ocorrência é pontual? Ocorre apenas em um lugar?"
-        ),
-        *_pergunta_causal(
-            "processos_anteriores_afetam",
-            "Os processos que antecedem a ocorrência afetam o processo sob análise?",
-        ),
-        *_pergunta_causal("outras_informacoes", "Há outras informações relevantes?"),
+        CampoDef("descricao_situacao", "Descrição da ocorrência", "textarea", obrigatorio=True),
         # Anexos (Fotos e/ou Vídeos) reaproveitam o upload padrão de anexos do
         # chamado (já presente em todo o portal) — não modelado como campo aqui.
     ),
     CAT_VISITA: (
-        CampoDef("solicitante", "Solicitante", "text", obrigatorio=True),
         CampoDef("cliente_visitado", "Cliente a ser visitado", "text", obrigatorio=True),
         CampoDef("cidade", "Cidade", "text", obrigatorio=True),
+        CampoDef("estado", "Estado", "text", obrigatorio=True),
         CampoDef(
             "regiao_cliente", "Região do cliente", "select",
             obrigatorio=True, opcoes=_REGIOES,
-        ),
-        CampoDef(
-            "unidade_atendimento",
-            "Unidade Bondmann de Atendimento",
-            "select",
-            obrigatorio=True,
-            opcoes=_UNIDADES,
         ),
         CampoDef(
             "produtos_utilizados", "Quais produtos Bondmann o cliente utiliza?", "textarea",
@@ -290,10 +239,10 @@ CAMPOS_POR_CATEGORIA: dict[str, tuple[CampoDef, ...]] = {
         ),
     ),
     CAT_ANALISE: (
-        CampoDef("identificacao_solicitante", "Identificação do solicitante", "text", obrigatorio=True),
         CampoDef(
             "unidade_entrega",
-            "Unidade de entrega da amostra",
+            "Unidade de entrega da amostra (O envio das amostras é de "
+            "responsabilidade do solicitante)",
             "select",
             obrigatorio=True,
             opcoes=_UNIDADES,
