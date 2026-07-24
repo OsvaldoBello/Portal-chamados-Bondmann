@@ -59,7 +59,9 @@
   </div>
 </div>
 
-{# KPIs #}
+{# KPIs — um único grid de 4 colunas: com o TI (8 métricas) fecham exatamente
+   2 linhas de 4; fora do TI (6 métricas), a 2ª linha fica com 2 vazias em vez
+   de 3 grids separados deixando buracos em linhas diferentes. #}
 <div class="anim-stagger grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
   {% macro kpi(rot, val, sub="") %}
   <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
@@ -74,19 +76,14 @@
          "resolvidos dentro do prazo") }}
   {{ kpi("CSAT médio", kpis.csat_media if kpis.csat_media is not none else "—",
          (kpis.csat_respostas ~ " avaliações") if kpis.csat_respostas else "sem avaliações") }}
-</div>
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
   {{ kpi("TMA (resolução)", (kpis.tma_horas ~ "h") if kpis.tma_horas is not none else "—", "tempo médio") }}
   {{ kpi("Resolvidos", kpis.resolvidos) }}
-</div>
-
-{% if escopo == "TI" %}
-{# Coluna "Projetos" do Kanban (migration 0057) é trabalho mais robusto —
-   pedido do usuário (2026-07-24): TMA separado do TMA geral acima (que já
-   exclui esses chamados), pra não misturar/distorcer a velocidade do time
-   nos chamados normais. Só existe pro TI (única fila com essa coluna) — ver
-   AdminRepo.kpis (identifica via historico_chamados, sem coluna nova). #}
-<div class="anim-stagger grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  {% if escopo == "TI" %}
+  {# Coluna "Projetos" do Kanban (migration 0057) é trabalho mais robusto —
+     pedido do usuário (2026-07-24): TMA separado do TMA geral acima (que já
+     exclui esses chamados), pra não misturar/distorcer a velocidade do time
+     nos chamados normais. Só existe pro TI (única fila com essa coluna) — ver
+     AdminRepo.kpis (identifica via historico_chamados, sem coluna nova). #}
   <div class="bg-white rounded-xl shadow-card border border-st_projetos/40 p-5">
     <div class="text-3xl font-display font-bold text-st_projetos">
       {{ (kpis.tma_projetos_horas ~ "h") if kpis.tma_projetos_horas is not none else "—" }}
@@ -98,8 +95,8 @@
     <div class="text-3xl font-display font-bold text-st_projetos">{{ kpis.projetos_resolvidos or 0 }}</div>
     <div class="text-xs text-muted mt-1">Projetos concluídos</div>
   </div>
+  {% endif %}
 </div>
-{% endif %}
 
 {# Gráficos #}
 <div class="grid lg:grid-cols-2 gap-5">

@@ -17,7 +17,12 @@ from fastapi.testclient import TestClient
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.main import app
 from app.ratelimit import limiter
-from app.repositories.chamados import get_chamados_repo, validar_nota
+from app.repositories.chamados import (
+    get_chamados_repo,
+    validar_comentario_avaliacao,
+    validar_nota,
+    validar_telefone_contato,
+)
 
 UID = "11111111-1111-1111-1111-111111111111"
 EMPRESA = "22222222-2222-2222-2222-222222222222"
@@ -80,6 +85,7 @@ class FakeRepo:
             "c1": [{"id": "s1", "nome": "Sub A"}, {"id": "s2", "nome": "Sub B"}]
         }
         self.avaliacoes: list[dict] = []
+        self.reaberturas: list[str] = []
         self.criados: list[dict] = []
         self.mensagens_criadas: list[dict] = []
         self.observadores_adicionados: list[tuple] = []
@@ -159,6 +165,12 @@ class FakeRepo:
             "avaliacao_em": datetime(2026, 6, 30, 15, 0, tzinfo=UTC),
         }
 
+    async def reabrir(self, claims, chamado_id):
+        if not self._chamado or self._chamado.get("status") != "RESOLVIDO":
+            return None
+        self.reaberturas.append(chamado_id)
+        return {"id": chamado_id, "status": "EM_ATENDIMENTO"}
+
     async def adicionar_mensagem(self, claims, chamado_id, *, remetente_id, conteudo, anexos=None):
         self.mensagens_criadas.append(
             {"chamado_id": chamado_id, "conteudo": conteudo, "anexos": anexos or []}
@@ -183,7 +195,7 @@ def _chamado(status="RESOLVIDO", cliente_id=UID, **extra):
         "id": "aaa", "codigo": "BOND-2026-00001", "titulo": "Vazamento na linha 3",
         "descricao": "Detalhes...", "status": status, "prioridade": "ALTA",
         "cliente_id": cliente_id, "categoria": "Logística / Entrega",
-        "cliente_nome": "Cliente Teste",
+        "cliente_nome": "Cliente Teste", "telefone_contato": "11987654321",
         "created_at": datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
         "limite_resposta": None, "limite_resolucao": None, "resolvido_em": None,
         "avaliacao_nota": None, "avaliacao_comentario": None, "avaliacao_em": None,
@@ -226,6 +238,35 @@ def test_validar_nota_valida(ok):
 def test_validar_nota_invalida(ruim):
     with pytest.raises(ValueError):
         validar_nota(ruim)
+
+
+@pytest.mark.parametrize("nota", [1, 2, 3, 4])
+def test_validar_comentario_avaliacao_nota_baixa_exige_50_chars(nota):
+    with pytest.raises(ValueError):
+        validar_comentario_avaliacao(nota, "muito curto")
+
+
+@pytest.mark.parametrize("nota", [1, 2, 3, 4])
+def test_validar_comentario_avaliacao_nota_baixa_aceita_50_chars(nota):
+    comentario = "x" * 50
+    assert validar_comentario_avaliacao(nota, comentario) == comentario
+
+
+@pytest.mark.parametrize("nota", [5])
+def test_validar_comentario_avaliacao_nota_alta_aceita_vazio(nota):
+    assert validar_comentario_avaliacao(nota, "") is None
+    assert validar_comentario_avaliacao(nota, "   ") is None
+
+
+@pytest.mark.parametrize("valor", ["11987654321", "(11) 98765-4321", "51 3222-1122"])
+def test_validar_telefone_contato_valido(valor):
+    assert validar_telefone_contato(valor) == valor.strip()
+
+
+@pytest.mark.parametrize("ruim", ["", "   ", "123", "abc"])
+def test_validar_telefone_contato_invalido(ruim):
+    with pytest.raises(ValueError):
+        validar_telefone_contato(ruim)
 
 
 # --------------------------------------------------------------------------
@@ -279,6 +320,7 @@ def _abertura_valida(**over):
         "subcategoria_id": "s1",
         "prioridade": "MEDIA",
         "setor": "Financeiro",
+        "telefone_contato": "(11) 98765-4321",
     }
     base.update(over)
     return base
@@ -356,6 +398,48 @@ def test_criar_com_setor_invalido_retorna_400():
     assert resp.status_code == 400
     assert "setor selecionado inválido" in resp.text.lower() or "inválido" in resp.text.lower()
     assert repo.criados == []
+
+
+# --------------------------------------------------------------------------
+# Telefone de contato obrigatório na abertura (2026-07-24)
+# --------------------------------------------------------------------------
+def test_criar_sem_telefone_retorna_400():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(telefone_contato="")
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "contato" in resp.text.lower()
+    assert repo.criados == []
+
+
+def test_criar_com_telefone_sem_digitos_suficientes_retorna_400():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(telefone_contato="123")
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "contato" in resp.text.lower()
+    assert repo.criados == []
+
+
+def test_criar_com_telefone_valido_grava_no_chamado():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(telefone_contato="(11) 98765-4321")
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert repo.criados[0]["telefone_contato"] == "(11) 98765-4321"
 
 
 # --------------------------------------------------------------------------
@@ -674,6 +758,122 @@ def test_post_avaliacao_nao_autor_e_bloqueada():
 
 
 # --------------------------------------------------------------------------
+# 2026-07-24: nota <= 4 exige comentário de pelo menos 50 caracteres.
+# --------------------------------------------------------------------------
+def test_post_avaliacao_nota_baixa_sem_comentario_retorna_422():
+    repo = FakeRepo(chamado=_chamado(status="RESOLVIDO"))
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/avaliacao",
+            data={"nota": "3", "comentario": ""},
+            headers={"X-CSRF-Token": token, "HX-Request": "true"},
+        )
+    assert resp.status_code == 422
+    assert "50 caracteres" in resp.text
+    assert repo.avaliacoes == []
+
+
+def test_post_avaliacao_nota_baixa_comentario_curto_retorna_422():
+    repo = FakeRepo(chamado=_chamado(status="RESOLVIDO"))
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/avaliacao",
+            data={"nota": "4", "comentario": "Faltou atenção"},
+            headers={"X-CSRF-Token": token, "HX-Request": "true"},
+        )
+    assert resp.status_code == 422
+    assert "50 caracteres" in resp.text
+    assert repo.avaliacoes == []
+
+
+def test_post_avaliacao_nota_baixa_comentario_valido_persiste():
+    repo = FakeRepo(chamado=_chamado(status="RESOLVIDO"))
+    comentario = "O problema não foi resolvido de verdade e o retorno demorou muito mais do que o esperado."
+    assert len(comentario) >= 50
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/avaliacao",
+            data={"nota": "2", "comentario": comentario},
+            headers={"X-CSRF-Token": token, "HX-Request": "true"},
+        )
+    assert resp.status_code == 200
+    assert repo.avaliacoes == [{"nota": 2, "comentario": comentario}]
+
+
+def test_post_avaliacao_nota_alta_sem_comentario_continua_opcional():
+    repo = FakeRepo(chamado=_chamado(status="RESOLVIDO"))
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/avaliacao",
+            data={"nota": "5", "comentario": ""},
+            headers={"X-CSRF-Token": token, "HX-Request": "true"},
+        )
+    assert resp.status_code == 200
+    assert repo.avaliacoes == [{"nota": 5, "comentario": None}]
+
+
+# --------------------------------------------------------------------------
+# 2026-07-24: reabertura pelo autor (insatisfeito com a solução).
+# --------------------------------------------------------------------------
+def test_reabrir_mostrado_quando_resolvido():
+    repo = FakeRepo(chamado=_chamado(status="RESOLVIDO"))
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa")
+    assert resp.status_code == 200
+    assert "Reabrir chamado" in resp.text
+
+
+def test_reabrir_oculto_quando_nao_resolvido():
+    repo = FakeRepo(chamado=_chamado(status="EM_ATENDIMENTO"))
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa")
+    assert resp.status_code == 200
+    assert "Reabrir chamado" not in resp.text
+
+
+def test_post_reabrir_autor_chamado_resolvido_redireciona():
+    repo = FakeRepo(chamado=_chamado(status="RESOLVIDO"))
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/reabrir",
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/portal/chamados/aaa"
+    assert repo.reaberturas == ["aaa"]
+
+
+def test_post_reabrir_chamado_nao_resolvido_e_bloqueado():
+    repo = FakeRepo(chamado=_chamado(status="EM_ATENDIMENTO"))
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/reabrir",
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 403
+    assert repo.reaberturas == []
+
+
+def test_post_reabrir_nao_autor_e_bloqueado():
+    repo = FakeRepo(chamado=_chamado(status="RESOLVIDO", cliente_id="outro-uid"))
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/reabrir",
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 403
+    assert repo.reaberturas == []
+
+
+# --------------------------------------------------------------------------
 # Fase 8 (2026-07-09): "em cópia" (observadores multi-setoriais)
 # --------------------------------------------------------------------------
 def test_detalhe_mostra_observadores_e_seletor_para_adicionar():
@@ -776,6 +976,7 @@ def _abertura_ocorrencia(**over):
         "departamento_id": "dq",
         "categoria_id": "cq",
         "setor": "Financeiro",
+        "telefone_contato": "51999998888",
         # campos dinâmicos (namespace campo__) — schema real do FB033
         "campo__regiao": "001-COLOMBO",
         "campo__supervisor": "CHRISTIAN ALVES SEVERO",
@@ -882,6 +1083,7 @@ def test_criar_fora_do_quimico_nao_grava_dados_formulario():
             data={
                 "titulo": "Impressora", "descricao": "não liga", "departamento_id": "d1",
                 "categoria_id": "cq", "setor": "Financeiro", "campo__cidade": "x",
+                "telefone_contato": "51999998888",
             },
             headers={"X-CSRF-Token": token},
             follow_redirects=False,
@@ -901,6 +1103,7 @@ def test_criar_quimico_analise_laboratorial_com_checkbox_multiplo():
         "departamento_id": "dq",
         "categoria_id": "cq",
         "setor": "Financeiro",
+        "telefone_contato": "51999998888",
         "campo__unidade_entrega": "Matriz Canoas/RS",
         "campo__identificacao_cliente": "Cliente Z",
         "campo__descricao_amostra": "Óleo, lote 123, aspecto turvo",
@@ -934,6 +1137,7 @@ def test_criar_quimico_analise_laboratorial_sem_checkbox_retorna_erro():
         "departamento_id": "dq",
         "categoria_id": "cq",
         "setor": "Financeiro",
+        "telefone_contato": "51999998888",
         "campo__unidade_entrega": "Matriz Canoas/RS",
         "campo__identificacao_cliente": "Cliente Z",
         "campo__descricao_amostra": "Óleo, lote 123",

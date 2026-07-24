@@ -33,6 +33,9 @@
           {% endif %}
           <div class="text-right text-xs text-muted">
             <div>Autor: {{ chamado.cliente_nome or "—" }}</div>
+            {% if chamado.telefone_contato %}
+            <div>Contato: {{ chamado.telefone_contato }}</div>
+            {% endif %}
             <div>Aberto {{ fmt_dt(chamado.created_at) }}</div>
             {% if chamado.data_entrega %}
             <div class="text-amber-700 font-semibold">Entrega: {{ chamado.data_entrega.strftime('%d/%m/%Y') }}</div>

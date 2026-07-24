@@ -25,7 +25,7 @@ class AtendimentoRepo:
                 """
                 SELECT c.id, c.codigo, c.titulo, c.descricao, c.status, c.prioridade,
                        c.cliente_id, c.operador_id, c.departamento_id, c.data_entrega,
-                       c.sem_prazo, c.categoria_id, c.subcategoria_id,
+                       c.sem_prazo, c.categoria_id, c.subcategoria_id, c.telefone_contato,
                        c.created_at, c.limite_resposta, c.limite_resolucao,
                        c.respondido_em, c.resolvido_em,
                        c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
@@ -68,6 +68,7 @@ class AtendimentoRepo:
         descricao: str,
         prioridade: str,
         setor: str,
+        telefone_contato: str,
         data_entrega: date | None = None,
         volume: int = 1,
         origem_demanda: str = "Solicitação",
@@ -84,17 +85,19 @@ class AtendimentoRepo:
 
         ``dados_formulario`` (0049) guarda as respostas dos campos dinâmicos por
         categoria (ex.: Químico) como objeto ``{name: valor}``; ``{}`` para
-        chamados sem layout específico."""
+        chamados sem layout específico. ``telefone_contato`` (0058) é obrigatório
+        na abertura — já validado (``validar_telefone_contato``) antes de chegar
+        aqui."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO chamados
                     (empresa_id, cliente_id, categoria_id, subcategoria_id, departamento_id,
                      titulo, descricao, prioridade, data_entrega, setor, volume, origem_demanda,
-                     sem_prazo, dados_formulario)
+                     sem_prazo, dados_formulario, telefone_contato)
                 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, $7,
                         $8::prioridade_chamado, $9::date, $10, $11::integer, $12, $13::boolean,
-                        $14::jsonb)
+                        $14::jsonb, $15)
                 RETURNING id, codigo
                 """,
                 empresa_id,
@@ -111,6 +114,7 @@ class AtendimentoRepo:
                 origem_demanda,
                 sem_prazo,
                 json.dumps(dados_formulario or {}),
+                telefone_contato,
             )
             return dict(row)
 
@@ -144,6 +148,33 @@ class AtendimentoRepo:
                     nota,
                 )
             return dict(row) if row else None
+
+    async def reabrir(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
+        """Reabre um chamado RESOLVIDO por iniciativa do autor, insatisfeito com
+        a solução (0059): volta para EM_ATENDIMENTO com o mesmo operador (RLS +
+        trigger ``enforce_cliente_so_avaliacao`` só liberam essa transição
+        específica para o CLIENTE), limpa ``resolvido_em`` e zera uma eventual
+        avaliação anterior — a nota antiga não se aplica mais à nova rodada de
+        atendimento; reabre o chat (``chamado_detalhe.html`` esconde o composer
+        só quando ``status == 'RESOLVIDO'``)."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE chamados
+                   SET status = 'EM_ATENDIMENTO'::status_chamado,
+                       resolvido_em = NULL,
+                       avaliacao_nota = NULL,
+                       avaliacao_comentario = NULL,
+                       avaliacao_em = NULL
+                 WHERE id = $1::uuid AND status = 'RESOLVIDO'::status_chamado
+             RETURNING id, status
+                """,
+                chamado_id,
+            )
+            if row is None:
+                return None
+            await self._registrar(conn, chamado_id, claims["sub"], "REABERTO", {})
+            return dict(row)
 
     async def avaliacao_pendente(self, claims: dict) -> dict[str, Any] | None:
         """O chamado RESOLVIDO mais antigo do próprio autor ainda sem avaliação

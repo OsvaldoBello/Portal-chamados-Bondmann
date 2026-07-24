@@ -72,6 +72,33 @@ def test_pode_avaliar_verdadeiro_mesmo_se_atendido_por_colega_do_setor():
     )
 
 
+def test_pode_reabrir_autor_com_chamado_resolvido():
+    assert PortalService.pode_reabrir({"status": "RESOLVIDO", "cliente_id": "u1"}, "u1")
+
+
+def test_pode_reabrir_falso_se_nao_resolvido():
+    assert not PortalService.pode_reabrir({"status": "EM_ATENDIMENTO", "cliente_id": "u1"}, "u1")
+
+
+def test_pode_reabrir_falso_se_nao_autor():
+    assert not PortalService.pode_reabrir({"status": "RESOLVIDO", "cliente_id": "u1"}, "u2")
+
+
+def test_pode_reabrir_verdadeiro_mesmo_no_proprio_departamento():
+    """Ao contrário de `pode_avaliar`, a reabertura vale mesmo quando o chamado
+    foi endereçado ao PRÓPRIO departamento do autor (autoatendimento) — não é
+    uma nota de CSAT sobre quem prestou o serviço."""
+    assert PortalService.pode_reabrir(
+        {
+            "status": "RESOLVIDO",
+            "cliente_id": "u1",
+            "departamento_id": "marketing",
+            "cliente_departamento_id": "marketing",
+        },
+        "u1",
+    )
+
+
 def test_marketing_dep_id_encontra_por_nome_case_insensitive():
     deps = [{"id": "x1", "nome": "marketing"}]
     assert PortalService.marketing_dep_id(deps) == "x1"

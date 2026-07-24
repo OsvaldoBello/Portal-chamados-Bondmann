@@ -31,6 +31,9 @@
     <div class="text-right text-xs text-muted shrink-0">
       <div>Aberto em {{ fmt_dt(chamado.created_at) }}</div>
       <div>Prazo de resolução: {{ fmt_dt(chamado.limite_resolucao) }}</div>
+      {% if chamado.telefone_contato %}
+      <div>Contato: {{ chamado.telefone_contato }}</div>
+      {% endif %}
     </div>
   </div>
   <p class="mt-4 text-sm text-ink whitespace-pre-line">{{ chamado.descricao }}</p>
@@ -136,12 +139,34 @@
   {% endif %}
 </div>
 
+{# Reabertura — o autor pode devolver um chamado RESOLVIDO ao atendimento
+   quando não está satisfeito com a solução (independente de já ter avaliado
+   ou de o destino ser o próprio setor — ver PortalService.pode_reabrir). #}
+{% if pode_reabrir %}
+<div class="bg-white rounded-xl shadow-card border border-line/60 p-6 mb-5">
+  <div class="flex items-center justify-between gap-4 flex-wrap">
+    <div>
+      <h3 class="font-display font-bold text-navy">Não ficou satisfeito com a solução?</h3>
+      <p class="text-sm text-muted mt-1">Reabra o chamado para que o setor responsável continue o atendimento.</p>
+    </div>
+    <form method="post" action="/portal/chamados/{{ chamado.id }}/reabrir">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit"
+              class="px-4 py-2.5 rounded-lg ring-1 ring-pr_urgente text-pr_urgente text-sm font-semibold hover:bg-pr_urgente/10">
+        Reabrir chamado
+      </button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
 {# Avaliação (CSAT) — fragmento isolado para swap HTMX #}
 {% include "portal/_avaliacao.html" %}
 {% endblock %}
 
 {% block scripts %}
 <script src="{{ static_url('/static/js/pessoas_picker.js') }}"></script>
+<script src="{{ static_url('/static/js/avaliacao.js') }}"></script>
 {% if supabase_url and anon_key and access_token %}
 {# chat.js liga o Realtime da conversa; supabase-js já é carregado pelo app_base. #}
 <script src="{{ static_url('/static/js/chat.js') }}"></script>

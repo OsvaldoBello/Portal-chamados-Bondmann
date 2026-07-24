@@ -22,6 +22,7 @@ nenhum caller precisa mudar.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Any
 
@@ -41,6 +42,8 @@ __all__ = [
     "ChamadosRepo",
     "get_chamados_repo",
     "validar_nota",
+    "validar_comentario_avaliacao",
+    "validar_telefone_contato",
     "PRIORIDADES",
     "CACHE_CATEGORIAS",
     "CACHE_DEPARTAMENTOS",
@@ -50,6 +53,12 @@ __all__ = [
 
 PRIORIDADES = ("BAIXA", "MEDIA", "ALTA", "URGENTE")
 NOTA_MIN, NOTA_MAX = 1, 5
+# Nota a partir da qual o comentário deixa de ser opcional (Seção 5.1 —
+# pedido do usuário 2026-07-24): 4 estrelas ou menos exige que o autor
+# descreva o motivo e o que pode melhorar, com um mínimo de substância.
+NOTA_COMENTARIO_OBRIGATORIO = 4
+COMENTARIO_MIN_CHARS = 50
+TELEFONE_MIN_DIGITOS = 8
 
 
 class ChamadosRepo:
@@ -310,6 +319,7 @@ class ChamadosRepo:
         descricao: str,
         prioridade: str,
         setor: str,
+        telefone_contato: str,
         data_entrega: date | None = None,
         volume: int = 1,
         origem_demanda: str = "Solicitação",
@@ -327,6 +337,7 @@ class ChamadosRepo:
             descricao=descricao,
             prioridade=prioridade,
             setor=setor,
+            telefone_contato=telefone_contato,
             data_entrega=data_entrega,
             volume=volume,
             origem_demanda=origem_demanda,
@@ -338,6 +349,9 @@ class ChamadosRepo:
         self, claims: dict, chamado_id: str, *, nota: int, comentario: str | None
     ) -> dict[str, Any] | None:
         return await self._atendimento.avaliar(claims, chamado_id, nota=nota, comentario=comentario)
+
+    async def reabrir(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
+        return await self._atendimento.reabrir(claims, chamado_id)
 
     async def ia_triagem_nota(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
         return await self._atendimento.ia_triagem_nota(claims, chamado_id)
@@ -415,3 +429,30 @@ def validar_nota(raw: str | int | None) -> int:
     if not (NOTA_MIN <= nota <= NOTA_MAX):
         raise ValueError("Nota fora do intervalo: use de 1 a 5 estrelas.")
     return nota
+
+
+def validar_comentario_avaliacao(nota: int, comentario: str) -> str | None:
+    """Exige comentário com pelo menos ``COMENTARIO_MIN_CHARS`` caracteres para
+    notas de ``NOTA_COMENTARIO_OBRIGATORIO`` estrelas ou menos — o autor deve
+    dizer por que essa nota e o que pode melhorar. Acima disso, o comentário
+    continua opcional. Levanta ``ValueError``; devolve o comentário limpo (ou
+    ``None`` se vazio e a nota não exige)."""
+    comentario_limpo = comentario.strip()
+    if nota <= NOTA_COMENTARIO_OBRIGATORIO and len(comentario_limpo) < COMENTARIO_MIN_CHARS:
+        raise ValueError(
+            "Para notas de 4 estrelas ou menos, descreva em pelo menos "
+            f"{COMENTARIO_MIN_CHARS} caracteres o motivo da nota e o que pode melhorar."
+        )
+    return comentario_limpo or None
+
+
+def validar_telefone_contato(raw: str) -> str:
+    """Valida o telefone de contato exigido na abertura do chamado (mínimo de
+    ``TELEFONE_MIN_DIGITOS`` dígitos, ignorando formatação — DDD/traço/parênteses
+    ficam livres). Levanta ``ValueError``; devolve o texto já sem espaços nas
+    pontas."""
+    valor = raw.strip()
+    digitos = re.sub(r"\D", "", valor)
+    if len(digitos) < TELEFONE_MIN_DIGITOS:
+        raise ValueError("Informe um número de contato válido (telefone ou celular).")
+    return valor

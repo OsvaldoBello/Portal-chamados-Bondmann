@@ -48,7 +48,9 @@ from app.repositories.chamados import (
     PRIORIDADES,
     ChamadosRepo,
     get_chamados_repo,
+    validar_comentario_avaliacao,
     validar_nota,
+    validar_telefone_contato,
 )
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
@@ -297,6 +299,7 @@ async def criar_chamado(
     subcategoria_id: str = Form(""),
     prioridade: str = Form("MEDIA"),
     setor: str = Form(""),             # setor demandante
+    telefone_contato: str = Form(""),  # contato direto (0058)
     data_entrega: str = Form(""),      # fluxo por demanda (Marketing)
     sem_prazo: str = Form(""),         # Marketing: demanda sem urgência/prazo (0040)
     ctx: PortalCtx = Depends(portal_context),
@@ -309,6 +312,7 @@ async def criar_chamado(
     categoria_id = categoria_id.strip()
     subcategoria_id = subcategoria_id.strip()
     setor = setor.strip()
+    telefone_contato = telefone_contato.strip()
     data_entrega = data_entrega.strip()
     sem_prazo_marcado = sem_prazo.strip().lower() in {"on", "1", "true"}
     prioridade = prioridade.upper()
@@ -323,6 +327,7 @@ async def criar_chamado(
         "descricao": descricao,
         "prioridade": prioridade,
         "setor": setor,
+        "telefone_contato": telefone_contato,
         "data_entrega": data_entrega,
         "sem_prazo": sem_prazo_marcado,
     }
@@ -344,9 +349,13 @@ async def criar_chamado(
     async def _erro(msg: str, code: int = status.HTTP_400_BAD_REQUEST):
         return await _render_form(request, ctx, repo, erro=msg, form=form, status_code=code)
 
-    # Departamento, categoria e assunto/descrição são obrigatórios.
+    # Departamento, categoria, assunto/descrição e telefone de contato são obrigatórios.
     if not departamento_id:
         return await _erro("Selecione o departamento de destino do chamado.")
+    try:
+        telefone_contato = validar_telefone_contato(telefone_contato)
+    except ValueError as exc:
+        return await _erro(str(exc))
     if not setor:
         return await _erro("Informe o setor para o qual a demanda está sendo pedida.")
     setores_ativos = await repo.departamentos_ativos(ctx.user.claims)
@@ -446,6 +455,7 @@ async def criar_chamado(
         descricao=descricao,
         prioridade=prioridade,
         setor=setor,
+        telefone_contato=telefone_contato,
         data_entrega=data_entrega_val,
         volume=volume_val,
         origem_demanda=origem_demanda_val,
@@ -547,6 +557,7 @@ async def detalhe_chamado(
             "mensagens": mensagens,
             "dados_formulario": rotular(chamado.get("categoria"), chamado.get("dados_formulario") or {}),
             "pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id),
+            "pode_reabrir": PortalService.pode_reabrir(chamado, ctx.user.id),
             "avaliar_pendente": bool(avaliar_pendente),
             "observadores": observadores,
             "usuarios_copia": usuarios_copia,
@@ -717,6 +728,7 @@ async def avaliar_chamado(
 
     try:
         nota_int = validar_nota(nota)
+        comentario_val = validar_comentario_avaliacao(nota_int, comentario)
     except ValueError as exc:
         if is_htmx:
             return fragmento(
@@ -735,12 +747,37 @@ async def avaliar_chamado(
         return redir
 
     atualizado = await repo.avaliar(
-        ctx.user.claims, chamado_id, nota=nota_int, comentario=(comentario.strip() or None)
+        ctx.user.claims, chamado_id, nota=nota_int, comentario=comentario_val
     )
     chamado = {**chamado, **(atualizado or {})}
     if is_htmx:
         return fragmento({"pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id)})
     return redir
+
+
+@router.post("/chamados/{chamado_id}/reabrir")
+async def reabrir_chamado(
+    request: Request,
+    chamado_id: str,
+    ctx: PortalCtx = Depends(portal_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """O autor reabre um chamado RESOLVIDO quando não está satisfeito com a
+    solução (0059) — volta para EM_ATENDIMENTO, libera o chat de novo e zera
+    uma eventual avaliação anterior."""
+    chamado = await repo.obter(ctx.user.claims, chamado_id)
+    if chamado is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+    if not PortalService.pode_reabrir(chamado, ctx.user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Só o autor pode reabrir, e apenas quando o chamado está resolvido.",
+        )
+    await repo.reabrir(ctx.user.claims, chamado_id)
+    return RedirectResponse(
+        f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 def register_portal_routes(app) -> None:

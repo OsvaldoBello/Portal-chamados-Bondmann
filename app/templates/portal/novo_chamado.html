@@ -56,6 +56,16 @@
         <span class="block text-xs text-muted mt-1">Informe seu setor.</span>
       </label>
 
+      {# Telefone de contato — obrigatório, para o setor conseguir falar direto
+      quando o chat não é ágil o bastante. #}
+      <label class="block">
+        <span class="block text-[13px] font-semibold text-navy mb-1.5">Telefone de contato</span>
+        <input type="tel" name="telefone_contato" required value="{{ f.get('telefone_contato', '') }}"
+          placeholder="(00) 00000-0000"
+          class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
+        <span class="block text-xs text-muted mt-1">Celular ou ramal para o setor responsável falar com você.</span>
+      </label>
+
       {# Aviso de prazo — exibido pelo novo_chamado.js quando o setor é o Marketing. #}
       <div id="marketing-aviso" hidden
         class="rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-sm text-amber-800">

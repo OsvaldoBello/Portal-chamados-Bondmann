@@ -54,6 +54,20 @@ class PortalService:
         )
 
     @staticmethod
+    def pode_reabrir(chamado: dict, user_id: str) -> bool:
+        """Regra de UI: o autor de um chamado RESOLVIDO pode reabri-lo quando
+        não está satisfeito com a solução (RLS + trigger reforçam no banco,
+        migration 0059). Ao contrário de `pode_avaliar`, vale também para
+        chamados endereçados ao PRÓPRIO departamento do autor (autoatendimento):
+        reabrir não é uma nota de CSAT sobre "quem prestou o serviço", é dizer
+        "isso não foi resolvido de verdade" — faz sentido mesmo quando quem
+        resolveu foi o próprio setor."""
+        return (
+            chamado.get("status") == "RESOLVIDO"
+            and str(chamado.get("cliente_id")) == str(user_id)
+        )
+
+    @staticmethod
     def data_entrega_min() -> date:
         """Menor data de entrega permitida (hoje + 48h, no fuso de Brasília)."""
         return datetime.now(_TZ_BR).date() + timedelta(days=_ENTREGA_MIN_DIAS)

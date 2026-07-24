@@ -42,10 +42,15 @@
         {% endfor %}
       </fieldset>
       <label class="block">
-        <span class="block text-[13px] font-semibold text-navy mb-1.5">Comentário (opcional)</span>
-        <textarea name="comentario" rows="3" maxlength="500"
+        <span class="block text-[13px] font-semibold text-navy mb-1.5">
+          Comentário <span id="comentario-opcional-tag" class="text-faint font-normal">(opcional)</span>
+        </span>
+        <textarea name="comentario" id="avaliacao-comentario" rows="3" maxlength="500"
                   placeholder="Conte como foi o atendimento"
                   class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint resize-none"></textarea>
+        <span id="comentario-aviso-obrigatorio" hidden class="block text-xs text-pr_urgente mt-1">
+          Para notas de 4 estrelas ou menos, descreva em pelo menos 50 caracteres o motivo da nota e o que pode melhorar.
+        </span>
       </label>
       <button type="submit"
               class="px-5 py-2.5 rounded-lg bg-brandgreen-600 text-white text-sm font-semibold hover:bg-brandgreen-700">
