@@ -39,21 +39,29 @@ from app.templating import render
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
-STATUS_VALIDOS = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO")
+STATUS_VALIDOS = (
+    "NOVO", "A_FAZER", "PROJETOS", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO",
+)
 
 # Status oferecidos na UI (dropdown de atendimento e colunas do Kanban) variam por
 # setor: "A fazer" (A_FAZER) e "Aguardando terceiros" (AGUARDANDO_TERCEIROS) são
-# exclusivos do Marketing (quadro Trello com autoatendimento/validação); os demais
-# setores (TI, RH, etc.) usam o fluxo clássico. STATUS_VALIDOS continua sendo a
-# whitelist completa da validação server-side (o enum do banco), já que o Marketing
-# precisa dos dois status extras.
+# exclusivos do Marketing (quadro Trello com autoatendimento/validação); "Projetos"
+# (PROJETOS, migration 0057) é exclusivo do TI — demanda de projeto, sem vínculo de
+# atendimento reativo a um solicitante. Os demais setores (RH etc.) usam o fluxo
+# clássico. STATUS_VALIDOS continua sendo a whitelist completa da validação
+# server-side (o enum do banco), já que Marketing e TI têm status extras próprios.
 _STATUS_UI_MARKETING = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO")
+_STATUS_UI_TI = ("NOVO", "PROJETOS", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
 _STATUS_UI_PADRAO = ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
 
 
 def _status_ui(departamento: str | None) -> tuple[str, ...]:
-    """Status oferecidos na UI para o setor do chamado/staff (Marketing vs. clássico)."""
-    return _STATUS_UI_MARKETING if departamento == "Marketing" else _STATUS_UI_PADRAO
+    """Status oferecidos na UI para o setor do chamado/staff (Marketing/TI vs. clássico)."""
+    if departamento == "Marketing":
+        return _STATUS_UI_MARKETING
+    if departamento == "TI":
+        return _STATUS_UI_TI
+    return _STATUS_UI_PADRAO
 
 
 @dataclass(frozen=True)

@@ -54,6 +54,8 @@ STATUS_META = {
                        "bg": "bg-st_aguard/10", "icon": "M15.75 5.25v13.5m-7.5-13.5v13.5"},
     "AGUARDANDO_TERCEIROS": {"label": "Aguardando terceiros", "dot": "bg-st_terceiros", "text": "text-st_terceiros",
                        "bg": "bg-st_terceiros/10", "icon": "M15.75 5.25v13.5m-7.5-13.5v13.5"},
+    "PROJETOS":       {"label": "Projetos",        "dot": "bg-st_projetos", "text": "text-st_projetos",
+                       "bg": "bg-st_projetos/10", "icon": "M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-19.5 0v6a2.25 2.25 0 002.25 2.25h15a2.25 2.25 0 002.25-2.25v-6m-19.5 0h19.5M6 6.75V4.5a2.25 2.25 0 012.25-2.25h7.5A2.25 2.25 0 0118 4.5v2.25"},
     "RESOLVIDO":      {"label": "Resolvido",      "dot": "bg-st_resolv", "text": "text-st_resolv",
                        "bg": "bg-st_resolv/10", "icon": "M4.5 12.75l6 6 9-13.5"},
 }

@@ -78,8 +78,8 @@ class FakeRepo:
         return [c for c in cs if status is None or c["status"] == status]
 
     async def fila_stats(self, claims, *, departamento_id=None):
-        return {"total": 3, "NOVO": 1, "EM_ATENDIMENTO": 1, "AGUARDANDO_TERCEIROS": 1,
-                "AGUARDANDO": 0, "RESOLVIDO": 0}
+        return {"total": 3, "NOVO": 1, "A_FAZER": 0, "PROJETOS": 0, "EM_ATENDIMENTO": 1,
+                "AGUARDANDO_TERCEIROS": 1, "AGUARDANDO": 0, "RESOLVIDO": 0}
 
     async def fila_assinatura(self, claims, *, departamento_id=None, status=None):
         return (2, NOW)
@@ -214,12 +214,25 @@ def test_kanban_fora_do_marketing_nao_tem_coluna_a_fazer():
     (decisão de produto 2026-07-21): fora do Marketing o Kanban usa o fluxo
     clássico (NOVO/EM_ATENDIMENTO/AGUARDANDO/RESOLVIDO), sem essas colunas. Os
     chamados legados que estavam em A_FAZER foram migrados para NOVO
-    (migration 0048)."""
+    (migration 0048). O TI (FakeRepo padrão) ganha a coluna extra "Projetos"
+    (PROJETOS, migration 0057), exclusiva do setor."""
     with ws_client(FakeRepo()) as c:  # FakeRepo padrão = TI
         r = c.get("/workspace/kanban")
     assert r.status_code == 200
     assert 'data-status="A_FAZER"' not in r.text
     assert 'data-status="AGUARDANDO_TERCEIROS"' not in r.text
+    for s in ("NOVO", "PROJETOS", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO"):
+        assert f'data-status="{s}"' in r.text
+    assert "Projetos" in r.text
+
+
+def test_kanban_projetos_e_exclusivo_do_ti():
+    """A coluna "Projetos" (PROJETOS) não aparece fora do TI — RH usa o fluxo
+    clássico, igual aos demais setores sem coluna extra própria."""
+    with ws_client(FakeRepo(departamento="RH", is_ti=False)) as c:
+        r = c.get("/workspace/kanban")
+    assert r.status_code == 200
+    assert 'data-status="PROJETOS"' not in r.text
     for s in ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO"):
         assert f'data-status="{s}"' in r.text
 
