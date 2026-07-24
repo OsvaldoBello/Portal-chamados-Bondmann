@@ -126,8 +126,15 @@ class Settings(BaseSettings):
     # Vazio = nenhum.
     ia_triagem_departamentos: str = Field(default="")
     # Modo sombra: o motor roda tudo, mas SÓ grava notas internas — nunca
-    # mensagens públicas nem e-mail. É o modo da F1.
+    # mensagens públicas nem e-mail. É o modo da F1. `false` = ninguém em
+    # sombra (estado final F6).
     ia_triagem_modo_sombra: bool = Field(default=True)
+    # Saída da sombra POR DEPARTAMENTO (F2, 2026-07-24): CSV de departamentos
+    # liberados para perguntas públicas MESMO com a sombra global ligada
+    # (ex.: "TI") — permite o TI perguntar ao autor mantendo o Químico em
+    # sombra até o red team (F5/F6, gate de zero vazamentos). Vazio = ninguém
+    # sai; irrelevante quando `ia_triagem_modo_sombra=false`.
+    ia_triagem_perguntas_departamentos: str = Field(default="")
     ia_triagem_model: str = Field(
         default="gpt-5.4-mini",
         validation_alias=AliasChoices("ia_triagem_model", "groq_model"),
@@ -168,6 +175,23 @@ class Settings(BaseSettings):
     def ia_triagem_departamentos_lista(self) -> list[str]:
         """Nomes de departamentos com triagem ativa (CSV → lista, sem vazios)."""
         return [d.strip() for d in self.ia_triagem_departamentos.split(",") if d.strip()]
+
+    @property
+    def ia_triagem_perguntas_departamentos_lista(self) -> list[str]:
+        """Departamentos liberados para perguntas públicas (CSV → lista)."""
+        return [
+            d.strip() for d in self.ia_triagem_perguntas_departamentos.split(",") if d.strip()
+        ]
+
+    def ia_triagem_em_sombra(self, departamento_nome: str | None) -> bool:
+        """O departamento está em modo sombra? (Seção 2.3 do plano IA.)
+
+        Sombra global desligada ⇒ ninguém em sombra (F6). Ligada ⇒ só sai da
+        sombra quem está em `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS` (saída por
+        departamento, F2 — o Químico fica em sombra até o red team, F5)."""
+        if not self.ia_triagem_modo_sombra:
+            return False
+        return (departamento_nome or "") not in self.ia_triagem_perguntas_departamentos_lista
 
     @property
     def email_from(self) -> str:

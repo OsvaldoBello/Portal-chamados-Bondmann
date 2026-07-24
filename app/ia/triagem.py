@@ -193,6 +193,7 @@ def decidir_acao(
     rodada: int,
     settings: Settings,
     atendimento_iniciado: bool = False,
+    departamento: str | None = None,
 ) -> str:
     """Decide entre nota interna e perguntas públicas (Seção 2.3, função pura).
 
@@ -200,12 +201,15 @@ def decidir_acao(
     vem primeiro e a nota fica para o fim do ciclo (decisão do usuário
     2026-07-23). ``PERGUNTAS`` exige TODAS: ninguém atendendo ainda (com
     atendimento humano em curso, interpelar o autor seria ruído); fora do modo
-    sombra; informação insuficiente; há perguntas; confiança ALTA (mitigação
-    10.1 — não irritar usuário com pergunta especulativa); e ainda há rodada
-    disponível (na última, a nota interna sai com as lacunas sinalizadas)."""
+    sombra — avaliado POR DEPARTAMENTO (F2, 2026-07-24:
+    ``Settings.ia_triagem_em_sombra`` — o TI liberado pergunta enquanto o
+    Químico segue em sombra até o red team); informação insuficiente; há
+    perguntas; confiança ALTA (mitigação 10.1 — não irritar usuário com
+    pergunta especulativa); e ainda há rodada disponível (na última, a nota
+    interna sai com as lacunas sinalizadas)."""
     if atendimento_iniciado:
         return "NOTA_INTERNA"
-    if settings.ia_triagem_modo_sombra:
+    if settings.ia_triagem_em_sombra(departamento):
         return "NOTA_INTERNA"
     if saida.informacoes_suficientes or not saida.perguntas:
         return "NOTA_INTERNA"
@@ -360,6 +364,7 @@ async def _registrar_historico(
     acao: str,
     settings: Settings,
     modelo: str | None = None,
+    em_sombra: bool | None = None,
 ) -> None:
     await conn.execute(
         """
@@ -374,7 +379,11 @@ async def _registrar_historico(
                 "passe": passe,
                 "acao": acao,
                 "modelo": modelo or settings.ia_triagem_model,
-                "modo_sombra": settings.ia_triagem_modo_sombra,
+                # Sombra EFETIVA do departamento (F2 por departamento) — cai
+                # para a global quando o chamador não informa.
+                "modo_sombra": (
+                    settings.ia_triagem_modo_sombra if em_sombra is None else em_sombra
+                ),
             }
         ),
     )
@@ -632,8 +641,9 @@ async def _executar(chamado_id: str) -> None:
             atendimento_iniciado = (
                 estado["status"] != "NOVO" or estado["operador_id"] is not None
             )
+        em_sombra = settings.ia_triagem_em_sombra(chamado["departamento"])
         acao = (
-            decidir_acao(saida, rodada, settings, atendimento_iniciado)
+            decidir_acao(saida, rodada, settings, atendimento_iniciado, chamado["departamento"])
             if saida is not None
             else "ERRO"
         )
@@ -695,14 +705,16 @@ async def _executar(chamado_id: str) -> None:
             email_pergunta = montar_pergunta_publica(saida, chamado)
             await _enviar_pergunta_publica(conn, chamado_id, perfil_id, email_pergunta)
             await _registrar_historico(
-                conn, chamado_id, perfil_id, rodada, passe_a_nome, acao, settings
+                conn, chamado_id, perfil_id, rodada, passe_a_nome, acao, settings,
+                em_sombra=em_sombra,
             )
         elif not eh_quimico:
             await _salvar_nota_interna(
                 conn, chamado_id, perfil_id, montar_nota(saida, chamado, semelhantes)
             )
             await _registrar_historico(
-                conn, chamado_id, perfil_id, rodada, passe_a_nome, acao, settings
+                conn, chamado_id, perfil_id, rodada, passe_a_nome, acao, settings,
+                em_sombra=em_sombra,
             )
         # eh_quimico e acao == NOTA_INTERNA: nota/histórico ficam para depois
         # do Passe B (item 5) — a pré-análise técnica SUBSTITUI a do Passe A
@@ -774,7 +786,8 @@ async def _executar(chamado_id: str) -> None:
             # is_interna=true fixado em código — Seção 8.2) e o histórico.
             await _salvar_nota_interna(conn, chamado_id, perfil_id, nota)
             await _registrar_historico(
-                conn, chamado_id, perfil_id, rodada, _PASSE_B, acao_b, settings, modelo=modelo_passe_b
+                conn, chamado_id, perfil_id, rodada, _PASSE_B, acao_b, settings,
+                modelo=modelo_passe_b, em_sombra=em_sombra,
             )
 
     log.info(

@@ -269,7 +269,13 @@ Regras duras do fluxo:
   na rodada 2. `[DECISÃO DE ENGENHARIA]` evita criar scheduler novo; reavaliar na F6 se os
   atendentes sentirem falta.
 - **Modo sombra** (`IA_TRIAGEM_MODO_SOMBRA=true`): o motor roda tudo, mas **só grava notas
-  internas** — nunca mensagens públicas nem e-mail. É o modo de F1.
+  internas** — nunca mensagens públicas nem e-mail. É o modo de F1. **A saída da sombra é POR
+  DEPARTAMENTO** (F2, decisão do usuário 2026-07-24 — sombra validada: notas úteis e perguntas
+  pertinentes): `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS` (CSV) lista os departamentos liberados
+  para perguntas públicas **mesmo com a sombra global ligada** — permite o TI sair da sombra
+  (F2) mantendo o Químico em sombra até o red team (F5/F6, gate de zero vazamentos).
+  `IA_TRIAGEM_MODO_SOMBRA=false` continua significando "ninguém em sombra" (estado final F6);
+  a lista é irrelevante nesse caso.
 
 ### 2.4 Configuração (env vars — nomes canônicos)
 
@@ -279,7 +285,8 @@ Seguem o padrão do `app/config.py` (Pydantic Settings, defaults seguros = desli
 |---|---|---|
 | `IA_TRIAGEM_ATIVA` | `false` | **Kill switch geral.** `false` = nenhum agente roda (nem sombra). |
 | `IA_TRIAGEM_DEPARTAMENTOS` | `""` | CSV de nomes de departamentos com triagem (ex.: `TI` ou `TI,Dpto Químico`). Vazio = nenhum. |
-| `IA_TRIAGEM_MODO_SOMBRA` | `true` | Só notas internas; sem perguntas públicas/e-mail. |
+| `IA_TRIAGEM_MODO_SOMBRA` | `true` | Só notas internas; sem perguntas públicas/e-mail. `false` = ninguém em sombra (F6). |
+| `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS` | `""` | CSV de departamentos liberados para perguntas públicas **com a sombra global ligada** (ex.: `TI`) — saída da sombra por departamento (F2). Vazio = ninguém sai; irrelevante com `IA_TRIAGEM_MODO_SOMBRA=false`. |
 | `IA_TRIAGEM_MODEL` | `gpt-5.4-mini` | Modelo do Passe A / agente TI (C5). |
 | `IA_TRIAGEM_MODEL_PASSE_B` | `""` | Opcional; vazio = usa `IA_TRIAGEM_MODEL`. |
 | `IA_TRIAGEM_BASE_URL` | `https://api.openai.com/v1` | Endpoint compatível-OpenAI (`/chat/completions`). Trocar de provedor = trocar esta URL + modelo. |
@@ -571,12 +578,17 @@ e-mail); teto de 2 rodadas; nota final com lacunas sinalizadas.
 **DoD:**
 - [x] Re-triagem só com `status='NOVO'` e `operador_id IS NULL` (teste — `test_re_triagem_respeita_guarda_de_atendimento`).
 - [x] Teto de rodadas provado por teste (3ª rodada não acontece — `test_teto_de_rodadas_terceira_rodada_impossivel`).
-- [ ] Perguntas com tom/formato revisados pelo gestor de TI (amostra real) — **pendente: exige sombra validada + `IA_TRIAGEM_MODO_SOMBRA=false`**.
-- [ ] Realtime entrega a pergunta no chat do autor (fluxo manual verificado) — **pendente: mesmo gate acima**.
+- [x] Perguntas com tom/formato validados na sombra (decisão do usuário 2026-07-24: notas
+  úteis e perguntas pertinentes ⇒ liberar perguntas ao autor no TI).
+- [ ] Realtime entrega a pergunta no chat do autor (fluxo manual verificado) — **pendente:
+  observar o primeiro ciclo real fora da sombra**.
 
-**Estado F2:** código completo e testado (motor + 3 ganchos: abertura, resposta do autor no
-portal, inbound e-mail); os 2 itens restantes são validação em produção fora da sombra, que só
-ocorre após o critério de saída da F1.
+**Estado F2 (2026-07-24):** código completo e testado (motor + 3 ganchos: abertura, resposta
+do autor no portal, inbound e-mail). **Saída da sombra POR DEPARTAMENTO implementada**
+(`IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS`, Seção 2.4): liga-se o TI com
+`IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS=TI` no Railway (sem deploy adicional), mantendo
+`IA_TRIAGEM_MODO_SOMBRA=true` — o Dpto Químico segue em sombra até F5/F6. Falta observar o
+primeiro ciclo real pergunta → resposta → nota em produção.
 
 ### F3 — Chamados semelhantes (S5–S6)
 **Entregas:** migration FTS (4.4), `app/repositories/ia_busca.py`, semelhantes citados na nota
@@ -749,6 +761,17 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 > prefixando `doc IA`. Linha mais nova no topo. Decisões arquiteturais grandes viram ADR em
 > `docs/adr/`.
 
+- 2026-07-24 · doc IA · F2 executada (Seções 2.3, 2.4, 7) · **Saída do modo sombra POR
+  DEPARTAMENTO** — decisão do usuário (sombra validada: notas úteis, perguntas pertinentes ⇒
+  habilitar perguntas ao autor). A flag global `IA_TRIAGEM_MODO_SOMBRA` era tudo-ou-nada:
+  desligá-la tiraria TAMBÉM o Químico da sombra antes do red team (F5, gate de zero
+  vazamentos). Nova env `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS` (CSV, default vazio =
+  comportamento atual): departamento listado sai da sombra mesmo com a global ligada;
+  `MODO_SOMBRA=false` segue significando "ninguém em sombra" (F6). `Settings.ia_triagem_em_sombra
+  (departamento)` decide; `decidir_acao` ganha o departamento; `historico_chamados` registra o
+  `modo_sombra` EFETIVO do departamento. Operação: `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS=TI` no
+  Railway (sombra global intacta). Testes novos (matriz por departamento + fluxo integrado TI
+  liberado / Químico em sombra) + suíte completa verde.
 - 2026-07-24 · doc IA · F4 (Seção 2.2/7) · **Correção: o motor de dois passes do Químico nunca
   tinha sido ligado em `app/ia/triagem.py`** — a entrada de 2026-07-23 abaixo registrava a F4
   como "código completo e testado", mas só `contexto_quimico.py`, os prompts e
@@ -855,7 +878,7 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 | Flags/env de triagem (`app/config.py`) | ✅ Implementado (2026-07-22) | F0 | Seção 2.4 — todas de uma vez, defaults desligados (`IA_TRIAGEM_ATIVA=false`, sombra `true`). Rename `groq_*`→`ia_triagem_*` com fallback de alias `GROQ_*`. Coberto em `tests/test_config.py`. |
 | `app/ia/cliente.py` (extração de `ia_resumo.py`) | ✅ Implementado (2026-07-22) | F0 | Refactor sem mudança de comportamento (`test_ia_resumo` verde); timeout herdado 30 s (C6). Cliente devolve tokens do `usage` (insumo do custo auditável da F1). `tests/test_ia_cliente.py` novo. |
 | Motor de triagem + prompt TI (modo sombra) | ✅ Código implementado (2026-07-22) — **validação em sombra pendente** | F1 | `app/ia/triagem.py` + `schemas.py` + `prompts/ti.md`; hook em `criar_chamado` (`BackgroundTasks`; resumo Químico intocado — C2). Nota interna assinada ("Assistente IA", lookup por nome com cache; `is_interna=true` fixado em código); `historico_chamados` evento `IA_TRIAGEM`; custo/tokens/duração em `ia_triagens`. 15 testes em `tests/test_ia_triagem.py`. **Sombra LIGADA em produção (2026-07-23):** envs configuradas no Railway pelo gestor; triagens reais confirmadas em `ia_triagens` (~4 s, ~US$ 0,002). **Falta para fechar a F1:** 20 chamados triados e avaliados pelos atendentes (1–5 ★ na tela de atendimento); p95 < 2 min conferido em `ia_triagens`. |
-| Perguntas ao usuário + re-triagem (TI) | ✅ Código implementado (2026-07-22; guarda ajustada 2026-07-23) — **atrás de env** | F2 | Motor com máquina de rodadas derivada do banco; `decidir_acao` (PERGUNTAS só sem atendente atuando + fora da sombra + insuficiente + confiança ALTA + rodada < teto); mensagem pública + e-mail (`notificar_nova_mensagem_email`, Reply-To inbound); re-triagem nos hooks do portal (`responder_chamado`, só autor) e inbound (`common.py`, só `is_client`); conversa completa no contexto da rodada 2; teto provado por teste (3ª rodada impossível). **Ajuste 2026-07-23 (Seção 2.3):** atendimento iniciado não suprime a nota da rodada 1 (força NOTA_INTERNA; guarda reavaliada pós-modelo com estado fresco); só RESOLVIDO fica fora. Liga-se com `IA_TRIAGEM_MODO_SOMBRA=false` **após** validar a sombra (critério de saída da F1). |
+| Perguntas ao usuário + re-triagem (TI) | ✅ Código implementado (2026-07-22; guarda ajustada 2026-07-23) — **atrás de env** | F2 | Motor com máquina de rodadas derivada do banco; `decidir_acao` (PERGUNTAS só sem atendente atuando + fora da sombra + insuficiente + confiança ALTA + rodada < teto); mensagem pública + e-mail (`notificar_nova_mensagem_email`, Reply-To inbound); re-triagem nos hooks do portal (`responder_chamado`, só autor) e inbound (`common.py`, só `is_client`); conversa completa no contexto da rodada 2; teto provado por teste (3ª rodada impossível). **Ajuste 2026-07-23 (Seção 2.3):** atendimento iniciado não suprime a nota da rodada 1 (força NOTA_INTERNA; guarda reavaliada pós-modelo com estado fresco); só RESOLVIDO fica fora. **Saída da sombra POR DEPARTAMENTO (2026-07-24):** sombra validada pelo usuário (notas úteis + perguntas pertinentes) ⇒ nova env `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS` (CSV) libera perguntas públicas por departamento com a sombra global ligada. Ligar TI = `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS=TI` no Railway; Químico segue em sombra até F5/F6. |
 | Avaliação da nota interna pelo staff (1–5 ★) | ✅ Implementado + **migration `0051` aplicada em produção** (2026-07-23) | F1/F6 (KPI 10.2) | Colunas `avaliacao`/`avaliado_por`/`avaliado_em` em `ia_triagens`; bloco de estrelas em `workspace/atendimento.html`; `POST /workspace/chamados/{id}/ia/avaliacao` (escopo provado sob RLS antes da escrita admin; reavaliar sobrescreve). Fonte do KPI "notas úteis ≥ 70%" (nota ≥ 4 = útil). 6 testes em `test_workspace.py`. |
 | Busca de semelhantes (FTS português) | ✅ Implementado + **migration `0053` aplicada em produção** (2026-07-23) | F3 | Migration `0053_chamados_fts` (coluna GENERATED + índice GIN; 0052 era de outra frente — C1). `app/repositories/ia_busca.py` (`websearch_to_tsquery` com termos do modelo unidos por OR; filtro por departamento obrigatório no SQL; resolução = última mensagem pública de staff via LATERAL). Semelhantes citados na nota interna (código + título + resolução truncada); códigos auditados em `ia_triagens.resultado`. Falha/sem-resultado degrada graciosamente. 8 testes unit + 4 e2e (`test_ia_busca_fts.py`); query validada contra o corpus real de produção. Falta: checagem manual de ~15 notas (critério de saída, junto da sombra F1). |
 | Base `base_quimico_*` + role `ia_worker` + ingestão | ✅ Implementado + **migration `0054` aplicada e base ingerida em produção** (2026-07-23) | F4 | C7 endurecida: RLS on nas 5 tabelas; policies só `TO ia_worker` nas 4 liberadas; formulações sem GRANT/policy (pós-check em produção). `scripts/ingestao_base_quimico.py` re-executável (idempotência provada: 2 execuções, mesmas contagens — 60 produtos, 94 MPs, 16 playbooks, 437 formulações, 39 fichas). Arquivos-fonte NUNCA no repo (`openpyxl`/`pypdf` só em requirements-dev). Pendente gestor: senha do role + `IA_WORKER_DATABASE_URL` no Railway; revisar 20 produtos sem ficha no PDF. |

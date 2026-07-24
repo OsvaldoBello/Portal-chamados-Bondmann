@@ -85,6 +85,10 @@ def test_ia_triagem_defaults_desligados(monkeypatch: pytest.MonkeyPatch):
     assert s.ia_triagem_ativa is False  # kill switch geral: nasce desligado
     assert s.ia_triagem_departamentos == "" and s.ia_triagem_departamentos_lista == []
     assert s.ia_triagem_modo_sombra is True  # sombra é o default seguro
+    # Saída da sombra por departamento (F2): default vazio = ninguém sai.
+    assert s.ia_triagem_perguntas_departamentos == ""
+    assert s.ia_triagem_perguntas_departamentos_lista == []
+    assert s.ia_triagem_em_sombra("TI") is True
     assert s.ia_triagem_model == "gpt-5.4-mini"
     assert s.ia_triagem_model_passe_b == ""
     assert s.ia_triagem_base_url == "https://api.openai.com/v1"
@@ -92,6 +96,19 @@ def test_ia_triagem_defaults_desligados(monkeypatch: pytest.MonkeyPatch):
     assert s.ia_triagem_timeout_s == 30.0  # C6
     assert s.ia_triagem_max_rodadas == 2
     assert s.ia_worker_database_url == ""
+
+
+def test_ia_triagem_sombra_por_departamento(monkeypatch: pytest.MonkeyPatch):
+    """F2 (2026-07-24): departamento em IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS sai
+    da sombra mesmo com a global ligada; MODO_SOMBRA=false tira todos (F6)."""
+    s = _settings_ia(monkeypatch, ia_triagem_perguntas_departamentos="TI, Dpto Químico")
+    assert s.ia_triagem_perguntas_departamentos_lista == ["TI", "Dpto Químico"]
+    s_ti = _settings_ia(monkeypatch, ia_triagem_perguntas_departamentos="TI")
+    assert s_ti.ia_triagem_em_sombra("TI") is False  # liberado: pergunta ao autor
+    assert s_ti.ia_triagem_em_sombra("Dpto Químico") is True  # gate F5: segue em sombra
+    assert s_ti.ia_triagem_em_sombra(None) is True
+    s_off = _settings_ia(monkeypatch, ia_triagem_modo_sombra=False)
+    assert s_off.ia_triagem_em_sombra("Dpto Químico") is False  # F6: ninguém em sombra
 
 
 def test_ia_triagem_aceita_alias_groq_na_transicao(monkeypatch: pytest.MonkeyPatch):

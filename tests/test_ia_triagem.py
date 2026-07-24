@@ -513,6 +513,81 @@ def test_decidir_acao_matrix():
     assert triagem.decidir_acao(s_ok, 1, _sombra_off()) == "NOTA_INTERNA"
 
 
+def test_decidir_acao_sombra_por_departamento():
+    """F2 (2026-07-24): a sombra é avaliada POR DEPARTAMENTO — o TI listado em
+    IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS pergunta com a sombra global ligada; o
+    Químico (fora da lista) segue em sombra até o red team (F5)."""
+    s_alta = SaidaTriagem.model_validate(_SAIDA_PERGUNTAVEL)
+    liberado_ti = _settings(ia_triagem_perguntas_departamentos="TI")  # sombra global ON
+    assert triagem.decidir_acao(s_alta, 1, liberado_ti, departamento="TI") == "PERGUNTAS"
+    assert (
+        triagem.decidir_acao(s_alta, 1, liberado_ti, departamento="Dpto Químico")
+        == "NOTA_INTERNA"
+    )
+    # Sem departamento informado, o comportamento conservador é sombra.
+    assert triagem.decidir_acao(s_alta, 1, liberado_ti) == "NOTA_INTERNA"
+    # Sombra global desligada preserva a semântica antiga: ninguém em sombra (F6).
+    assert (
+        triagem.decidir_acao(s_alta, 1, _sombra_off(), departamento="Dpto Químico")
+        == "PERGUNTAS"
+    )
+
+
+async def test_ti_liberado_pergunta_com_sombra_global_ligada():
+    """Fluxo integrado da saída da sombra por departamento: sombra global ON +
+    TI em IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS ⇒ pergunta pública + e-mail, e o
+    histórico registra o modo_sombra EFETIVO (false para o TI)."""
+    conn = FakeConn()
+    completar = AsyncMock(
+        return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_PERGUNTAVEL))
+    )
+    settings = _settings(ia_triagem_perguntas_departamentos="TI")
+    assert settings.ia_triagem_modo_sombra is True  # global segue ligada
+    with _patched(conn, settings, completar) as notificar:
+        await triagem.executar_triagem("cid")
+
+    assert conn.triagem_inserts[0][3] == "PERGUNTAS"
+    msg_sql, msg_args = next((s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s)
+    assert "false" in msg_sql  # canal público
+    assert "O monitor acende alguma luz?" in msg_args[2]
+    notificar.assert_awaited_once()
+    _, hist_args = next(
+        (s, a) for s, a in conn.executes if "INSERT INTO historico_chamados" in s
+    )
+    assert json.loads(hist_args[2])["modo_sombra"] is False  # sombra efetiva do TI
+
+
+async def test_quimico_fora_da_lista_segue_em_sombra():
+    """Com o TI liberado, o Dpto Químico continua SÓ com nota interna — nenhuma
+    mensagem pública nem e-mail sai (gate F5 do red team)."""
+    conn = FakeConn(
+        chamado={**_CHAMADO, "departamento": "Dpto Químico", "departamento_id": "dep-q"}
+    )
+    completar = AsyncMock(
+        return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_PERGUNTAVEL))
+    )
+    settings = _settings(
+        ia_triagem_departamentos="TI,Dpto Químico",
+        ia_triagem_perguntas_departamentos="TI",
+    )
+    with (
+        _patched(conn, settings, completar) as notificar,
+        patch.object(
+            triagem.contexto_quimico, "playbook_perguntas", AsyncMock(return_value=[])
+        ),
+        patch.object(
+            triagem.contexto_quimico, "montar_contexto_passe_b", AsyncMock(return_value=None)
+        ),
+    ):
+        await triagem.executar_triagem("cid")
+
+    # Passe A decidiu NOTA_INTERNA (em sombra) ⇒ Passe B roda e grava a nota.
+    assert [ins[3] for ins in conn.triagem_inserts][0] == "NOTA_INTERNA"
+    msgs = [(s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s]
+    assert msgs and all("true" in s for s, _ in msgs)  # só nota interna
+    notificar.assert_not_awaited()
+
+
 async def test_perguntas_geram_mensagem_publica_sem_nota_e_email():
     """Decisão do usuário 2026-07-23: com informação insuficiente, o ciclo de
     perguntas vem PRIMEIRO — a nota interna fica para o fim do ciclo (rodada
