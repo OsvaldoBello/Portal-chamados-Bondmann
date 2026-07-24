@@ -219,11 +219,60 @@ precisa do mesmo ajuste.
 
 ---
 
+## (d) Ativar o agente Químico (F4 da frente de IA) — senha do role `ia_worker` + envs
+
+A migration `0054_base_quimico` criou o role `ia_worker` **sem senha** (login
+impossível até este passo). Ele é a conexão dedicada do Passe B do agente
+Químico: enxerga o catálogo/fichas/playbooks e **não tem permissão** nas
+quantidades das formulações (`base_quimico_formulacoes`) — garantia de banco,
+já verificada em produção.
+
+1. **Definir a senha** (SQL Editor do Supabase, projeto `iurlzlhbnoemkzgexcfk`):
+
+   ```sql
+   ALTER ROLE ia_worker PASSWORD '<senha-forte-gerada>';
+   ```
+
+   Gerar com `openssl rand -base64 24` (ou similar). NUNCA colar a senha em
+   chat/commit/doc — só no painel do Railway.
+
+2. **Configurar no Railway** (mesmo host/porta do `DATABASE_URL` atual, via
+   Supavisor 6543, trocando usuário e senha):
+
+   ```text
+   IA_WORKER_DATABASE_URL=postgresql://ia_worker.iurlzlhbnoemkzgexcfk:<senha>@<host-supavisor>:6543/postgres
+   IA_TRIAGEM_DEPARTAMENTOS=TI,Dpto Químico
+   ```
+
+   (Manter `IA_TRIAGEM_MODO_SOMBRA=true` — o Químico só sai da sombra após a
+   F5/red team e o DPA da OpenAI aceito.)
+
+3. **Reingestão da base** (sempre que a planilha/PDF mudarem — arquivos ficam
+   fora do repositório, com o gestor):
+
+   ```bash
+   python scripts/ingestao_base_quimico.py --planilha "<caminho do .xlsx>" --fichas-pdf "<caminho do .pdf>"
+   ```
+
+   Re-executável (upsert): rodar de novo nunca duplica. Conferir no final as
+   contagens e a lista de páginas sem produto identificado.
+
+4. **Revisão pendente:** 20 nomes de produto ficaram sem ficha no PDF na
+   ingestão de 2026-07-23 (`SELECT DISTINCT nome FROM base_quimico_produtos p
+   WHERE NOT EXISTS (SELECT 1 FROM base_quimico_fichas f WHERE
+   f.chave_produto = p.chave_produto)`) — validar se o PDF cobre esses
+   produtos com outro nome ou se a ficha não existe mesmo.
+
+---
+
 ## Checklist rápido do gestor
 
 - [ ] (a) Branch protection em `claude/develop` — via UI **ou** `gh api` (escolher a
       variante de revisão conforme tamanho do time; ver ressalva do mantenedor solo).
 - [ ] (b) Supabase hospedado: **Minimum password length** 6 → 8.
 - [ ] (c) Supabase hospedado: habilitar **MFA/TOTP** (destrava a ativação do MFA — item 3.3).
+- [ ] (d) IA/Químico: senha do `ia_worker` + `IA_WORKER_DATABASE_URL` +
+      `Dpto Químico` em `IA_TRIAGEM_DEPARTAMENTOS` (Railway) + DPA OpenAI
+      (gate do go-live) + revisar os 20 produtos sem ficha.
 - [ ] Marcar os itens como feitos na tabela de progresso do
       `plano_melhorias_auditoria.md` (linhas 3.2 e 3.3).

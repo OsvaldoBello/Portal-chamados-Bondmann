@@ -123,7 +123,7 @@ echo      Login de teste: ti@ / rh@ / func@bondmann.com.br  (senha definida no s
 echo      Pressione Ctrl+C nesta janela para parar o servidor.
 echo(
 start "" /min cmd /c "timeout /t 5 >nul & start "" http://localhost:%PORT%"
-"%PY%" -m uvicorn app.main:app --port %PORT% --reload
+"%PY%" -m uvicorn app.main:app --port %PORT%
 goto :fim
 
 :fim_erro

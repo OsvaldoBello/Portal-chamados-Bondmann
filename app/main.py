@@ -7,6 +7,8 @@ tratamento de erro centralizado e os routers.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,6 +27,7 @@ from app.auth.session import SessionRefreshMiddleware
 from app.auth.supabase_client import init_supabase
 from app.config import get_settings
 from app.db import close_pool, init_pool
+from app.ia import triagem as ia_triagem
 from app.observability import RequestContextMiddleware, configure_logging, configure_sentry
 from app.ratelimit import limiter
 from app.routes.admin import register_admin_routes
@@ -80,9 +83,18 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("Supabase não configurado: rotas de auth/anexos indisponíveis.")
 
+    # Reconciliação da triagem por IA (rede de segurança do agendamento em
+    # memória — ver docstring de `iniciar_reconciliacao`). `None` se a triagem
+    # estiver desligada; nunca bloqueia o boot.
+    reconciliacao_task = ia_triagem.iniciar_reconciliacao(settings)
+
     try:
         yield
     finally:
+        if reconciliacao_task is not None:
+            reconciliacao_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reconciliacao_task
         await close_pool()
         await close_storage()
 

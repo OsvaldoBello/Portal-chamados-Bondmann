@@ -35,3 +35,24 @@ class SaidaTriagem(BaseModel):
     perguntas: list[str] = Field(default_factory=list, max_length=3)
     # Termos para a busca de chamados semelhantes (F3 — FTS português).
     termos_busca: list[str] = Field(default_factory=list, max_length=8)
+
+
+class SaidaPasseB(BaseModel):
+    """Saída do Passe B do Químico (F4) — pré-análise técnica com a base sigilosa.
+
+    A ``pre_analise`` vira EXCLUSIVAMENTE nota interna (invariante 8.2). Em
+    ``ia_triagens.resultado`` só entram os METADADOS deste schema — nunca o
+    texto da pré-análise (decisão da Seção 4.1: um único lugar sensível).
+    """
+
+    model_config = {"extra": "ignore"}
+
+    # Pré-análise técnica (metodologia 6M, higiene epistêmica) — nota interna.
+    pre_analise: str = Field(min_length=1)
+    confianca: Literal["ALTA", "MEDIA", "BAIXA"] = "MEDIA"
+    # O caso exige avaliação do químico responsável (playbook "quando escalar")?
+    escalar_para_quimico: bool = False
+    # Produto da base que o modelo reconheceu no chamado (auditoria).
+    produto_reconhecido: str | None = None
+    # Dados que o atendente deve confirmar antes de concluir (máx. 6).
+    dados_faltantes: list[str] = Field(default_factory=list, max_length=6)

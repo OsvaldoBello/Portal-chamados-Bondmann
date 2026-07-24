@@ -10,6 +10,7 @@ guarda de atendimento (NOVO/sem operador) e nota SEMPRE interna
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from contextlib import asynccontextmanager, contextmanager
@@ -757,3 +758,125 @@ async def test_buscar_semelhantes_sem_consulta_util_devolve_vazio_sem_sql():
     assert await ia_busca.buscar_semelhantes(
         _ConnProibida(), departamento_id="d1", chamado_id="c1", termos=["", "  "]
     ) == []
+
+
+# ------------------------------------------------------------------
+# Reconciliação (rede de segurança do agendamento em memória)
+#
+# Caso real que motivou este módulo: BOND-2026-00593 (2026-07-23) — chamado
+# de TI elegível, ZERO linhas em `ia_triagens`/`historico_chamados`, enquanto
+# o chamado anterior e o seguinte foram triados normalmente em segundos. A
+# causa mais provável é um restart/redeploy do processo entre o
+# `asyncio.create_task` do agendamento e o primeiro INSERT de auditoria —
+# a tarefa em memória se perde sem deixar rastro.
+# ------------------------------------------------------------------
+
+
+class _FakeConnOrfaos:
+    """Só implementa `.fetch` — é tudo que `_chamados_orfaos` usa."""
+
+    def __init__(self, ids: list[str]):
+        self._ids = ids
+        self.args: tuple | None = None
+
+    async def fetch(self, sql: str, *args):
+        assert "ia_triagens" in sql and "chamados" in sql
+        self.args = args
+        return [{"id": i} for i in self._ids]
+
+
+def _fake_admin_orfaos(conn: _FakeConnOrfaos):
+    @asynccontextmanager
+    async def _fake_admin():
+        yield conn
+
+    return _fake_admin
+
+
+async def test_reconciliacao_kill_switch_nao_toca_no_banco():
+    admin = MagicMock(side_effect=AssertionError("não pode tocar no banco"))
+    with (
+        patch.object(triagem, "get_settings", return_value=_settings(ia_triagem_ativa=False)),
+        patch.object(triagem, "admin_connection", admin),
+    ):
+        assert await triagem.reconciliar_triagens_perdidas() == 0
+    admin.assert_not_called()
+
+
+async def test_reconciliacao_sem_api_key_tambem_desliga():
+    admin = MagicMock(side_effect=AssertionError("não pode tocar no banco"))
+    with (
+        patch.object(triagem, "get_settings", return_value=_settings(ia_triagem_api_key="")),
+        patch.object(triagem, "admin_connection", admin),
+    ):
+        assert await triagem.reconciliar_triagens_perdidas() == 0
+    admin.assert_not_called()
+
+
+async def test_reconciliacao_sem_departamentos_nao_roda_query():
+    conn = _FakeConnOrfaos([])
+    with (
+        patch.object(
+            triagem, "get_settings", return_value=_settings(ia_triagem_departamentos="")
+        ),
+        patch.object(triagem, "admin_connection", _fake_admin_orfaos(conn)),
+    ):
+        assert await triagem.reconciliar_triagens_perdidas() == 0
+    assert conn.args is None  # retorno cedo: nem chega a consultar
+
+
+async def test_reconciliacao_reexecuta_cada_orfao():
+    conn = _FakeConnOrfaos(["cid-1", "cid-2"])
+    executar = AsyncMock()
+    with (
+        patch.object(triagem, "get_settings", return_value=_settings()),
+        patch.object(triagem, "admin_connection", _fake_admin_orfaos(conn)),
+        patch.object(triagem, "executar_triagem", executar),
+    ):
+        total = await triagem.reconciliar_triagens_perdidas()
+    assert total == 2
+    assert [c.args[0] for c in executar.await_args_list] == ["cid-1", "cid-2"]
+    assert conn.args == (["TI"], 2)  # departamentos_lista + teto de rodadas
+
+
+async def test_reconciliacao_sem_orfaos_nao_chama_executar_triagem():
+    conn = _FakeConnOrfaos([])
+    executar = AsyncMock()
+    with (
+        patch.object(triagem, "get_settings", return_value=_settings()),
+        patch.object(triagem, "admin_connection", _fake_admin_orfaos(conn)),
+        patch.object(triagem, "executar_triagem", executar),
+    ):
+        assert await triagem.reconciliar_triagens_perdidas() == 0
+    executar.assert_not_awaited()
+
+
+async def test_loop_reconciliacao_ignora_erro_e_continua():
+    """O loop nunca morre por erro de uma volta (Regra #5 aplicada à varredura)."""
+    chamada = AsyncMock(side_effect=[RuntimeError("banco fora do ar"), None])
+    sleep = AsyncMock(side_effect=[None, asyncio.CancelledError()])
+    with (
+        patch.object(triagem, "reconciliar_triagens_perdidas", chamada),
+        patch.object(triagem.asyncio, "sleep", sleep),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await triagem._loop_reconciliacao(1.0)
+    assert chamada.await_count == 1
+
+
+async def test_iniciar_reconciliacao_none_com_triagem_desligada():
+    assert triagem.iniciar_reconciliacao(_settings(ia_triagem_ativa=False)) is None
+
+
+async def test_iniciar_reconciliacao_none_com_intervalo_zero():
+    settings = _settings(ia_triagem_reconciliacao_intervalo_s=0)
+    assert triagem.iniciar_reconciliacao(settings) is None
+
+
+async def test_iniciar_reconciliacao_cria_task_quando_ligada():
+    settings = _settings(ia_triagem_reconciliacao_intervalo_s=999)
+    task = triagem.iniciar_reconciliacao(settings)
+    assert isinstance(task, asyncio.Task)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

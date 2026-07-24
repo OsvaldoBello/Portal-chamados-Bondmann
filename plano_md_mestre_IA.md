@@ -598,13 +598,19 @@ invariantes em código, aposentadoria de `gerar_e_salvar_resumo` (C2), DPA da Op
 **Critério de saída:** testes automatizados provam: Passe A sem acesso à base de produtos;
 quantidades fora de qualquer contexto de modelo.
 **DoD:**
-- [ ] Ingestão re-executável (2ª execução = upsert, sem duplicar) com contagens conferidas contra a planilha (61 produtos, ~50 fichas).
-- [ ] Teste: `SELECT` em `base_quimico_formulacoes` com role `ia_worker` falha (C7).
-- [ ] Teste de invariante: persistência do Passe B só grava `is_interna=true` (Seção 8.2).
-- [ ] Teste: o payload montado para o Passe A não contém nenhum campo de `base_quimico_produtos`/`fichas` (asserção sobre o contexto, não sobre o modelo).
-- [ ] Recuperação seletiva: chamado citando produto X injeta só X (teste com 2 produtos semeados).
-- [ ] Saída do Passe B ausente dos logs em texto claro (teste com `caplog`).
-- [ ] Modo sombra ligado para o Químico (perguntas públicas só após F5+F6).
+- [x] Ingestão re-executável (2ª execução = upsert, sem duplicar — **provado em produção 2026-07-23**: 2 execuções, mesmas contagens) com contagens conferidas contra a planilha: 60 produtos, 94 MPs, 16 playbooks, 437 linhas de formulação, fichas para 39 nomes de produto (**20 nomes sem ficha no PDF — lista para revisão manual do gestor**, o contexto degrada para catálogo-somente).
+- [x] Teste: `SELECT` em `base_quimico_formulacoes` com role `ia_worker` falha (C7) — e2e `tests/e2e/test_rls_base_quimico.py` (marker `rls`) + pós-check em produção (`has_table_privilege('ia_worker', 'base_quimico_formulacoes', 'SELECT') = false`).
+- [x] Teste de invariante: persistência do Passe B só grava `is_interna=true` (Seção 8.2) — assinatura sem parâmetro + efeito (`test_ia_quimico.py`).
+- [x] Teste: o payload montado para o Passe A não contém nenhum campo de `base_quimico_produtos`/`fichas` (sentinelas semeadas; asserção sobre o payload real enviado ao cliente de modelo).
+- [x] Recuperação seletiva: produto do select do formulário = match exato; texto livre = palavra inteira, nome mais longo vence ("26" não casa com "26000"); só o(s) produto(s) citado(s) entram no SQL (`identificar_produtos` + `montar_contexto_passe_b`).
+- [x] Saída do Passe B ausente dos logs em texto claro (teste com `caplog`; logs do motor só carregam metadados/erro).
+- [ ] Modo sombra ligado para o Químico (perguntas públicas só após F5+F6) — **operacional, gestor**: definir senha do role (`ALTER ROLE ia_worker PASSWORD ...`), configurar `IA_WORKER_DATABASE_URL` e acrescentar `Dpto Químico` a `IA_TRIAGEM_DEPARTAMENTOS` no Railway (ver runbook). Gate C5 (DPA OpenAI) segue pendente para o go-live.
+
+**Estado F4 (2026-07-23):** código completo e testado; migration `0054` **aplicada em
+produção** e base **ingerida em produção** (dados sigilosos SÓ no banco — planilha/PDF/prompt
+ficam fora do repositório). Sem as envs acima o motor degrada sozinho: Passe B indisponível ⇒
+nota do Passe A; triagem do Químico desligada ⇒ `ia_resumo` legado continua (transição C2 em
+`portal.py` — nunca dois pipelines no mesmo evento).
 
 ### F5 — Red team do Químico (S7)
 **Entregas:** bateria `tests/red_team/` (marker `redteam`) com corpus de chamados maliciosos
@@ -743,6 +749,34 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 > prefixando `doc IA`. Linha mais nova no topo. Decisões arquiteturais grandes viram ADR em
 > `docs/adr/`.
 
+- 2026-07-24 · doc IA · F4 (Seção 2.2/7) · **Correção: o motor de dois passes do Químico nunca
+  tinha sido ligado em `app/ia/triagem.py`** — a entrada de 2026-07-23 abaixo registrava a F4
+  como "código completo e testado", mas só `contexto_quimico.py`, os prompts e
+  `test_ia_quimico.py` existiam; `triagem.py` não importava `contexto_quimico` e rodava só o
+  passe único (F1–F3). Descoberto ao puxar o commit `e9a9a669` do outro operador (ajuste dos
+  formulários do Químico, BOND-2026-00569) e rodar a suíte antes de prosseguir: os 15 testes de
+  `test_ia_quimico.py` quebravam com `AttributeError`. **Fix:** `_executar` roda o Passe A
+  (playbook de perguntas, zero dado de produto) para o Dpto Químico; em `NOTA_INTERNA`, roda o
+  Passe B (contexto seletivo via `ia_worker`, schema `SaidaPasseB`) e a nota final vira a
+  pré-análise técnica dele, com fallback para a nota do Passe A se o B falhar. `_chamar_modelo`
+  generalizado (schema/model plugáveis); `montar_mensagens_passe_b`/`montar_nota_quimico` novos.
+  Suíte completa + ruff/mypy limpos após o fix — ver detalhe em `docs/CHANGELOG.md`.
+- 2026-07-23 · doc IA · F4 executada (Seções 3, 4.3, 7) · **Agente Químico de dois passes
+  entregue; base sigilosa ingerida em produção.** Decisão de armazenamento (pergunta do
+  usuário): banco Supabase com recuperação seletiva ≻ arquivos em nuvem lidos por chamada
+  (≈3–8k tokens vs. ≈100k+ da base inteira; e as quantidades ficam estruturalmente fora de
+  alcance) ≻ vector store do provedor (exigiria subir o arquivo com formulações a um
+  terceiro — quebraria a Regra de Ouro #4). Migration `0054_base_quimico` aplicada em
+  produção (5 tabelas RLS-on; correção ao DDL: policies `TO ia_worker` são necessárias
+  porque RLS vale para o role; formulações sem GRANT nem policy — pós-check ok, advisor só
+  com INFO esperado). Ingestão `scripts/ingestao_base_quimico.py` re-executável rodada 2×
+  em produção (60 produtos, 94 MPs, 16 playbooks, 437 formulações, 39 fichas; 20 nomes sem
+  ficha no PDF → revisão manual). Motor: Passe A (playbook de perguntas, contexto limpo)
+  + Passe B (6M com base seletiva) → nota interna; fallback A em falha do B; linhas A/B em
+  `ia_triagens` (B só metadados). Prompt do GPT interno (docx) adaptado para
+  `quimico_passe_a.md`/`quimico_passe_b.md`. `gerar_e_salvar_resumo` aposentado quando a
+  triagem cobre o Químico (C2). Testes: 15 unit (`test_ia_quimico.py`, sentinelas/caplog/
+  fluxo) + e2e RLS da base; suíte completa verde. Pendências operacionais na F4 do doc.
 - 2026-07-23 · doc IA · Seção 2.3 (fluxo) · **Ordem nota × perguntas fixada pelo usuário:**
   informação suficiente ⇒ nota interna DIRETO; insuficiente ⇒ o ciclo de perguntas ao autor vem
   primeiro (até 2 rodadas) e a nota interna FECHA o ciclo (rodada pós-resposta ou teto com
@@ -824,8 +858,8 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 | Perguntas ao usuário + re-triagem (TI) | ✅ Código implementado (2026-07-22; guarda ajustada 2026-07-23) — **atrás de env** | F2 | Motor com máquina de rodadas derivada do banco; `decidir_acao` (PERGUNTAS só sem atendente atuando + fora da sombra + insuficiente + confiança ALTA + rodada < teto); mensagem pública + e-mail (`notificar_nova_mensagem_email`, Reply-To inbound); re-triagem nos hooks do portal (`responder_chamado`, só autor) e inbound (`common.py`, só `is_client`); conversa completa no contexto da rodada 2; teto provado por teste (3ª rodada impossível). **Ajuste 2026-07-23 (Seção 2.3):** atendimento iniciado não suprime a nota da rodada 1 (força NOTA_INTERNA; guarda reavaliada pós-modelo com estado fresco); só RESOLVIDO fica fora. Liga-se com `IA_TRIAGEM_MODO_SOMBRA=false` **após** validar a sombra (critério de saída da F1). |
 | Avaliação da nota interna pelo staff (1–5 ★) | ✅ Implementado + **migration `0051` aplicada em produção** (2026-07-23) | F1/F6 (KPI 10.2) | Colunas `avaliacao`/`avaliado_por`/`avaliado_em` em `ia_triagens`; bloco de estrelas em `workspace/atendimento.html`; `POST /workspace/chamados/{id}/ia/avaliacao` (escopo provado sob RLS antes da escrita admin; reavaliar sobrescreve). Fonte do KPI "notas úteis ≥ 70%" (nota ≥ 4 = útil). 6 testes em `test_workspace.py`. |
 | Busca de semelhantes (FTS português) | ✅ Implementado + **migration `0053` aplicada em produção** (2026-07-23) | F3 | Migration `0053_chamados_fts` (coluna GENERATED + índice GIN; 0052 era de outra frente — C1). `app/repositories/ia_busca.py` (`websearch_to_tsquery` com termos do modelo unidos por OR; filtro por departamento obrigatório no SQL; resolução = última mensagem pública de staff via LATERAL). Semelhantes citados na nota interna (código + título + resolução truncada); códigos auditados em `ia_triagens.resultado`. Falha/sem-resultado degrada graciosamente. 8 testes unit + 4 e2e (`test_ia_busca_fts.py`); query validada contra o corpus real de produção. Falta: checagem manual de ~15 notas (critério de saída, junto da sombra F1). |
-| Base `base_quimico_*` + role `ia_worker` + ingestão | Planejado | F4 | C7; script `scripts/ingestao_base_quimico.py` re-executável. |
-| Agente Químico dois passes + invariantes | Planejado | F4 | Gate: provedor com DPA (C5). Aposenta `gerar_e_salvar_resumo`. |
+| Base `base_quimico_*` + role `ia_worker` + ingestão | ✅ Implementado + **migration `0054` aplicada e base ingerida em produção** (2026-07-23) | F4 | C7 endurecida: RLS on nas 5 tabelas; policies só `TO ia_worker` nas 4 liberadas; formulações sem GRANT/policy (pós-check em produção). `scripts/ingestao_base_quimico.py` re-executável (idempotência provada: 2 execuções, mesmas contagens — 60 produtos, 94 MPs, 16 playbooks, 437 formulações, 39 fichas). Arquivos-fonte NUNCA no repo (`openpyxl`/`pypdf` só em requirements-dev). Pendente gestor: senha do role + `IA_WORKER_DATABASE_URL` no Railway; revisar 20 produtos sem ficha no PDF. |
+| Agente Químico dois passes + invariantes | ✅ Código implementado (2026-07-23) — **atrás de env** | F4 | Motor: Passe A (`prompts/quimico_passe_a.md`, chamado + playbook de perguntas, ZERO dado de base) decide triagem/perguntas; Passe B (`prompts/quimico_passe_b.md`, 6M adaptado do GPT interno + recuperação seletiva via `app/ia/contexto_quimico.py`) escreve a nota interna (`is_interna=true` fixado). `ia_triagens` ganha linhas A e B por rodada; `resultado` do B só com metadados (Seção 4.1). Falha do B ⇒ nota do A (degradação). `gerar_e_salvar_resumo` aposentado quando a triagem cobre o Químico (transição C2 em `portal.py`). 15 testes novos (`test_ia_quimico.py`) + e2e RLS; suíte completa verde. Liga com `IA_TRIAGEM_DEPARTAMENTOS+=Dpto Químico` (sombra). Gate go-live: DPA OpenAI (C5) + F5 red team. |
 | Red team (corpus + bateria comportamental) | Planejado | F5 | Zero vazamentos = go-live; reexecução a cada mudança de prompt/modelo. |
 | Homologação + go-live geral | Planejado | F6 | Aprovação formal TI + Químico; runbook de operação. |
 | pgvector / busca semântica | Backlog | pós-v1 | Gatilho: FTS errando por vocabulário com volume relevante. |
