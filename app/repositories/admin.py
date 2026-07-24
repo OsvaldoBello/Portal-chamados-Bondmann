@@ -171,7 +171,8 @@ class AdminRepo:
                 periodo_fim,
             )
         por = {r["status"]: r["n"] for r in rows}
-        return {s: por.get(s, 0) for s in ("NOVO", "PROJETOS", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")}
+        return {s: por.get(s, 0) for s in
+                ("NOVO", "PROJETOS", "EM_ATENDIMENTO", "RESPOSTA_CLIENTE", "AGUARDANDO", "RESOLVIDO")}
 
     async def csat_distribuicao(
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,

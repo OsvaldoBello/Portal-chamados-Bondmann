@@ -223,6 +223,7 @@ class FilaRepo:
             "A_FAZER": por.get("A_FAZER", 0),
             "PROJETOS": por.get("PROJETOS", 0),
             "EM_ATENDIMENTO": por.get("EM_ATENDIMENTO", 0),
+            "RESPOSTA_CLIENTE": por.get("RESPOSTA_CLIENTE", 0),
             "AGUARDANDO_TERCEIROS": por.get("AGUARDANDO_TERCEIROS", 0),
             "AGUARDANDO": por.get("AGUARDANDO", 0),
             "RESOLVIDO": por.get("RESOLVIDO", 0),

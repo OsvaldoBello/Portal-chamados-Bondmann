@@ -1,0 +1,14 @@
+-- 0060_status_resposta_cliente.sql
+-- Pedido do usuário (2026-07-24): nova coluna de Kanban, exclusiva de TI/RH,
+-- que sinaliza "a última mensagem do chat foi de quem abriu o chamado" — ou
+-- seja, a bola está com o staff. Diferente de AGUARDANDO (que já significa
+-- "aguardando o retorno do solicitante", staff falou por último — ver 0017/
+-- kanban.html "Aguardando Validação"), RESPOSTA_CLIENTE é o sentido oposto:
+-- o autor falou por último e o chamado precisa de atenção do setor.
+--
+-- Mesmo padrão da 0024/0043/0057 — um valor de enum novo não pode ser usado
+-- na mesma transação em que foi criado, por isso fica isolado nesta migration
+-- própria; a trigger que move o chamado automaticamente (0061) e a fiação da
+-- UI (app/routes/workspace.py::_status_ui, app/templating.py::STATUS_META)
+-- vêm depois, em código/migration própria.
+ALTER TYPE status_chamado ADD VALUE IF NOT EXISTS 'RESPOSTA_CLIENTE';

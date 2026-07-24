@@ -16,7 +16,7 @@ module.exports = {
         ink: "#1E293B", muted: "#64748B", faint: "#94A3B8",
         surface: "#F4F6F9", surface2: "#EAEEF4", line: "#E2E8F0",
         st_novo: "#2563EB", st_atend: "#6366F1", st_aguard: "#F59E0B", st_resolv: "#16A34A",
-        st_terceiros: "#EA580C", st_projetos: "#7C3AED",
+        st_terceiros: "#EA580C", st_projetos: "#7C3AED", st_resp_cliente: "#0D9488",
         // Badges de status / SLA (Seção 5.1 / Fase 4)
         sla: { ok: "#16a34a", warn: "#f59e0b", danger: "#dc2626" },
         pr_baixa: "#64748B", pr_media: "#2563EB", pr_alta: "#F59E0B", pr_urgente: "#DC2626",

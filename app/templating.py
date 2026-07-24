@@ -56,6 +56,8 @@ STATUS_META = {
                        "bg": "bg-st_terceiros/10", "icon": "M15.75 5.25v13.5m-7.5-13.5v13.5"},
     "PROJETOS":       {"label": "Projetos",        "dot": "bg-st_projetos", "text": "text-st_projetos",
                        "bg": "bg-st_projetos/10", "icon": "M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-19.5 0v6a2.25 2.25 0 002.25 2.25h15a2.25 2.25 0 002.25-2.25v-6m-19.5 0h19.5M6 6.75V4.5a2.25 2.25 0 012.25-2.25h7.5A2.25 2.25 0 0118 4.5v2.25"},
+    "RESPOSTA_CLIENTE": {"label": "Última Interação do Usuário", "dot": "bg-st_resp_cliente", "text": "text-st_resp_cliente",
+                       "bg": "bg-st_resp_cliente/10", "icon": "M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm3.75 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm3.75 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"},
     "RESOLVIDO":      {"label": "Resolvido",      "dot": "bg-st_resolv", "text": "text-st_resolv",
                        "bg": "bg-st_resolv/10", "icon": "M4.5 12.75l6 6 9-13.5"},
 }
