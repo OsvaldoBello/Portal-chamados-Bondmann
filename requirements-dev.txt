@@ -11,8 +11,3 @@ ruff==0.8.6
 # onde correção de tipo importa mais (ver [tool.mypy] no pyproject.toml), não a
 # árvore inteira e sem --strict; alargar depois.
 mypy==1.14.1
-# Ingestão da base do Dpto Químico (F4 — scripts/ingestao_base_quimico.py, rodado
-# localmente pelo dev/gestor; os arquivos-fonte NUNCA entram no repo). Dev-only:
-# o runtime do portal não lê planilha/PDF.
-openpyxl==3.1.5
-pypdf==6.14.2

@@ -257,11 +257,58 @@ já verificada em produção.
    Re-executável (upsert): rodar de novo nunca duplica. Conferir no final as
    contagens e a lista de páginas sem produto identificado.
 
-4. **Revisão pendente:** 20 nomes de produto ficaram sem ficha no PDF na
-   ingestão de 2026-07-23 (`SELECT DISTINCT nome FROM base_quimico_produtos p
-   WHERE NOT EXISTS (SELECT 1 FROM base_quimico_fichas f WHERE
-   f.chave_produto = p.chave_produto)`) — validar se o PDF cobre esses
-   produtos com outro nome ou se a ficha não existe mesmo.
+4. **Fichas — RESOLVIDO com o químico (2026-07-24): 65 de 66 produtos com
+   ficha em produção.** O fatiamento foi revisado página a página (1 página =
+   1 ficha, âncora `>> NOME`; comparação alfanumérica tolera "WAY45"×"WAY 45",
+   "D.F.D.", etc.). As 11 fichas que estavam órfãs foram tratadas conforme o
+   químico esclareceu (no script `ingestao_base_quimico.py`):
+
+   | Ficha (pág) | Tratamento |
+   |---|---|
+   | FEMME (30) / FLORAL (31) | `ALIASES_FICHAS` → DESINFETANTE FEMME / FLORAL |
+   | LAVANDA (36) | **`CORRECOES_NOME_PRODUTO`**: o S101 estava rotulado "DESINFETANTE FLORAL" por engano → renomeado para "DESINFETANTE LAVANDA" e recebe esta ficha |
+   | OX (50) / SNAP (61) | `ALIASES_FICHAS` → BASE OX / BASE SNAP |
+   | BRIL (14) + GRAXCAR II (35) | `ALIASES_FICHAS` → BASE BRIL (duas fichas) |
+   | CONCENTRADO (20) + SHAMP (59) | `ALIASES_FICHAS` → BASE CONCENTRADO (duas fichas) |
+   | PROTEC (53) + PROTETIVO (54) | `ALIASES_FICHAS` → PROTEC (não há "BASE PROTEC" na planilha; PROTEC concentra as duas) |
+   | AW-B 32/46/68 (8–10), LW-B 32/46/68 (44–46) | comprados prontos, sem formulação → `PRODUTOS_SO_FICHA`: entram como produto + ficha, sem componentes |
+   | LIMPTEC 100 INCOLOR (41), SABOLIQ SEM AROMA INCOLOR (56) | `ALIASES_FICHAS` → anexadas ao produto principal |
+
+   **Continua sem ficha (esperado):** só `TRIACID - DESCONTINUADO`
+   (descontinuado). **Fichas do PDF ainda sem produto na planilha, a cargo do
+   gestor** (o script as reporta como "esperado"):
+   - **ADITIVO 1090** (pág 3) e **ADITIVO ANTI-INCRUSTANTE** (pág 4) — o gestor
+     vai adicioná-los à planilha depois; ao reingerir, as fichas entram
+     sozinhas (âncora casa).
+   - **LB 20 H** (pág 39) — produto não liberado para venda; ignorado de
+     propósito (na lista `FICHAS_ESPERADAS_SEM_PRODUTO`).
+
+   Quando os aditivos entrarem na planilha, remover a entrada correspondente de
+   `FICHAS_ESPERADAS_SEM_PRODUTO` e reingerir. Consulta para reconferir
+   produtos sem ficha:
+
+   ```sql
+   SELECT p.nome, p.chave_produto, p.segmento FROM base_quimico_produtos p
+    WHERE NOT EXISTS (SELECT 1 FROM base_quimico_fichas f
+                        WHERE f.chave_produto = p.chave_produto)
+    ORDER BY p.nome;
+   ```
+
+   **Correção pendente no arquivo-mestre (gestor):** o S101 (LAVANDA rotulado
+   como FLORAL) está corrigido no banco via `CORRECOES_NOME_PRODUTO`, mas o
+   ideal é o químico corrigir o nome na planilha-fonte e então remover essa
+   entrada do script.
+
+5. **Reachability (recuperação seletiva) — a resolver depois:** o dropdown
+   "Produto" do formulário de abertura (`app/domain/formularios_quimico.py`)
+   usa nomes COMERCIAIS (BRIL, CONCENTRADO, OX, SNAP, GRAXCAR II, SHAMP,
+   PROTETIVO, "DESINFETANTES BONDMANN (LAVANDA/FEMME/FLORAL)") enquanto a base
+   guarda o produto sob o nome da planilha (BASE BRIL, PROTEC, DESINFETANTE
+   LAVANDA...). Um chamado que seleciona o nome comercial pode não casar com a
+   linha da base na recuperação seletiva do Passe B — a ficha existe mas não é
+   puxada. AW-B/LW-B não têm esse problema (nome idêntico ao dropdown). Fica
+   como próximo ajuste: um de-para dropdown→produto compartilhado entre o form
+   e `identificar_produtos`.
 
 ---
 

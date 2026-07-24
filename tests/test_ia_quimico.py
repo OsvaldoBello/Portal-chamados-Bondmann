@@ -30,7 +30,11 @@ from app.config import Settings
 from app.ia import triagem
 from app.ia.cliente import RespostaModelo
 from app.ia.contexto_quimico import ContextoQuimico, formatar_contexto, identificar_produtos
-from scripts.ingestao_base_quimico import fatiar_fichas
+from app.services.ingestao_quimico import (
+    aplicar_correcoes_nome,
+    fatiar_fichas,
+    produtos_so_ficha,
+)
 
 # ------------------------------------------------------------------
 # Fixtures / fakes (mesmo padrão de tests/test_ia_triagem.py)
@@ -366,30 +370,125 @@ def test_formatar_contexto_lista_componentes_sem_quantidades():
 
 
 # ------------------------------------------------------------------
-# Fatiamento das fichas (função pura — dados sintéticos)
+# Fatiamento das fichas (função pura — dados sintéticos; 1 página = 1 ficha,
+# revisão 2026-07-24 validada página a página com o gestor)
 # ------------------------------------------------------------------
 
 
-def test_fatiar_fichas_agrupa_pagina_por_produto_e_continua_ficha():
+def test_fatiar_fichas_ancora_decide_mesmo_com_outro_produto_citado_no_corpo():
+    """A citação padrão a outros produtos ("...utilizando DEGRAX 25 e ADITIVO
+    967") não rouba a página de quem tem a âncora ``>> NOME``."""
     paginas = [
-        "FICHA DO PRODTESTE X — aplicação geral",
-        "continuação sem nome de produto (segunda página da ficha)",
-        "BRIL: ficha do abrilhantador",
+        "FLUIDO SINTÉTICO\nO LB 10 é um fluido. Descontamine utilizando os "
+        "produtos DEGRAX 25 e ADITIVO 967.\n>> LB 10\n",
     ]
-    fichas, sem_dona = fatiar_fichas(paginas, _NOMES)
-    assert sem_dona == []
+    fichas, desconhecidas = fatiar_fichas(paginas, ["LB 10", "DEGRAX 25", "ADITIVO 967"])
+    assert desconhecidas == []
+    assert list(fichas) == ["LB 10"]
+
+
+def test_fatiar_fichas_ancora_tolera_grafia_diferente():
+    """">> LB10 H" (PDF) casa com "LB 10 H" (planilha); ">> WAY 45 - B" casa
+    com "WAY45 - B" — comparação alfanumérica."""
+    paginas = [">> LB10 H\nficha do agá", ">> WAY 45 - B\nficha do bê"]
+    fichas, desconhecidas = fatiar_fichas(paginas, ["LB 10 H", "WAY45 - B"])
+    assert desconhecidas == []
+    assert "agá" in fichas["LB 10 H"]
+    assert "bê" in fichas["WAY45 - B"]
+
+
+def test_fatiar_fichas_alias_base_recebe_as_fichas_dos_nomes_comerciais():
+    """BASE BRIL (planilha) recebe as fichas de BRIL e GRAXCAR II (PDF);
+    GRAXCAR II, produto próprio da planilha, também fica com a dele."""
+    paginas = [">> BRIL\nficha do bril", ">> GRAXCAR II\nficha do graxcar"]
+    fichas, desconhecidas = fatiar_fichas(
+        paginas,
+        ["BASE BRIL", "GRAXCAR II"],
+        aliases={"BASE BRIL": ("BRIL", "GRAXCAR II")},
+    )
+    assert desconhecidas == []
+    assert "ficha do bril" in fichas["BASE BRIL"]
+    assert "ficha do graxcar" in fichas["BASE BRIL"]
+    assert "ficha do graxcar" in fichas["GRAXCAR II"]
+    assert "BRIL" not in [n for n in fichas if n not in ("BASE BRIL", "GRAXCAR II")]
+
+
+def test_fatiar_fichas_produto_fora_da_planilha_e_reportado_nao_anexado():
+    """Ficha de produto desconhecido (ex.: ADITIVO 1090 sem linha na planilha)
+    é reportada — nunca vira "continuação" de outro produto."""
+    paginas = [
+        ">> ADITIVO 967\nficha do novecentos e sessenta e sete",
+        ">> ADITIVO 1090\nficha de produto que não está na planilha",
+    ]
+    fichas, desconhecidas = fatiar_fichas(paginas, ["ADITIVO 967"])
+    assert desconhecidas == [(2, "ADITIVO1090")]
+    assert "1090" not in fichas.get("ADITIVO 967", "")
+
+
+def test_fatiar_fichas_pagina_sem_ancora_usa_o_corpo():
+    paginas = ["FICHA DO PRODTESTE X — aplicação geral, sem linha de âncora"]
+    fichas, desconhecidas = fatiar_fichas(paginas, _NOMES)
+    assert desconhecidas == []
     assert "aplicação geral" in fichas["PRODTESTE X"]
-    assert "segunda página" in fichas["PRODTESTE X"], "página sem dono segue a anterior"
-    assert "abrilhantador" in fichas["BRIL"]
 
 
-def test_fatiar_fichas_pagina_inicial_sem_produto_e_relatada():
-    fichas, sem_dona = fatiar_fichas(["capa do documento sem produto"], _NOMES)
+def test_fatiar_fichas_pagina_nao_identificada_e_relatada():
+    fichas, desconhecidas = fatiar_fichas(["capa do documento sem produto"], _NOMES)
     assert fichas == {}
-    assert sem_dona == [1]
+    assert desconhecidas == [(1, "")]
 
 
 def test_fatiar_fichas_nome_curto_nao_casa_em_numero_maior():
-    fichas, sem_dona = fatiar_fichas(["rigidez dielétrica de 26000 volts"], ["26"])
+    fichas, desconhecidas = fatiar_fichas(["rigidez dielétrica de 26000 volts"], ["26"])
     assert fichas == {}
-    assert sem_dona == [1]
+    assert desconhecidas == [(1, "")]
+
+
+def test_identificar_produtos_formulario_tolera_grafia_diferente():
+    """Select do formulário "WAY 45 - B" acha "WAY45 - B" da planilha (alnum)."""
+    assert identificar_produtos(["WAY45 - B"], "WAY 45 - B", "") == ["WAY45 - B"]
+
+
+# ------------------------------------------------------------------
+# Correções e produtos-só-ficha (revisão do químico 2026-07-24)
+# ------------------------------------------------------------------
+
+
+def test_aplicar_correcoes_nome_corrige_por_chave_preservando_a_pk():
+    produtos = [
+        {"chave_produto": "BD CLEAN|S101|DESINFETANTE FLORAL|L69|013", "nome": "DESINFETANTE FLORAL"},
+        {"chave_produto": "BD CLEAN|S025|DESINFETANTE FLORAL|L61|012", "nome": "DESINFETANTE FLORAL"},
+    ]
+    aplicar_correcoes_nome(
+        produtos,
+        {"BD CLEAN|S101|DESINFETANTE FLORAL|L69|013": "DESINFETANTE LAVANDA"},
+    )
+    assert produtos[0]["nome"] == "DESINFETANTE LAVANDA"
+    assert produtos[0]["chave_produto"].endswith("013"), "PK preservada"
+    assert produtos[1]["nome"] == "DESINFETANTE FLORAL", "S025 intacto (é o FLORAL de fato)"
+
+
+def test_produtos_so_ficha_gera_linha_minima_sem_formulacao():
+    linhas = produtos_so_ficha(("AW-B 32",))
+    assert len(linhas) == 1
+    p = linhas[0]
+    assert p["nome"] == "AW-B 32"
+    assert p["componentes"] == [], "sem componentes — nada de formulação a proteger"
+    assert p["chave_produto"] == "FICHA|AW-B 32"
+
+
+def test_produto_so_ficha_recebe_a_ficha_pela_ancora():
+    """Um produto comprado pronto (AW-B 32) casa a ficha ">> AW-B 32" do PDF
+    mesmo com grafia diferente da âncora."""
+    nomes = [p["nome"] for p in produtos_so_ficha(("AW-B 32",))]
+    fichas, desconhecidas = fatiar_fichas([">> AWB 32\nficha do awb"], nomes)
+    assert desconhecidas == []
+    assert "ficha do awb" in fichas["AW-B 32"]
+
+
+def test_protec_concentra_as_fichas_de_protec_e_protetivo():
+    paginas = [">> PROTEC\nficha do protec", ">> PROTETIVO\nficha do protetivo"]
+    fichas, desconhecidas = fatiar_fichas(paginas, ["PROTEC"], aliases={"PROTEC": ("PROTETIVO",)})
+    assert desconhecidas == []
+    assert "ficha do protec" in fichas["PROTEC"]
+    assert "ficha do protetivo" in fichas["PROTEC"]

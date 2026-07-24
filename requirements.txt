@@ -36,3 +36,10 @@ Pillow==12.3.0
 # SENTRY_DSN estiver configurada (app/config.py); sem DSN, sentry_sdk.init()
 # nunca é chamado e capture_exception() vira no-op.
 sentry-sdk==2.19.0
+# Ingestão da base do Dpto Químico (F4): parse determinístico de planilha (.xlsx)
+# e PDF de fichas técnicas → tabelas base_quimico_*. Usado pela CLI
+# (scripts/ingestao_base_quimico.py) E pelo painel web /admin/base-quimico
+# (app/services/ingestao_quimico.py, importado em runtime) — por isso runtime,
+# não dev-only. Os arquivos-fonte nunca entram no repo (sobem pela tela).
+openpyxl==3.1.5
+pypdf==6.14.2

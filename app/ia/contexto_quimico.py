@@ -47,6 +47,19 @@ def _normalizar(texto: str) -> str:
     return "".join(c for c in nfkd if not unicodedata.combining(c)).upper()
 
 
+def _alnum(texto: str) -> str:
+    """Só letras/dígitos, caixa alta, sem acento — tolera divergência de grafia
+    entre o select do formulário e a planilha ("WAY 45 - B" == "WAY45 - B")."""
+    return re.sub(r"[^A-Z0-9]", "", _normalizar(texto))
+
+
+def _padrao_flexivel(nome: str) -> re.Pattern[str]:
+    """Regex do nome tolerante a espaços/pontos/hífens internos, com limite de
+    palavra nas pontas ("26" não casa com "26000"; "OX" não casa com "TOXICO")."""
+    partes = [re.escape(c) for c in _alnum(nome)]
+    return re.compile(r"(?<![A-Z0-9])" + r"[\s.\-–—]*".join(partes) + r"(?![A-Z0-9])")
+
+
 @dataclass(frozen=True)
 class ContextoQuimico:
     """Contexto sigiloso montado para o Passe B (SEM quantidades — C7)."""
@@ -67,19 +80,22 @@ def identificar_produtos(
     """Nomes de produto citados no chamado (função pura, testável).
 
     Prioridade: o campo "Produto" do formulário dinâmico (select de opções
-    fixas — match exato de graça, Seção 3.3); fallback: varredura do texto
-    livre por palavra inteira, nomes mais longos primeiro (evita "26" capturar
+    fixas — casamento por comparação ALFANUMÉRICA, tolerante à divergência de
+    grafia formulário × planilha, ex.: "WAY 45 - B" × "WAY45 - B"); fallback:
+    varredura do texto livre com regex flexível a espaços/pontos internos e
+    limite de palavra, nomes mais longos primeiro (evita "26" capturar
     "ADITIVO 1090" ou casar com "26000")."""
-    por_norma = {_normalizar(n): n for n in nomes_conhecidos}
+    por_alnum: dict[str, str] = {}
+    for n in nomes_conhecidos:
+        por_alnum.setdefault(_alnum(n), n)
     if produto_form:
-        alvo = por_norma.get(_normalizar(produto_form))
+        alvo = por_alnum.get(_alnum(produto_form))
         if alvo:
             return [alvo]
     achados: list[str] = []
     norma_texto = _normalizar(texto_livre or "")
     for nome in sorted(nomes_conhecidos, key=len, reverse=True):
-        padrao = rf"(?<![A-Z0-9]){re.escape(_normalizar(nome))}(?![A-Z0-9])"
-        if re.search(padrao, norma_texto):
+        if _padrao_flexivel(nome).search(norma_texto):
             achados.append(nome)
         if len(achados) >= _MAX_PRODUTOS:
             break
