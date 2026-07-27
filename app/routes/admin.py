@@ -42,7 +42,7 @@ from app import cache
 from app.auth.dependencies import CurrentUser, enforce_admin_mfa, get_current_user
 from app.avatar_storage import AvatarStorageError, avatar_path, enviar_avatar, preparar_avatar
 from app.config import get_settings
-from app.db import rls_request_scope
+from app.db import admin_connection, rls_request_scope
 from app.repositories.admin import AdminRepo, get_admin_repo
 from app.repositories.chamados import (
     CACHE_CATEGORIAS,
@@ -53,11 +53,18 @@ from app.repositories.chamados import (
 )
 from app.security.csrf import get_csrf
 from app.security.password_policy import SENHA_MIN_CHARS
-from app.security.uploads import UploadInvalido
+from app.security.uploads import UploadInvalido, validar_anexo
 from app.services.admin import AdminService
+from app.services.ingestao_quimico import ingerir_conn
 from app.templating import render
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# Painel da base do Químico (F4): quem mantém a base é o próprio Químico.
+_DEPTO_QUIMICO = "Dpto Químico"
+# Limites de upload da reingestão (a planilha é pequena; o PDF de fichas ~6MB).
+_MAX_PLANILHA_BYTES = 15 * 1024 * 1024
+_MAX_PDF_BYTES = 30 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -74,6 +81,10 @@ class AdminCtx:
     # `admin_context` hoje, mas mantido explícito para não acoplar o gate de
     # avatar ao de acesso geral se este último ganhar mais grupos no futuro.
     pode_editar_avatares: bool = False
+    # F4 (2026-07-24): staff do Dpto Químico (e o TI) pode manter a base de
+    # conhecimento do agente Químico (`base_quimico_*`) pelo painel de upload —
+    # ver `base_quimico`/`ingerir_base_quimico`.
+    pode_editar_base_quimico: bool = False
 
 
 async def admin_context(
@@ -110,10 +121,21 @@ async def admin_context(
         is_mkt_operador = bool(
             perfil and perfil.get("role") == "OPERADOR" and perfil.get("departamento") == "Marketing"
         )
-        if not (is_ti or is_admin_dep or is_mkt_operador):
+        # F4 (2026-07-24): staff do Químico (OPERADOR ou ADMIN do Dpto Químico)
+        # ganha uma porta de entrada — só para manter a base do agente Químico
+        # (`_require_base_quimico`); os demais recursos do painel seguem seus
+        # próprios gates. Um ADMIN do Químico já entrava por `is_admin_dep`;
+        # isto acrescenta o OPERADOR (analista) do setor.
+        is_quimico_staff = bool(
+            perfil
+            and perfil.get("role") in ("OPERADOR", "ADMIN")
+            and perfil.get("departamento") == _DEPTO_QUIMICO
+        )
+        if not (is_ti or is_admin_dep or is_mkt_operador or is_quimico_staff):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Área restrita a gestores (Admin do setor), TI e Operador do Marketing.",
+                detail="Área restrita a gestores (Admin do setor), TI, Operador do "
+                "Marketing e staff do Químico.",
             )
         # MFA (item 3.3, Fase 1): o painel é a superfície de maior privilégio, então
         # é aqui que o aal2 é exigido do papel ADMIN. Levanta MfaChallengeRequired
@@ -130,6 +152,7 @@ async def admin_context(
         yield AdminCtx(
             user=user, perfil=perfil, is_ti=is_ti, escopo=escopo, mfa_nudge=mfa_nudge,
             pode_editar_avatares=(is_ti or is_admin_dep or is_mkt_operador),
+            pode_editar_base_quimico=(is_ti or is_quimico_staff),
         )
 
 
@@ -151,6 +174,16 @@ def _require_pode_editar_avatares(ctx: AdminCtx) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Sem permissão para alterar fotos de perfil.",
+        )
+
+
+def _require_base_quimico(ctx: AdminCtx) -> None:
+    """Manter a base do agente Químico (F4): TI ou staff (OPERADOR/ADMIN) do
+    próprio Dpto Químico — ver `AdminCtx.pode_editar_base_quimico`."""
+    if not ctx.pode_editar_base_quimico:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sem permissão para manter a base de conhecimento do Químico.",
         )
 
 
@@ -583,6 +616,108 @@ async def editar_plano(
     campos = {c: _minutos(c) for c in _PLANO_CAMPOS}
     await repo.atualizar_plano(ctx.user.claims, plano_id, campos=campos)
     return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --------------------------------------------------------------------------
+# Base de conhecimento do agente Químico (F4) — upload de planilha + PDF de
+# fichas técnicas, reingestão determinística via app.services.ingestao_quimico
+# (mesma lógica da CLI `scripts/ingestao_base_quimico.py`).
+# --------------------------------------------------------------------------
+
+
+@router.get("/base-quimico")
+async def base_quimico(
+    request: Request,
+    ok: str = "",
+    erro: str = "",
+    ctx: AdminCtx = Depends(admin_context),
+):
+    _require_base_quimico(ctx)
+    return render(
+        request,
+        "admin/base_quimico.html",
+        {
+            **_base_ctx(ctx),
+            "ok": ok,
+            "erro": erro,
+            "relatorio": None,
+            "max_planilha_mb": _MAX_PLANILHA_BYTES // (1024 * 1024),
+            "max_pdf_mb": _MAX_PDF_BYTES // (1024 * 1024),
+        },
+    )
+
+
+@router.post("/base-quimico")
+async def ingerir_base_quimico(
+    request: Request,
+    planilha: UploadFile = File(...),
+    fichas_pdf: UploadFile | None = File(None),
+    remover_ausentes: bool = Form(False),
+    ctx: AdminCtx = Depends(admin_context),
+    _: None = Depends(_csrf_guard),
+):
+    """Sobe a planilha (+ PDF opcional) e faz upsert nas tabelas
+    ``base_quimico_*`` numa ``admin_connection`` (bypassa RLS — a ingestão
+    mexe em tabelas fora do escopo normal do usuário, mesmo do próprio
+    químico). O parse é determinístico (openpyxl/pypdf, sem LLM — Regra de
+    Ouro #4); as quantidades das formulações nunca passam por um modelo.
+
+    Erro de validação simples (arquivo ausente/tipo errado) → redirect com
+    ``erro=`` (padrão do painel). Sucesso renderiza a própria página com o
+    relatório completo (contagens, fichas sem produto, produtos ausentes) —
+    informação demais para caber numa querystring de redirect."""
+    _require_base_quimico(ctx)
+
+    def _volta(*, erro: str):
+        from urllib.parse import urlencode
+
+        qs = urlencode({"erro": erro})
+        return RedirectResponse(f"/admin/base-quimico?{qs}", status_code=status.HTTP_303_SEE_OTHER)
+
+    if not planilha or not planilha.filename:
+        return _volta(erro="Selecione a planilha (.xlsx).")
+
+    try:
+        bruto = await planilha.read(_MAX_PLANILHA_BYTES + 1)
+        planilha_val = validar_anexo(planilha.filename, bruto, max_bytes=_MAX_PLANILHA_BYTES)
+    except UploadInvalido as exc:
+        return _volta(erro=f"Planilha inválida: {exc}")
+    if planilha_val.ext != "xlsx":
+        return _volta(erro="A planilha precisa ser um arquivo .xlsx.")
+
+    pdf_bytes: bytes | None = None
+    if fichas_pdf is not None and fichas_pdf.filename:
+        try:
+            bruto_pdf = await fichas_pdf.read(_MAX_PDF_BYTES + 1)
+            pdf_val = validar_anexo(fichas_pdf.filename, bruto_pdf, max_bytes=_MAX_PDF_BYTES)
+        except UploadInvalido as exc:
+            return _volta(erro=f"PDF de fichas inválido: {exc}")
+        if pdf_val.ext != "pdf":
+            return _volta(erro="O arquivo de fichas técnicas precisa ser um .pdf.")
+        pdf_bytes = pdf_val.conteudo
+
+    try:
+        async with admin_connection() as conn:
+            relatorio = await ingerir_conn(
+                conn, planilha_val.conteudo, pdf_bytes, remover_ausentes=remover_ausentes
+            )
+    except KeyError as exc:
+        return _volta(erro=f"Planilha fora do padrão esperado — aba ausente: {exc}.")
+    except Exception:  # noqa: BLE001 — parse/formato inesperado: mensagem genérica ao usuário
+        return _volta(erro="Não foi possível interpretar os arquivos. Confira o formato e tente novamente.")
+
+    return render(
+        request,
+        "admin/base_quimico.html",
+        {
+            **_base_ctx(ctx),
+            "ok": "Base atualizada com sucesso.",
+            "erro": "",
+            "relatorio": relatorio,
+            "max_planilha_mb": _MAX_PLANILHA_BYTES // (1024 * 1024),
+            "max_pdf_mb": _MAX_PDF_BYTES // (1024 * 1024),
+        },
+    )
 
 
 # --------------------------------------------------------------------------

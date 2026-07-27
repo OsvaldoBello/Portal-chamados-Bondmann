@@ -17,6 +17,7 @@ testpaths = ["tests"]
 addopts = "-q"
 markers = [
   "rls: suíte e2e contra Supabase local real (item 1.7/M9); skip automático sem RLS_DATABASE_URL.",
+  "redteam: bateria de red team do agente Químico (F5, Seção 8.3 do plano_md_mestre_IA.md); a camada comportamental (test_comportamental.py) pula automaticamente sem IA_REDTEAM_LIVE=1.",
 ]
 
 [tool.ruff]

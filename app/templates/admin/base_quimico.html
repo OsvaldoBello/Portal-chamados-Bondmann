@@ -1,0 +1,102 @@
+{% extends "workspace/workspace_base.html" %}
+{% set active = "base-quimico" %}
+{% block title %}Base do Químico — Admin{% endblock %}
+{% block heading %}Base de conhecimento do Químico{% endblock %}
+{% block subheading %}Planilha de produtos/matérias-primas + fichas técnicas (agente Químico){% endblock %}
+{% block content %}
+
+{% if ok %}<div class="mb-4 rounded-lg bg-sla-ok/10 border border-sla-ok/30 px-4 py-2.5 text-sm text-sla-ok">{{ ok }}</div>{% endif %}
+{% if erro %}<div class="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">{{ erro }}</div>{% endif %}
+
+<section class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+  <h3 class="font-display font-bold text-navy mb-1">Reingestão da base</h3>
+  <p class="text-xs text-muted mb-4">
+    Suba a planilha <strong>.xlsx</strong> (16 abas — produtos, matérias-primas, formulações e playbooks) e,
+    opcionalmente, o <strong>PDF</strong> de fichas técnicas. A interpretação é <strong>determinística</strong>
+    (sem IA) e faz <em>upsert</em> por chave: reenviar a mesma planilha atualiza os registros existentes, nunca
+    duplica. Sem PDF, as fichas já cadastradas não são alteradas.
+  </p>
+  <form method="post" action="/admin/base-quimico" enctype="multipart/form-data" class="space-y-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="grid sm:grid-cols-2 gap-4">
+      <label class="flex flex-col gap-1">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Planilha (.xlsx) — obrigatória</span>
+        <input type="file" name="planilha" accept=".xlsx" required
+               class="text-sm rounded-lg ring-1 ring-line px-3 py-2 outline-none focus:ring-2 focus:ring-navy-500 file:mr-3 file:rounded-md file:border-0 file:bg-navy-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-navy">
+        <span class="text-[11px] text-faint">Até {{ max_planilha_mb }}MB.</span>
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Fichas técnicas (.pdf) — opcional</span>
+        <input type="file" name="fichas_pdf" accept=".pdf"
+               class="text-sm rounded-lg ring-1 ring-line px-3 py-2 outline-none focus:ring-2 focus:ring-navy-500 file:mr-3 file:rounded-md file:border-0 file:bg-navy-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-navy">
+        <span class="text-[11px] text-faint">Até {{ max_pdf_mb }}MB. Deixe em branco para manter as fichas atuais.</span>
+      </label>
+    </div>
+    <label class="flex items-start gap-2 text-xs text-muted">
+      <input type="checkbox" name="remover_ausentes" value="true" class="mt-0.5">
+      <span>
+        <strong class="text-navy">Remover produtos ausentes da planilha.</strong>
+        Apaga do banco (com fichas e formulações em cascata) qualquer produto que estava cadastrado mas não veio
+        nesta planilha. Deixe desmarcado para só adicionar/atualizar.
+      </span>
+    </label>
+    <button type="submit" class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+      Enviar e reprocessar
+    </button>
+  </form>
+</section>
+
+{% if relatorio %}
+<section class="bg-white rounded-xl shadow-card border border-line/60 p-5 mt-6">
+  <h3 class="font-display font-bold text-navy mb-3">Resultado da última ingestão</h3>
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+    {% for chave, rotulo in [("produtos", "Produtos"), ("materias_primas", "Matérias-primas"), ("playbooks", "Playbooks"), ("formulacoes", "Formulações"), ("fichas", "Fichas técnicas")] %}
+    {% if chave in relatorio.contagens %}
+    <div class="rounded-lg bg-surface border border-line/60 px-3.5 py-3">
+      <div class="text-[11px] font-semibold uppercase tracking-wide text-muted">{{ rotulo }}</div>
+      <div class="text-xl font-bold text-navy">{{ relatorio.contagens[chave] }}</div>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+
+  {% if relatorio.produtos_removidos %}
+  <p class="mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-sm text-amber-800">
+    {{ relatorio.produtos_removidos }} produto(s) removido(s) por não estarem mais na planilha.
+  </p>
+  {% elif relatorio.produtos_ausentes %}
+  <div class="mb-4">
+    <p class="text-sm font-semibold text-navy mb-1">Produtos no banco ausentes desta planilha (mantidos)</p>
+    <p class="text-xs text-muted mb-2">Marque "Remover produtos ausentes" e reenvie para excluí-los.</p>
+    <ul class="text-sm text-muted list-disc list-inside space-y-0.5">
+      {% for nome in relatorio.produtos_ausentes %}
+      <li>{{ nome }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if relatorio.fichas_inesperadas %}
+  <div class="mb-4 rounded-lg bg-red-50 border border-red-200 px-3.5 py-3">
+    <p class="text-sm font-semibold text-red-700 mb-1">⚠️ Fichas do PDF sem produto correspondente (revisar)</p>
+    <ul class="text-sm text-red-700 list-disc list-inside space-y-0.5">
+      {% for pagina, ancora in relatorio.fichas_inesperadas %}
+      <li>pág. {{ pagina }}: {{ ancora or "(página não identificada)" }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if relatorio.fichas_esperadas %}
+  <div class="text-xs text-muted">
+    <p class="font-semibold text-navy mb-1">Fichas sem produto (esperado)</p>
+    <ul class="list-disc list-inside space-y-0.5">
+      {% for pagina, ancora, motivo in relatorio.fichas_esperadas %}
+      <li>pág. {{ pagina }}: {{ ancora }} — {{ motivo }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

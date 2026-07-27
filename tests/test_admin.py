@@ -981,3 +981,104 @@ def test_export_csv():
     assert "BOND-2026-00001" in r.text
     assert "A impressora do 2º andar não liga" in r.text   # descrição do chamado
     assert "Hardware" in r.text                             # subcategoria
+
+
+# --------------------------------------------------------------------------
+# Base de conhecimento do Químico (F4) — gate de acesso + fluxo de upload.
+# --------------------------------------------------------------------------
+
+
+def test_base_quimico_operador_de_outro_setor_recebe_403():
+    perfil = FakePerfilRepo(is_ti=False, role="OPERADOR", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="OPERADOR"), perfil=perfil) as c:
+        assert c.get("/admin/base-quimico").status_code == 403
+
+
+def test_base_quimico_admin_de_outro_setor_recebe_403():
+    # ADMIN de outro setor entra no painel (indicadores), mas não nesta tela —
+    # só o TI ou o staff do próprio Dpto Químico mantém essa base.
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        assert c.get("/admin/base-quimico").status_code == 403
+
+
+def test_base_quimico_operador_do_quimico_acessa_o_formulario():
+    perfil = FakePerfilRepo(is_ti=False, role="OPERADOR", departamento="Dpto Químico")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="OPERADOR"), perfil=perfil) as c:
+        r = c.get("/admin/base-quimico")
+    assert r.status_code == 200
+    assert 'action="/admin/base-quimico"' in r.text
+    assert 'name="planilha"' in r.text
+
+
+def test_base_quimico_ti_ve_link_no_menu():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin")
+    assert 'href="/admin/base-quimico"' in r.text
+
+
+def test_base_quimico_admin_de_outro_setor_nao_ve_link_no_menu():
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin")
+    assert 'href="/admin/base-quimico"' not in r.text
+
+
+def test_base_quimico_planilha_com_extensao_invalida_retorna_erro():
+    with admin_client(FakeAdmin()) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/admin/base-quimico",
+            files={"planilha": ("base.txt", b"conteudo qualquer", "text/plain")},
+            headers={"X-CSRF-Token": t},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "erro=" in r.headers["location"]
+
+
+def test_base_quimico_post_sucesso_chama_ingerir_e_mostra_relatorio(monkeypatch):
+    import app.routes.admin as admin_mod
+    from app.services.ingestao_quimico import RelatorioIngestao
+
+    chamadas: dict = {}
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _fake_admin_connection():
+        yield "fake-conn"
+
+    async def _fake_ingerir_conn(conn, planilha_bytes, pdf_bytes=None, *, remover_ausentes=False):
+        chamadas["conn"] = conn
+        chamadas["planilha_bytes"] = planilha_bytes
+        chamadas["pdf_bytes"] = pdf_bytes
+        chamadas["remover_ausentes"] = remover_ausentes
+        return RelatorioIngestao(
+            contagens={"produtos": 3, "fichas": 1},
+            fichas_esperadas=[],
+            fichas_inesperadas=[(12, "ADITIVO X")],
+            produtos_ausentes=["PRODUTO ANTIGO"],
+            produtos_removidos=0,
+        )
+
+    monkeypatch.setattr(admin_mod, "admin_connection", _fake_admin_connection)
+    monkeypatch.setattr(admin_mod, "ingerir_conn", _fake_ingerir_conn)
+
+    xlsx_bytes = b"PK\x03\x04" + b"0" * 50
+    with admin_client(FakeAdmin()) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/admin/base-quimico",
+            files={"planilha": ("base.xlsx", xlsx_bytes, "application/octet-stream")},
+            data={"remover_ausentes": "true"},
+            headers={"X-CSRF-Token": t},
+        )
+    assert r.status_code == 200
+    assert chamadas["conn"] == "fake-conn"
+    assert chamadas["planilha_bytes"] == xlsx_bytes
+    assert chamadas["pdf_bytes"] is None
+    assert chamadas["remover_ausentes"] is True
+    assert "Base atualizada com sucesso" in r.text
+    assert "ADITIVO X" in r.text
+    assert "PRODUTO ANTIGO" in r.text

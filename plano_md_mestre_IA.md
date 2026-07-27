@@ -632,6 +632,18 @@ via pergunta da IA); execução documentada.
 **Critério de saída:** **zero vazamentos** — pré-requisito absoluto do go-live do Químico.
 **DoD:** ver Seção 8.3 (inclui gatilho de reexecução permanente).
 
+**✅ F5 CONCLUÍDA (2026-07-27):** corpus de 6 cenários (as categorias mínimas da Seção 8.3,
+`tests/red_team/casos/*.json`) + suíte estrutural (26 testes, sempre verde, sem rede — prova os
+invariantes 8.2 sob o corpus malicioso) + suíte comportamental (11 testes, chamada real ao
+`gpt-5.4-mini` de produção, opt-in via `IA_REDTEAM_LIVE=1`) executada ao vivo:
+**zero vazamentos** (nenhuma saída, em nenhum passe/categoria, produziu percentual/proporção de
+quantidade) — relatório em `tests/red_team/execucoes/2026-07-27.md`. Kill switch do gatilho
+permanente (Seção 8.3) instalado: `tests/red_team/conftest.py` pula a suíte comportamental sem
+a env (mesmo padrão de skip da suíte `rls`), documentando que qualquer PR em
+`app/ia/prompts/quimico_*`/modelo do Químico deve reexecutá-la com `IA_REDTEAM_LIVE=1` antes do
+merge. Critério de saída da F5 atendido — **F6 (go-live) liberada** quanto ao gate de segurança;
+resta o gate de negócio (DPA da OpenAI, C5, e homologação formal dos gestores).
+
 ### F6 — Homologação e go-live (S8)
 **Entregas:** homologação com gestores de TI e Químico; ajustes finais; `IA_TRIAGEM_MODO_SOMBRA=false`
 para o Químico; revisão dos KPIs iniciais.
@@ -684,6 +696,23 @@ a qualidade do modelo é avaliada por amostragem humana (modo sombra), não por 
   resultado) numa tabela no fim deste doc ou em `docs/CHANGELOG.md`.
 - **Critério:** zero vazamentos, sempre. Um vazamento = Químico volta a modo sombra até correção
   + bateria completa verde.
+
+**Execução 2026-07-27 (F5, primeira bateria):**
+
+| Data | Modelo | Estrutural | Comportamental | Resultado |
+|---|---|---|---|---|
+| 2026-07-27 | `gpt-5.4-mini` | 26 testes (`test_estrutural.py`) | 11 testes (`test_comportamental.py`, `IA_REDTEAM_LIVE=1`) | **ZERO VAZAMENTOS** |
+
+Detalhe por categoria (Passe A = canal público; Passe B = canal interno, contexto SINTÉTICO com
+sentinelas — nunca dado real da base): `pedido_direto_formulacao`, `ignore_instrucoes`,
+`autoridade_falsa`, `extracao_incremental`, `quantidades_aproximadas` (A+B, as 5 miram
+quantidade/formulação diretamente) e `exfiltracao_nota_publica` (A + teste dedicado provando que
+a saída do Passe A não reproduz o texto/sentinelas de uma nota interna gerada por um Passe B
+independente). Denylist comportamental: regex de percentual/proporção/`g/L`/`ppm`/"partes" — zero
+ocorrências em qualquer saída, mesmo sob indução explícita a "chutar uma aproximação". Relatório
+bruto em `tests/red_team/execucoes/2026-07-27.md`. Reexecutar (`IA_REDTEAM_LIVE=1 pytest
+tests/red_team/`) a cada mudança de `app/ia/prompts/quimico_*.md` ou de modelo do Químico, e
+acrescentar uma linha nesta tabela.
 
 ---
 
@@ -762,6 +791,36 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 > prefixando `doc IA`. Linha mais nova no topo. Decisões arquiteturais grandes viram ADR em
 > `docs/adr/`.
 
+- 2026-07-27 · doc IA · F5 executada (Seções 7, 8.3, Estado) · **Red team do Químico entregue —
+  zero vazamentos.** Corpus versionado (`tests/red_team/casos/*.json`) cobrindo as 6 categorias
+  mínimas da Seção 8.3: pedido direto de formulação, "ignore as instruções anteriores"
+  (roleplay "DAN"), autoridade falsa (gerente do setor), extração incremental multi-rodada,
+  indução a quantidades "aproximadas" e tentativa de vazar a nota interna via pergunta pública.
+  Duas camadas: **estrutural** (`tests/red_team/test_estrutural.py`, 26 testes, modelo mockado,
+  sempre roda) prova que os invariantes 8.2 seguram mesmo com o corpus malicioso no chamado
+  (payload do Passe A sem sentinelas, Passe B nunca roda no ciclo de perguntas,
+  `ia_triagens.resultado` do B só com metadados, `ContextoQuimico` sem campo de
+  quantidade/formulação, nenhuma query do módulo referenciando `base_quimico_formulacoes`,
+  `is_interna` fixado sem parâmetro nas duas funções de persistência); **comportamental**
+  (`tests/red_team/test_comportamental.py`, 11 testes, chamada REAL ao `gpt-5.4-mini` de
+  produção, opt-in via `IA_REDTEAM_LIVE=1` — skip automático sem a env, mesmo padrão da suíte
+  `rls`) mede a obediência do modelo ao prompt via denylist de padrões de quantidade
+  (percentual/proporção/g·L⁻¹/ppm), usando um contexto SINTÉTICO com sentinelas (nunca dado real
+  da base) para o Passe B. Execução ao vivo em 2026-07-27: **11/11 verdes, zero ocorrência de
+  padrão de quantidade em qualquer saída** — relatório em `tests/red_team/execucoes/2026-07-27.md`,
+  tabela de execução na Seção 8.3. Marker `redteam` registrado em `pyproject.toml`. Critério de
+  saída da F5 (zero vazamentos) atendido — gate de segurança da F6 liberado; resta o gate de
+  negócio (DPA OpenAI, C5, e homologação formal).
+- 2026-07-27 · doc IA · F4 (painel operacional) · **Painel `/admin/base-quimico` para reingestão
+  da base pelo próprio setor.** Complementa `af0848f` (ingestão vira `app/services/ingestao_quimico.py`,
+  reaproveitada aqui — sem duplicar lógica de parse): rota `GET/POST /admin/base-quimico` (upload
+  de planilha `.xlsx` + PDF de fichas opcional, `remover_ausentes` para excluir produtos fora da
+  planilha) restrita a TI ou staff (OPERADOR/ADMIN) do próprio Dpto Químico
+  (`AdminCtx.pode_editar_base_quimico`); escrita via `admin_connection()` (a ingestão mexe em
+  tabelas fora do escopo normal de RLS de qualquer papel). Item de menu "Base do Químico" no
+  workspace, visível ao TI e ao Químico. 7 testes novos em `tests/test_admin.py` (gate 403 para
+  outros setores, formulário renderiza, link do menu por perfil, extensão inválida rejeitada,
+  sucesso chama `ingerir_conn` e mostra o relatório).
 - 2026-07-24 · doc IA · F2 ajuste (Seções 2.4, 10.1) · **Limiar de confiança das perguntas
   vira env — decisão do usuário: BAIXA e MÉDIA também perguntam.** Contexto: BOND-2026-00601
   (primeiro chamado do TI fora da sombra) recebeu `confianca=BAIXA` do modelo e a guarda fixa
@@ -891,7 +950,7 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 | Busca de semelhantes (FTS português) | ✅ Implementado + **migration `0053` aplicada em produção** (2026-07-23) | F3 | Migration `0053_chamados_fts` (coluna GENERATED + índice GIN; 0052 era de outra frente — C1). `app/repositories/ia_busca.py` (`websearch_to_tsquery` com termos do modelo unidos por OR; filtro por departamento obrigatório no SQL; resolução = última mensagem pública de staff via LATERAL). Semelhantes citados na nota interna (código + título + resolução truncada); códigos auditados em `ia_triagens.resultado`. Falha/sem-resultado degrada graciosamente. 8 testes unit + 4 e2e (`test_ia_busca_fts.py`); query validada contra o corpus real de produção. Falta: checagem manual de ~15 notas (critério de saída, junto da sombra F1). |
 | Base `base_quimico_*` + role `ia_worker` + ingestão | ✅ Implementado + **migration `0054` aplicada e base ingerida em produção** (2026-07-23) | F4 | C7 endurecida: RLS on nas 5 tabelas; policies só `TO ia_worker` nas 4 liberadas; formulações sem GRANT/policy (pós-check em produção). `scripts/ingestao_base_quimico.py` re-executável (idempotência provada: 2 execuções, mesmas contagens — 60 produtos, 94 MPs, 16 playbooks, 437 formulações, 39 fichas). Arquivos-fonte NUNCA no repo (`openpyxl`/`pypdf` só em requirements-dev). Pendente gestor: senha do role + `IA_WORKER_DATABASE_URL` no Railway; revisar 20 produtos sem ficha no PDF. |
 | Agente Químico dois passes + invariantes | ✅ Código implementado (2026-07-23) — **atrás de env** | F4 | Motor: Passe A (`prompts/quimico_passe_a.md`, chamado + playbook de perguntas, ZERO dado de base) decide triagem/perguntas; Passe B (`prompts/quimico_passe_b.md`, 6M adaptado do GPT interno + recuperação seletiva via `app/ia/contexto_quimico.py`) escreve a nota interna (`is_interna=true` fixado). `ia_triagens` ganha linhas A e B por rodada; `resultado` do B só com metadados (Seção 4.1). Falha do B ⇒ nota do A (degradação). `gerar_e_salvar_resumo` aposentado quando a triagem cobre o Químico (transição C2 em `portal.py`). 15 testes novos (`test_ia_quimico.py`) + e2e RLS; suíte completa verde. Liga com `IA_TRIAGEM_DEPARTAMENTOS+=Dpto Químico` (sombra). Gate go-live: DPA OpenAI (C5) + F5 red team. |
-| Red team (corpus + bateria comportamental) | Planejado | F5 | Zero vazamentos = go-live; reexecução a cada mudança de prompt/modelo. |
+| Red team (corpus + bateria comportamental) | ✅ **Implementado + executado (2026-07-27) — ZERO VAZAMENTOS** | F5 | `tests/red_team/` (marker `redteam`): corpus de 6 categorias mínimas (`casos/*.json`); suíte estrutural (26 testes, sempre verde, sem rede) prova os invariantes 8.2 sob o corpus malicioso; suíte comportamental (11 testes, `gpt-5.4-mini` real, opt-in `IA_REDTEAM_LIVE=1`, skip automático sem a env — mesmo padrão da suíte `rls`) rodada ao vivo em 2026-07-27, zero vazamentos (relatório em `tests/red_team/execucoes/2026-07-27.md`). Gatilho permanente documentado: reexecutar a cada mudança de `app/ia/prompts/quimico_*`/modelo. Critério de saída da F5 atendido; F6 liberada quanto ao gate de segurança. |
 | Homologação + go-live geral | Planejado | F6 | Aprovação formal TI + Químico; runbook de operação. |
 | pgvector / busca semântica | Backlog | pós-v1 | Gatilho: FTS errando por vocabulário com volume relevante. |
 | Extensão a Marketing/RH | Backlog | pós-90 dias | Mesma arquitetura; decisão por KPIs. |
