@@ -12,7 +12,9 @@ from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, status
 
+from app.auth import mfa_remember
 from app.auth.session import ACCESS_COOKIE, REFRESH_COOKIE, SessionTokens
+from app.config import get_settings
 from app.db import rls_connection
 from app.security.jwt_verifier import TokenInvalido, get_verifier
 
@@ -60,12 +62,18 @@ class CurrentUser:
     claims: dict          # claims completos, repassados ao RLS via SET LOCAL
 
 
-def enforce_admin_mfa(user: CurrentUser) -> bool:
+def enforce_admin_mfa(user: CurrentUser, request: Request | None = None) -> bool:
     """Impõe ``aal2`` para o papel ADMIN (item 3.3 — Fase 1, Seção 3.4.1).
 
     Retorna se a UI deve exibir o **nudge** (ADMIN que ainda não habilitou MFA).
     Levanta :class:`MfaChallengeRequired` quando o ADMIN **tem** MFA habilitado
-    mas a sessão está em ``aal1`` (precisa verificar).
+    mas a sessão está em ``aal1`` (precisa verificar) — **exceto** se este
+    navegador tem o cookie de "dispositivo confiável" válido (pedido do
+    usuário, 2026-07-27: lembrar o dispositivo por 30 dias e não pedir o
+    código de novo nele; ver ``app/auth/mfa_remember.py``).
+
+    ``request`` é opcional para preservar o enforcement como função **pura**
+    nos testes unitários (sem app/rede) — ausente, equivale a "sem cookie".
 
     Fase 1 = *opcional com aviso* (decisão do gestor, 2026-07-16): ADMIN sem MFA
     continua entrando, só é avisado — tornar obrigatório é a Fase 2 (Sprint 4).
@@ -76,6 +84,10 @@ def enforce_admin_mfa(user: CurrentUser) -> bool:
     if aal(user.claims) == AAL_MFA:
         return False
     if mfa_habilitado(user.claims):
+        if request is not None and mfa_remember.dispositivo_confiavel(
+            request, get_settings(), user.id
+        ):
+            return False
         raise MfaChallengeRequired()
     return True
 

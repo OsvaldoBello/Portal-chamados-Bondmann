@@ -16,7 +16,10 @@ from contextlib import contextmanager
 import pytest
 from fastapi.testclient import TestClient
 
-from app.auth import mfa
+from types import SimpleNamespace
+
+from app.auth import mfa, mfa_remember
+from app.auth import routes as auth_routes
 from app.auth.dependencies import (
     CurrentUser,
     MfaChallengeRequired,
@@ -25,6 +28,7 @@ from app.auth.dependencies import (
 )
 from app.auth.routes import _tem_fator_verificado
 from app.auth.session import SessionTokens
+from app.config import get_settings
 from app.main import app
 from app.repositories.admin import get_admin_repo
 from app.repositories.chamados import get_chamados_repo
@@ -71,6 +75,58 @@ def test_nao_admin_fica_fora_do_enforcement_nesta_fatia(role):
     # "NÃO faça: obrigar MFA para OPERADOR/CLIENTE nesta fatia" — nem bloqueio
     # nem nudge, mesmo que a conta tenha MFA e a sessão esteja em aal1.
     assert enforce_admin_mfa(_user(role, aal="aal1", mfa_enabled=True)) is False
+
+
+# ---------------------------------------------------------------------------
+# "Lembrar este dispositivo" por 30 dias (pedido do usuário, 2026-07-27)
+# ---------------------------------------------------------------------------
+
+def _cookie_request(token: str | None):
+    """Fake mínimo de Request — só `.cookies` é lido por `dispositivo_confiavel`
+    (mesmo truque de `tests/test_session.py::_request`, sem framework)."""
+    return SimpleNamespace(cookies={mfa_remember.REMEMBER_COOKIE: token} if token else {})
+
+
+def _token_para(user_id: str) -> str:
+    return mfa_remember._serializer(get_settings()).dumps(user_id)
+
+
+def test_dispositivo_confiavel_aceita_cookie_valido_do_mesmo_usuario():
+    token = _token_para(UID)
+    assert mfa_remember.dispositivo_confiavel(_cookie_request(token), get_settings(), UID) is True
+
+
+def test_dispositivo_confiavel_rejeita_cookie_de_outro_usuario():
+    # Cookie assinado, mas para outra conta (ex.: troca de usuário no mesmo navegador).
+    token = _token_para("11111111-1111-1111-1111-111111111111")
+    assert mfa_remember.dispositivo_confiavel(_cookie_request(token), get_settings(), UID) is False
+
+
+def test_dispositivo_confiavel_sem_cookie():
+    assert mfa_remember.dispositivo_confiavel(_cookie_request(None), get_settings(), UID) is False
+
+
+def test_dispositivo_confiavel_cookie_adulterado():
+    assert mfa_remember.dispositivo_confiavel(_cookie_request("lixo.invalido"), get_settings(), UID) is False
+
+
+def test_dispositivo_confiavel_expira_apos_30_dias(monkeypatch):
+    # A promessa é "30 dias", não "para sempre" — cookie fora da janela não vale.
+    token = _token_para(UID)
+    monkeypatch.setattr(mfa_remember, "MAX_AGE_SEGUNDOS", -1)
+    assert mfa_remember.dispositivo_confiavel(_cookie_request(token), get_settings(), UID) is False
+
+
+def test_enforce_admin_mfa_pula_step_up_com_dispositivo_confiavel():
+    # O cookie substitui o passo de digitar o código, mas não eleva a aal2 do
+    # JWT — só o enforcement local (`enforce_admin_mfa`) trata como satisfeito.
+    request = _cookie_request(_token_para(UID))
+    assert enforce_admin_mfa(_user("ADMIN", aal="aal1", mfa_enabled=True), request) is False
+
+
+def test_enforce_admin_mfa_sem_dispositivo_confiavel_ainda_exige_step_up():
+    with pytest.raises(MfaChallengeRequired):
+        enforce_admin_mfa(_user("ADMIN", aal="aal1", mfa_enabled=True), _cookie_request(None))
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +375,51 @@ def test_verify_em_sessao_ja_verificada_volta_para_home():
         assert r.headers["location"] == "/workspace"
 
 
+def test_verify_com_lembrar_dispositivo_marcado_grava_cookie(monkeypatch):
+    async def fake_fator(tokens):
+        return "fator-1"
+
+    async def fake_confirmar(tokens, factor_id, codigo):
+        return SessionTokens("access-aal2", "refresh-novo")
+
+    monkeypatch.setattr(mfa, "fator_verificado_id", fake_fator)
+    monkeypatch.setattr(mfa, "confirmar", fake_confirmar)
+    with _client(_user("ADMIN", aal="aal1", mfa_enabled=True)) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/mfa/verify",
+            data={"codigo": "123456", "lembrar_dispositivo": "true"},
+            headers={"X-CSRF-Token": t},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert mfa_remember.REMEMBER_COOKIE in c.cookies
+        assert mfa_remember.dispositivo_confiavel(
+            _cookie_request(c.cookies[mfa_remember.REMEMBER_COOKIE]), get_settings(), UID
+        )
+
+
+def test_verify_sem_marcar_lembrar_dispositivo_nao_grava_cookie(monkeypatch):
+    async def fake_fator(tokens):
+        return "fator-1"
+
+    async def fake_confirmar(tokens, factor_id, codigo):
+        return SessionTokens("access-aal2", "refresh-novo")
+
+    monkeypatch.setattr(mfa, "fator_verificado_id", fake_fator)
+    monkeypatch.setattr(mfa, "confirmar", fake_confirmar)
+    with _client(_user("ADMIN", aal="aal1", mfa_enabled=True)) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/mfa/verify",
+            data={"codigo": "123456"},
+            headers={"X-CSRF-Token": t},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert mfa_remember.REMEMBER_COOKIE not in c.cookies
+
+
 # ---------------------------------------------------------------------------
 # Step-up no login (fatores vêm na própria resposta do GoTrue)
 # ---------------------------------------------------------------------------
@@ -348,3 +449,103 @@ def test_tem_fator_verificado_sem_fatores():
         factors = None
 
     assert _tem_fator_verificado(_U()) is False
+
+
+# ---------------------------------------------------------------------------
+# POST /login: o redirect para /mfa/verify considera o dispositivo confiável
+# (bug reportado pelo usuário, 2026-07-27 — este é o caminho real do 1º acesso
+# pós-login, ANTES de qualquer rota passar por `admin_context`/
+# `enforce_admin_mfa`; checar o cookie só lá era tarde demais).
+# ---------------------------------------------------------------------------
+
+class _FakeGoTrueUser:
+    def __init__(self, user_id, *, role="ADMIN", fatores=None):
+        self.id = user_id
+        self.app_metadata = {"role": role}
+        self.factors = fatores or []
+
+
+class _FakeSession:
+    access_token = "access-novo"
+    refresh_token = "refresh-novo"
+
+
+class _FakeSignInResult:
+    def __init__(self, user):
+        self.user = user
+        self.session = _FakeSession()
+
+
+class _FakeAuth:
+    def __init__(self, user):
+        self._user = user
+
+    async def sign_in_with_password(self, _creds):
+        return _FakeSignInResult(self._user)
+
+
+class _FakeSupabaseClient:
+    def __init__(self, user):
+        self.auth = _FakeAuth(user)
+
+
+def _fake_login(monkeypatch, user):
+    async def fake_ensure_supabase():
+        return _FakeSupabaseClient(user)
+
+    monkeypatch.setattr(auth_routes, "ensure_supabase", fake_ensure_supabase)
+
+
+def test_login_com_mfa_ativo_sem_dispositivo_confiavel_vai_para_step_up(monkeypatch):
+    _fake_login(monkeypatch, _FakeGoTrueUser(UID, fatores=[_FakeFator("verified")]))
+    with _client() as c:
+        t = _csrf(c)
+        r = c.post(
+            "/login", data={"email": "a@b.com", "password": "x"},
+            headers={"X-CSRF-Token": t}, follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/mfa/verify"
+
+
+def test_login_com_dispositivo_confiavel_pula_o_step_up(monkeypatch):
+    # Reprodução exata do bug reportado: usuário marcou "lembrar dispositivo",
+    # saiu e entrou de novo — não deve ser mandado para /mfa/verify.
+    _fake_login(monkeypatch, _FakeGoTrueUser(UID, role="ADMIN", fatores=[_FakeFator("verified")]))
+    with _client() as c:
+        t = _csrf(c)
+        c.cookies.set(mfa_remember.REMEMBER_COOKIE, _token_para(UID))
+        r = c.post(
+            "/login", data={"email": "a@b.com", "password": "x"},
+            headers={"X-CSRF-Token": t}, follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/workspace"
+
+
+def test_login_com_cookie_de_outro_usuario_ainda_exige_step_up(monkeypatch):
+    _fake_login(monkeypatch, _FakeGoTrueUser(UID, fatores=[_FakeFator("verified")]))
+    with _client() as c:
+        t = _csrf(c)
+        c.cookies.set(
+            mfa_remember.REMEMBER_COOKIE,
+            _token_para("11111111-1111-1111-1111-111111111111"),
+        )
+        r = c.post(
+            "/login", data={"email": "a@b.com", "password": "x"},
+            headers={"X-CSRF-Token": t}, follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/mfa/verify"
+
+
+def test_login_sem_mfa_vai_direto_para_home_independente_do_cookie(monkeypatch):
+    _fake_login(monkeypatch, _FakeGoTrueUser(UID, fatores=[]))
+    with _client() as c:
+        t = _csrf(c)
+        r = c.post(
+            "/login", data={"email": "a@b.com", "password": "x"},
+            headers={"X-CSRF-Token": t}, follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/workspace"

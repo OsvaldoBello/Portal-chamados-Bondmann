@@ -477,7 +477,10 @@ class AdminRepo:
         O e-mail vive em ``auth.users`` (fora do alcance do papel ``authenticated``)
         e é resolvido na rota via Admin API; aqui devolvemos o que a RLS permite.
         ``avatar_path``/``updated_at`` alimentam a miniatura + cache-busting da
-        foto (``app.avatar_storage.avatar_public_url``) na própria listagem."""
+        foto (``app.avatar_storage.avatar_public_url``) na própria listagem.
+        Ordem alfabética pelo nome (pedido do usuário, 2026-07-27) — a tela é a
+        mesma para TI e para o Operador do Marketing (``pode_editar_avatares``),
+        então a troca vale para os dois."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
@@ -485,7 +488,7 @@ class AdminRepo:
                        d.nome AS departamento, p.departamento_id
                   FROM perfis p
                   LEFT JOIN departamentos d ON d.id = p.departamento_id
-                 ORDER BY (p.role = 'CLIENTE'), d.nome NULLS LAST, p.nome
+                 ORDER BY lower(p.nome)
                 """
             )
             return [dict(r) for r in rows]

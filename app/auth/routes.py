@@ -12,9 +12,11 @@ from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import RedirectResponse
 from slowapi import Limiter
 
+from app.auth import mfa_remember
 from app.auth.dependencies import CurrentUser, get_optional_user
 from app.auth.session import REFRESH_COOKIE, SessionTokens, clear_session, set_session
 from app.auth.supabase_client import create_isolated_client, ensure_supabase
+from app.config import get_settings
 from app.security.csrf import get_csrf
 from app.security.password_policy import SENHA_MIN_CHARS
 from app.templating import render
@@ -83,7 +85,18 @@ def register_auth_routes(app, limiter: Limiter) -> None:
         # MFA (item 3.3): a sessão recém-criada por senha é aal1. Quem já tem fator
         # verificado vai direto ao step-up em vez da home — os fatores já vêm na
         # resposta do login, então isso não custa nenhuma chamada extra ao GoTrue.
-        destino = "/mfa/verify" if _tem_fator_verificado(result.user) else home_for(role)
+        # 2026-07-27 (pedido do usuário): "lembrar este dispositivo" pula o
+        # step-up aqui também — é ESTE redirect que mandava até quem marcou o
+        # checkbox de volta para `/mfa/verify` a cada novo login (o cookie só
+        # era checado no gate do painel `/admin`, tarde demais: o usuário nunca
+        # chegava lá sem passar por aqui primeiro). A sessão segue aal1 (só o
+        # código real eleva a aal2); é o gate do `/admin` que trata o cookie
+        # como equivalente ao step-up.
+        tem_fator = _tem_fator_verificado(result.user)
+        dispositivo_ok = tem_fator and mfa_remember.dispositivo_confiavel(
+            request, get_settings(), result.user.id
+        )
+        destino = "/mfa/verify" if (tem_fator and not dispositivo_ok) else home_for(role)
         response = RedirectResponse(destino, status_code=status.HTTP_303_SEE_OTHER)
         set_session(
             response,

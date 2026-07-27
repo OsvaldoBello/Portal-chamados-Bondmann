@@ -77,6 +77,7 @@ class AdminCtx:
 
 
 async def admin_context(
+    request: Request,
     user: CurrentUser = Depends(get_current_user),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
@@ -120,7 +121,7 @@ async def admin_context(
         # devolve o nudge se ele ainda não habilitou. OPERADOR (TI ou Marketing),
         # que também entra aqui, fica de fora — nesta fatia o MFA só é imposto ao
         # papel ADMIN.
-        mfa_nudge = enforce_admin_mfa(user)
+        mfa_nudge = enforce_admin_mfa(user, request)
 
         # Indicadores só do PRÓPRIO setor (decisão 2026-07-09) — TI passa a ser
         # escopado igual a qualquer Admin de departamento; "Todos os setores"

@@ -24,10 +24,11 @@ from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import RedirectResponse
 from slowapi import Limiter
 
-from app.auth import mfa
+from app.auth import mfa, mfa_remember
 from app.auth.dependencies import AAL_MFA, CurrentUser, aal, get_current_user, mfa_habilitado
 from app.auth.routes import home_for
 from app.auth.session import REFRESH_COOKIE, SessionTokens, current_access_token, set_session
+from app.config import get_settings
 from app.security.csrf import get_csrf
 from app.templating import render
 
@@ -117,6 +118,7 @@ def register_mfa_routes(app, limiter: Limiter) -> None:
         request: Request,
         factor_id: str = Form(...),
         codigo: str = Form(...),
+        lembrar_dispositivo: bool = Form(False),
         user: CurrentUser = Depends(get_current_user),
         _: None = Depends(_csrf_guard),
     ):
@@ -145,6 +147,8 @@ def register_mfa_routes(app, limiter: Limiter) -> None:
         await mfa.marcar_mfa_habilitado(user.id, True)
         resposta = RedirectResponse("/mfa?ok=1", status_code=status.HTTP_303_SEE_OTHER)
         set_session(resposta, novos)
+        if lembrar_dispositivo:
+            mfa_remember.lembrar_dispositivo(resposta, get_settings(), user.id)
         return resposta
 
     @router.get("/verify")
@@ -159,6 +163,7 @@ def register_mfa_routes(app, limiter: Limiter) -> None:
     async def verify_submit(
         request: Request,
         codigo: str = Form(...),
+        lembrar_dispositivo: bool = Form(False),
         user: CurrentUser = Depends(get_current_user),
         _: None = Depends(_csrf_guard),
     ):
@@ -189,6 +194,8 @@ def register_mfa_routes(app, limiter: Limiter) -> None:
 
         resposta = RedirectResponse(home_for(user.role), status_code=status.HTTP_303_SEE_OTHER)
         set_session(resposta, novos)
+        if lembrar_dispositivo:
+            mfa_remember.lembrar_dispositivo(resposta, get_settings(), user.id)
         return resposta
 
     app.include_router(router)
