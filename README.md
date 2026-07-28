@@ -1,15 +1,15 @@
-# Portal de Chamados — Bondmann Química
+# Portal de Chamados, Bondmann Química
 
-Help desk interno da Bondmann Química: colaboradores abrem chamados para os
-setores com fila de atendimento (**TI**, **RH**, **Marketing**), e o staff de
-cada setor atende, responde e conduz o chamado até a resolução, com SLA,
-histórico auditável e avaliação (CSAT) do autor.
+Help desk interno da Bondmann Química. Colaboradores abrem chamados para os
+setores que têm fila de atendimento (TI, RH e Marketing), e o staff de cada
+setor atende, responde e conduz o chamado até fechar, com SLA, histórico
+auditável e avaliação (CSAT) do autor no final.
 
-> A fonte de verdade de arquitetura, decisões de engenharia e schema é o
+> Arquitetura, decisões de engenharia e schema ficam no
 > [`plano_mestre_desenvolvimento.md`](plano_mestre_desenvolvimento.md). Este
-> README é um resumo operacional — qualquer dúvida mais profunda sobre *por
-> que* uma decisão foi tomada, ou o estado de implementação de cada fase, está
-> lá (Seção 7 / Tabela de Estado de Implementação).
+> README é só o resumo operacional. Se a dúvida for sobre *por que* uma decisão
+> foi tomada, ou sobre o estado de implementação de cada fase, é lá que está
+> (Seção 7 e a Tabela de Estado de Implementação).
 
 ---
 
@@ -22,12 +22,12 @@ histórico auditável e avaliação (CSAT) do autor.
 | Acesso a dados | `asyncpg` (domínio, via Supavisor *transaction mode*) + `supabase-py` async (Auth/Storage) |
 | Frontend | Server-rendered com Jinja2 + HTMX 2.0 (fragmentos), Alpine.js (build CSP), Tailwind CSS (build CLI) |
 | Testes | `pytest` + `pytest-asyncio`, contra Supabase local (RLS real, sem mocks) |
-| Deploy | Docker (Railway — alvo único de produção, decisão 2026-07-15) |
+| Deploy | Docker no Railway (alvo único de produção, decisão de 2026-07-15) |
 
-Padrão de página: o FastAPI é a única fonte de verdade — o navegador só exibe
-e dispara requisições HTMX; nenhuma regra de negócio roda no cliente. Alpine.js
-cuida apenas de estado efêmero de UI (abrir/fechar modal, toggle de aba); nunca
-guarda dados de domínio (lista de chamados, status, conteúdo de mensagem).
+O padrão de página é simples: o FastAPI decide tudo, e o navegador só exibe e
+dispara requisições HTMX. Nenhuma regra de negócio roda no cliente. O Alpine.js
+cuida de estado efêmero de UI, como abrir e fechar modal ou alternar aba, e
+nunca guarda dado de domínio (lista de chamados, status, conteúdo de mensagem).
 
 ## Estrutura do projeto
 
@@ -47,19 +47,19 @@ tests/               pytest, um arquivo por área
 
 ## Modelo de acesso (quem vê o quê)
 
-O isolamento não é por "empresa cliente" (o portal é uso interno, sem
-multi-tenant externo) — é por **departamento** de destino do chamado:
+O isolamento não é por "empresa cliente", já que o portal é de uso interno e não
+tem multi-tenant externo. Ele é por departamento de destino do chamado:
 
-- **Funcionário (CLIENTE):** vê e avalia apenas os chamados que abriu.
-- **Staff (OPERADOR/ADMIN) de um setor com fila** (TI/RH/Marketing): vê e
-  atende só os chamados do próprio setor, além dos que ele mesmo abriu.
-- **Líder de setor** (ADMIN com `departamento_id`, mesmo em setor sem fila):
-  enxerga em modo leitura os chamados abertos pela sua equipe, mesmo que
-  destinados a outro setor — não atende fora do seu setor.
-- **Notas internas** (`is_interna = true`) nunca chegam ao autor do chamado.
+- Funcionário (papel CLIENTE) vê e avalia apenas os chamados que abriu.
+- Staff (OPERADOR ou ADMIN) de um setor com fila, ou seja, TI, RH e Marketing,
+  atende só os chamados do próprio setor, mais os que ele mesmo abriu.
+- Líder de setor, que é o ADMIN com `departamento_id` mesmo em setor sem fila,
+  enxerga em modo leitura os chamados abertos pela sua equipe, inclusive os
+  destinados a outro setor. Ele não atende fora do setor dele.
+- Notas internas (`is_interna = true`) nunca chegam ao autor do chamado.
 
-Toda essa matriz é aplicada via **Row Level Security no Postgres**, não em
-código Python — ver [Segurança](#segurança) abaixo.
+Essa matriz inteira é aplicada por Row Level Security no Postgres, e não em
+código Python. Ver [Segurança](#segurança) abaixo.
 
 ## Rodando localmente
 
@@ -88,102 +88,108 @@ npm run build:css               # ou o script equivalente em package.json
 pytest
 ```
 
-- Testes de RLS/isolamento rodam **contra Supabase local de verdade**
-  (`supabase start`), impersonando cada papel via
-  `SET LOCAL ROLE authenticated` + `set_config('request.jwt.claims', ...)` —
-  o mesmo mecanismo que o app usa em produção. **Não mockamos o client
-  Supabase** para nada que toque RLS.
-- Lógica pura (matemática de SLA, geração de código do chamado, formatação de
-  data/fuso) é coberta por unit tests com mocks.
-- Cada teste roda em transação com rollback — sem efeito colateral entre
-  testes, e testes nunca mutam staging/produção.
+Os testes de RLS e isolamento rodam contra um Supabase local de verdade
+(`supabase start`), impersonando cada papel com `SET LOCAL ROLE authenticated` e
+`set_config('request.jwt.claims', ...)`, que é o mesmo mecanismo que o app usa em
+produção. Nada que toque RLS é testado com o client Supabase mockado.
+
+Lógica pura, como a matemática de SLA, a geração do código do chamado e a
+formatação de data e fuso, tem unit test com mock. Cada teste roda dentro de uma
+transação com rollback, então não há efeito colateral entre testes e nenhum
+teste muta staging ou produção.
 
 ## Boas práticas adotadas neste repositório
 
-- **Versionamento travado:** toda dependência é *pinned* em
-  `requirements.txt`/`pyproject.toml` (sem `>=` soltos); mudança de versão é
-  decisão explícita, não efeito colateral de um `pip install`.
-- **Migrations numeradas e imutáveis:** `supabase/migrations/NNNN_descrição.sql`,
-  nunca editadas após aplicadas — correções viram uma nova migration
-  (`_fix_...`). Isso mantém o histórico do schema reproduzível em qualquer
-  ambiente (local, staging, produção).
-- **Documento vivo:** decisões de arquitetura, contradições resolvidas entre
-  spec e briefing, e lacunas preenchidas ficam registradas no
-  `plano_mestre_desenvolvimento.md` com marcação explícita
-  (`[DECISÃO DE ENGENHARIA]`, `⚠️ A VALIDAR`) — nada de "combinado tácito" que
-  só existe na cabeça de quem escreveu o código.
-- **TDD adaptado:** nenhuma rota ou função de lógica não-trivial é
-  considerada pronta sem suíte verde em `pytest`.
-- **Sem lógica de negócio no cliente:** o backend é a única fonte de verdade;
-  HTMX/Alpine só reagem ao que o servidor manda.
-- **Commits e PRs por escopo:** mudanças de schema (migration), backend e
-  frontend relacionadas a uma mesma feature andam juntas; mudanças
-  não-relacionadas não são misturadas no mesmo commit.
+- Toda dependência é *pinned* em `requirements.txt` e `pyproject.toml`, sem
+  `>=` solto. Trocar de versão é decisão explícita, não efeito colateral de um
+  `pip install`.
+- Migrations seguem o formato `supabase/migrations/NNNN_descrição.sql` e não são
+  editadas depois de aplicadas. Correção vira uma migration nova (`_fix_...`),
+  o que mantém o histórico do schema reproduzível em qualquer ambiente: local,
+  staging ou produção.
+- Decisões de arquitetura, contradições resolvidas entre spec e briefing e
+  lacunas preenchidas ficam registradas no `plano_mestre_desenvolvimento.md` com
+  marcação explícita (`[DECISÃO DE ENGENHARIA]`, `⚠️ A VALIDAR`). Nada de
+  combinado tácito que só existe na cabeça de quem escreveu o código.
+- TDD adaptado: nenhuma rota ou função de lógica não-trivial é considerada
+  pronta sem suíte verde no `pytest`.
+- Nada de lógica de negócio no cliente. O backend decide, HTMX e Alpine só
+  reagem ao que o servidor manda.
+- Commits e PRs por escopo: migration, backend e frontend de uma mesma feature
+  andam juntos, e mudanças não-relacionadas não entram no mesmo commit.
 
 ## Segurança
 
-Resumo da Seção 3 do plano mestre — cada item ali tem o racional completo.
+Resumo da Seção 3 do plano mestre. O racional completo de cada item está lá.
 
 ### Autenticação e sessão
-- Autenticação delegada ao **Supabase Auth (GoTrue)** — login, hash/verificação
-  de senha, refresh e recuperação de senha (`/esqueci-senha` → OTP por e-mail →
-  `/redefinir-senha`) são responsabilidade do Supabase, não reimplementados
-  no app. Ver [planejamento de melhoria do hashing](#próximo-passo-planejado--hashing-de-senha) abaixo.
-- **Sem signup público:** colaboradores são criados direto no Supabase
-  (Authentication → Users); a promoção de papel/departamento é feita por SQL
+
+A autenticação é delegada ao Supabase Auth (GoTrue): login, hash e verificação
+de senha, refresh e recuperação de senha (`/esqueci-senha`, OTP por e-mail,
+`/redefinir-senha`) são responsabilidade do Supabase, não reimplementados aqui.
+Ver o [planejamento de melhoria do hashing](#próximo-passo-planejado-hashing-de-senha)
+abaixo.
+
+- Não existe signup público. Colaboradores são criados direto no Supabase
+  (Authentication → Users), e a promoção de papel e departamento é feita por SQL
   (`supabase/registro_usuarios.sql`).
-- **Cookies de sessão:** access token JWT em cookie `httpOnly + Secure +
-  SameSite=Lax`; refresh token em cookie separado `httpOnly + Secure +
-  SameSite=Strict`. Nunca em `localStorage` nem `Authorization: Bearer` no
-  browser.
-- **Verificação de JWT local por request** (JWKS RS256/ES256, com fallback
-  HS256 legado) — evita validar contra a API do Supabase a cada chamada.
+- O access token JWT vai em cookie `httpOnly + Secure + SameSite=Lax` e o
+  refresh token em um cookie separado `httpOnly + Secure + SameSite=Strict`.
+  Nunca em `localStorage`, nunca como `Authorization: Bearer` no browser.
+- O JWT é verificado localmente a cada request (JWKS RS256/ES256, com fallback
+  HS256 legado), o que evita bater na API do Supabase a cada chamada.
 
 ### Isolamento de dados (RLS)
-- **Row Level Security habilitado em todas as tabelas de domínio.** A
-  `service_role` key (que bypassa RLS) **nunca** serve dado de usuário —
-  fica restrita a jobs administrativos auditados e jamais chega ao browser.
-- Domínio acessado via `asyncpg` sob Supavisor *transaction mode*, com claims
-  injetados por transação (`SET LOCAL` + `set_config('request.jwt.claims', ...)`)
-  — as políticas de RLS enxergam o usuário autenticado mesmo sob connection
-  pooling.
-- **Defesa em profundidade:** mesmo com RLS ativo, queries também filtram
-  explicitamente por `departamento_id`/`cliente_id`.
-- **Cache em memória é tenant/setor-scoped** por construção — chave de cache
-  sempre inclui o escopo, para não vazar dado entre departamentos.
+
+- Row Level Security está habilitado em todas as tabelas de domínio. A
+  `service_role` key, que bypassa RLS, nunca serve dado de usuário: fica
+  restrita a jobs administrativos auditados e jamais chega ao browser.
+- O domínio é acessado via `asyncpg` sob Supavisor *transaction mode*, com os
+  claims injetados por transação (`SET LOCAL` e
+  `set_config('request.jwt.claims', ...)`). Assim as políticas de RLS enxergam o
+  usuário autenticado mesmo com connection pooling no meio.
+- Defesa em profundidade: mesmo com RLS ativo, as queries continuam filtrando
+  explicitamente por `departamento_id` e `cliente_id`.
+- O cache em memória é escopado por tenant e setor por construção. A chave de
+  cache sempre inclui o escopo, para não vazar dado entre departamentos.
 
 ### Entrada e transporte
-- **CSRF:** double-submit cookie + header `X-CSRF-Token`, assinado com
-  `itsdangerous`, validado em toda mutação HTMX (`POST/PUT/PATCH/DELETE`).
-- **CSP estrita** sem `unsafe-eval`/`unsafe-inline` em `script-src` — por
-  isso Alpine.js roda no **build CSP** (sem `eval`/`Function`).
-- **HSTS, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
-  `Referrer-Policy` restritiva** aplicados via middleware em toda resposta.
-- **Validação de input via Pydantic** em todo corpo/query/form; autoescape do
-  Jinja2 sempre ligado; **SQL 100% parametrizado** (sem concatenação).
-- **Rate limiting (`slowapi`)** em `/login` e abertura de chamado, com IP real
-  extraído de `X-Forwarded-For` (atrás do proxy Railway).
+
+- CSRF com double-submit cookie e header `X-CSRF-Token`, assinado com
+  `itsdangerous` e validado em toda mutação HTMX (`POST/PUT/PATCH/DELETE`).
+- CSP estrita, sem `unsafe-eval` nem `unsafe-inline` em `script-src`. É por isso
+  que o Alpine.js roda no build CSP, que não usa `eval` nem `Function`.
+- HSTS, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` e um
+  `Referrer-Policy` restritivo aplicados por middleware em toda resposta.
+- Validação de input com Pydantic em todo corpo, query e form. O autoescape do
+  Jinja2 fica sempre ligado e o SQL é 100% parametrizado, sem concatenação.
+- Rate limiting (`slowapi`) em `/login` e na abertura de chamado, com o IP real
+  extraído de `X-Forwarded-For`, já que a aplicação fica atrás do proxy do
+  Railway.
 
 ### Upload de anexos
-- Bucket do Storage **privado**, nunca público; **signed URLs com TTL de 1h**,
-  regeneradas a cada renderização (nunca cacheadas além do TTL).
-- Limite de **10MB** por arquivo, allow-list de tipos, e **validação do MIME
-  real por magic bytes** (`python-magic`) — não confia em `Content-Type`/
-  extensão enviados pelo cliente.
-- Nome de arquivo sempre sanitizado/gerado (sem path traversal).
+
+- O bucket do Storage é privado, nunca público. O acesso é por signed URL com
+  TTL de 1h, regenerada a cada renderização e nunca cacheada além do TTL.
+- Limite de 10MB por arquivo, allow-list de tipos e validação do MIME real por
+  magic bytes (`python-magic`). O `Content-Type` e a extensão enviados pelo
+  cliente não são levados a sério.
+- O nome do arquivo é sempre sanitizado ou gerado, sem espaço para path
+  traversal.
 
 ### Segredos
-- `SUPABASE_URL`, `anon key`, `service_role key`, `DATABASE_URL` e segredos de
-  JWT ficam em variáveis de ambiente (Pydantic Settings). `.env` nunca é
-  commitado.
+
+`SUPABASE_URL`, `anon key`, `service_role key`, `DATABASE_URL` e os segredos de
+JWT ficam em variáveis de ambiente (Pydantic Settings). O `.env` nunca é
+commitado.
 
 ---
 
-## Próximo passo planejado — hashing de senha
+## Próximo passo planejado: hashing de senha
 
-Ver plano detalhado abaixo (seção separada nesta entrega). Resumo: hoje o
-hashing de senha **não é código deste repositório** — é feito pelo GoTrue
-(Supabase Auth), que usa bcrypt internamente. O plano avalia se/onde vale a
-pena reforçar isso (parâmetros do GoTrue, política de senha, MFA) versus
-implementar hashing próprio (cenário só necessário se algum fluxo passar a
-armazenar credencial fora do Supabase Auth).
+O plano detalhado está na seção separada desta entrega. Em resumo: hoje o
+hashing de senha não é código deste repositório. Quem faz é o GoTrue (Supabase
+Auth), que usa bcrypt internamente. O plano avalia se e onde vale reforçar isso,
+mexendo em parâmetros do GoTrue, política de senha e MFA, contra a alternativa
+de implementar hashing próprio. Esse segundo cenário só passa a ser necessário
+se algum fluxo começar a armazenar credencial fora do Supabase Auth.
