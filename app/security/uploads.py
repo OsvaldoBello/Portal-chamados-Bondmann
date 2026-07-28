@@ -3,7 +3,7 @@
 Regras (obrigatórias, decididas no servidor — nunca confiar no cliente):
 
 - **Limite de 10MB** por arquivo (checado no stream, sem carregar ilimitado).
-- **Allow-list de tipos:** ``pdf, jpg, png, mp4, docx, xlsx``.
+- **Allow-list de tipos:** ``pdf, jpg, png, mp4, docx, xlsx, pptx``.
 - **MIME real por *magic bytes*** (``python-magic``), não pelo ``Content-Type``
   nem pela extensão enviados pelo cliente.
 - **Sanitização do nome:** o objeto persistido usa um **UUID + extensão
@@ -20,9 +20,10 @@ import uuid
 from dataclasses import dataclass
 
 # Extensão canônica -> conjunto de MIMEs aceitos por *magic bytes* para ela.
-# docx/xlsx são contêineres ZIP (OOXML): libmagic moderno devolve o tipo OOXML
-# específico; versões antigas devolvem application/zip — ambos tolerados **apenas**
-# quando a extensão é docx/xlsx (defesa: a extensão sozinha nunca autoriza).
+# docx/xlsx/pptx são contêineres ZIP (OOXML): libmagic moderno devolve o tipo
+# OOXML específico; versões antigas devolvem application/zip — ambos tolerados
+# **apenas** quando a extensão é docx/xlsx/pptx (defesa: a extensão sozinha
+# nunca autoriza).
 _EXT_MIMES: dict[str, set[str]] = {
     "pdf":  {"application/pdf"},
     "jpg":  {"image/jpeg"},
@@ -35,6 +36,10 @@ _EXT_MIMES: dict[str, set[str]] = {
     },
     "xlsx": {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/zip",
+    },
+    "pptx": {
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "application/zip",
     },
 }
@@ -171,7 +176,7 @@ def validar_anexo(
 
     ext = _extensao(nome)
     if ext not in _EXT_MIMES:
-        permitidos = "pdf, jpg, png, mp4, docx, xlsx"
+        permitidos = "pdf, jpg, png, mp4, docx, xlsx, pptx"
         raise UploadInvalido(f"Tipo de arquivo não permitido. Aceitos: {permitidos}.")
 
     mime = detectar_mime(conteudo[:2048], magic_impl=magic_impl)

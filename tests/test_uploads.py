@@ -40,9 +40,27 @@ def test_jpeg_normaliza_extensao_para_jpg():
 
 
 def test_docx_aceita_zip_ooxml():
-    # docx é contêiner ZIP: libmagic antigo devolve application/zip — tolerado só p/ docx/xlsx.
+    # docx é contêiner ZIP: libmagic antigo devolve application/zip — tolerado só p/ docx/xlsx/pptx.
     a = validar_anexo("contrato.docx", ZIP, magic_impl=_magic("application/zip"))
     assert a.ext == "docx"
+
+
+def test_pptx_valido():
+    a = validar_anexo(
+        "apresentacao.pptx",
+        ZIP,
+        magic_impl=_magic(
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        ),
+    )
+    assert a.ext == "pptx"
+    assert a.nome_objeto.endswith(".pptx")
+
+
+def test_pptx_aceita_zip_ooxml():
+    # pptx é contêiner ZIP: libmagic antigo devolve application/zip — mesma tolerância do docx/xlsx.
+    a = validar_anexo("apresentacao.pptx", ZIP, magic_impl=_magic("application/zip"))
+    assert a.ext == "pptx"
 
 
 def test_extensao_fora_da_allowlist_rejeitada():

@@ -495,7 +495,7 @@ Headers obrigatórios em todas as respostas (middleware):
 - **RLS em `storage.objects`** com path **tenant-scoped**: convenção **`{empresa_id}/{chamado_id}/{arquivo}`**. Policies garantem que CLIENTE só acessa objetos sob o prefixo da própria empresa; OPERADOR/ADMIN conforme matriz.
 - **Validação de upload server-side (obrigatória):**
   - **Limite 10MB** por arquivo (rejeitar antes de persistir; checar `Content-Length` e tamanho real do stream).
-  - **Allow-list de tipos:** `pdf, jpg, png, mp4, docx, xlsx`.
+  - **Allow-list de tipos:** `pdf, jpg, png, mp4, docx, xlsx, pptx`.
   - **Validação do MIME real por *magic bytes*** (`python-magic`) — **não** confiar no `Content-Type`/extensão enviados pelo cliente.
   - **Sanitização do nome de arquivo** (remover path traversal, normalizar; preferir nome gerado/UUID + extensão validada).
   - **Idempotência contra duplo-submit** (token de submissão único por upload / dedupe por hash do conteúdo no mesmo chamado).
