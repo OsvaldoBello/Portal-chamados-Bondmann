@@ -73,7 +73,8 @@ def register_auth_routes(app, limiter: Limiter) -> None:
             )
 
         session = result.session
-        if session is None:
+        user = result.user
+        if session is None or user is None:
             return render(
                 request,
                 "login.html",
@@ -81,7 +82,7 @@ def register_auth_routes(app, limiter: Limiter) -> None:
                 status_code=status.HTTP_401_UNAUTHORIZED,
             )
 
-        role = _role_from_user(result.user)
+        role = _role_from_user(user)
         # MFA (item 3.3): a sessão recém-criada por senha é aal1. Quem já tem fator
         # verificado vai direto ao step-up em vez da home — os fatores já vêm na
         # resposta do login, então isso não custa nenhuma chamada extra ao GoTrue.
@@ -92,9 +93,9 @@ def register_auth_routes(app, limiter: Limiter) -> None:
         # chegava lá sem passar por aqui primeiro). A sessão segue aal1 (só o
         # código real eleva a aal2); é o gate do `/admin` que trata o cookie
         # como equivalente ao step-up.
-        tem_fator = _tem_fator_verificado(result.user)
+        tem_fator = _tem_fator_verificado(user)
         dispositivo_ok = tem_fator and mfa_remember.dispositivo_confiavel(
-            request, get_settings(), result.user.id
+            request, get_settings(), user.id
         )
         destino = "/mfa/verify" if (tem_fator and not dispositivo_ok) else home_for(role)
         response = RedirectResponse(destino, status_code=status.HTTP_303_SEE_OTHER)

@@ -12,14 +12,12 @@ de `app/auth/mfa.py`).
 from __future__ import annotations
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-from types import SimpleNamespace
-
-from app.auth import mfa, mfa_remember
-from app.auth import routes as auth_routes
+from app.auth import mfa, mfa_remember, routes as auth_routes
 from app.auth.dependencies import (
     CurrentUser,
     MfaChallengeRequired,

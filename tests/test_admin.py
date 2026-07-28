@@ -1065,7 +1065,13 @@ def test_base_quimico_post_sucesso_chama_ingerir_e_mostra_relatorio(monkeypatch)
     monkeypatch.setattr(admin_mod, "admin_connection", _fake_admin_connection)
     monkeypatch.setattr(admin_mod, "ingerir_conn", _fake_ingerir_conn)
 
-    xlsx_bytes = b"PK\x03\x04" + b"0" * 50
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("dummy.txt", "conteudo")
+    xlsx_bytes = buf.getvalue()
     with admin_client(FakeAdmin()) as c:
         t = _csrf(c)
         r = c.post(
