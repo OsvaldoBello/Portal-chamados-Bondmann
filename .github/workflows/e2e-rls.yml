@@ -22,6 +22,12 @@ on:
       - "tests/e2e/**"
       - ".github/workflows/e2e-rls.yml"
 
+# Cancela só runs de PR sobrepostos; em push nas branches de integração o
+# histórico de "estava verde neste commit" é o que autoriza aplicar migration.
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   e2e-rls:
     name: Matriz de RLS (Supabase local)
@@ -32,6 +38,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
       - name: Instalar dependências (runtime + dev)
         run: pip install -r requirements-dev.txt

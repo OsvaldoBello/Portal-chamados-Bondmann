@@ -5,6 +5,14 @@ on:
     branches: [main, develop, claude/develop]
   pull_request:
 
+# Um push em cima do outro na mesma branch cancela o run anterior — economiza
+# minutos sem perder sinal. Em push nas branches de integração NÃO cancela: o
+# histórico de "esta branch estava verde neste commit" é o que dá segurança para
+# aplicar migration/deploy, e um run cancelado não conta como verde.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   pytest:
     name: Suíte pytest + cobertura
@@ -15,6 +23,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
       - name: Instalar dependências (runtime + dev)
         run: pip install -r requirements-dev.txt
@@ -42,6 +52,27 @@ jobs:
       - name: Build do CSS (Tailwind)
         run: npm run build:css
 
+  docker-build:
+    name: Build da imagem Docker
+    runs-on: ubuntu-latest
+    # Achado da revisão de CI/CD (2026-07-29): o `build-css` provava o Tailwind
+    # isolado, mas ninguém buildava o Dockerfile — que é o artefato REAL de
+    # produção (Railway). Quebra de Dockerfile (ex.: o bump de `python:3.12-slim`
+    # -> `3.14-slim` proposto pelo Dependabot) só aparecia no deploy. Aqui o
+    # build roda sem push: prova que a imagem monta, sem publicar nada.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Buildar imagem (sem push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   migrations-sequence:
     name: Numeração de migrations
     runs-on: ubuntu-latest
@@ -55,6 +86,33 @@ jobs:
       - name: Checar cadeia 0001..NNNN contínua em supabase/migrations
         run: python scripts/check_migrations_sequence.py
 
+  migrations-aplicadas:
+    name: Migrations aplicadas no banco
+    runs-on: ubuntu-latest
+    # Achado da revisão de CI/CD (2026-07-29): nada no pipeline aplica
+    # `supabase/migrations/*` — é passo manual —, mas o Railway sobe o código no
+    # push. Migration esquecida = app nova contra schema velho (já aconteceu com
+    # a 0060/0061). Este job NÃO aplica DDL em produção; ele reprova quando falta
+    # aplicar, forçando a ordem certa: schema primeiro, código depois. Sem o
+    # secret `SUPABASE_DB_URL` configurado, o script avisa e passa — ver
+    # scripts/check_migrations_applied.py.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependências (asyncpg)
+        run: pip install -r requirements.txt
+
+      - name: Checar migrations pendentes de aplicação
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: python scripts/check_migrations_applied.py
+
   ruff:
     name: Lint (ruff)
     runs-on: ubuntu-latest
@@ -64,6 +122,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
       - name: Instalar ruff
         run: pip install -r requirements-dev.txt
@@ -80,6 +140,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
       - name: Instalar dependências (runtime + dev)
         run: pip install -r requirements-dev.txt

@@ -98,6 +98,21 @@ formatação de data e fuso, tem unit test com mock. Cada teste roda dentro de u
 transação com rollback, então não há efeito colateral entre testes e nenhum
 teste muta staging ou produção.
 
+## CI
+
+`.github/workflows/ci.yml` roda em todo push e PR: suíte `pytest` com piso de
+cobertura, build do Tailwind, **build da imagem Docker** (o artefato real de
+produção), numeração contínua das migrations, **migrations aplicadas no banco**,
+`ruff` e `mypy`. O `e2e-rls.yml` roda a suíte contra Supabase local, só quando o
+PR toca migrations, repositórios, `app/db.py` ou `tests/e2e/`.
+
+Migration é aplicada à mão (painel do Supabase ou MCP) — nenhum pipeline emite
+DDL em produção. O que o CI faz é **cobrar**: `scripts/check_migrations_applied.py`
+compara `supabase/migrations/` com o histórico do banco e reprova o build quando
+falta aplicar alguma, o que força a ordem certa (schema primeiro, código depois).
+O job precisa do secret `SUPABASE_DB_URL` no repositório; sem ele a checagem
+avisa e passa, em vez de travar quem clonou o projeto.
+
 ## Boas práticas adotadas neste repositório
 
 - Toda dependência é *pinned* em `requirements.txt` e `pyproject.toml`, sem

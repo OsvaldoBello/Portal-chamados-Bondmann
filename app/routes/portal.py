@@ -297,8 +297,17 @@ async def campos_fragmento(
 @limiter.limit("15/minute")
 async def criar_chamado(
     request: Request,
-    titulo: str = Form(...),           # "Assunto"
-    descricao: str = Form(...),
+    # Assunto/Descrição são obrigatórios, mas a exigência é do SERVIDOR (linha
+    # `if not titulo or not descricao` mais abaixo), não do FastAPI: no fluxo do
+    # Químico (2026-07-22) a tela ESCONDE os dois campos e o navegador manda
+    # ambos vazios — eles são derivados do formulário dinâmico. Com `Form(...)`
+    # isso funcionava por acidente da versão: das dependências bumpadas em diante
+    # (FastAPI 0.140/python-multipart 0.0.32) campo vazio conta como AUSENTE e o
+    # POST morria num 422 de JSON, antes de chegar na derivação — a abertura do
+    # Químico quebrava inteira. Com default explícito, a validação é sempre a
+    # nossa, que re-renderiza o formulário com mensagem em português.
+    titulo: str = Form(""),            # "Assunto"
+    descricao: str = Form(""),
     departamento_id: str = Form(""),   # destino: TI / RH / Marketing
     categoria_id: str = Form(""),
     subcategoria_id: str = Form(""),

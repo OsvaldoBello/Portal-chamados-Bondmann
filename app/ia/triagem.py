@@ -49,7 +49,7 @@ import logging
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -78,8 +78,6 @@ _DEPARTAMENTO_QUIMICO_NORM = "dpto químico"
 def _eh_quimico(departamento_nome: str | None) -> bool:
     return (departamento_nome or "").strip().lower() == _DEPARTAMENTO_QUIMICO_NORM
 
-
-_SaidaT = TypeVar("_SaidaT", bound=BaseModel)
 
 # Ranking do limiar de confiança para perguntas públicas
 # (`IA_TRIAGEM_PERGUNTAS_CONFIANCA_MINIMA`, Seção 2.4 do plano IA).
@@ -413,13 +411,13 @@ def _soma_tokens(acumulado: int | None, novo: int | None) -> int | None:
     return (acumulado or 0) + novo
 
 
-async def _chamar_modelo(
+async def _chamar_modelo[SaidaT: BaseModel](
     mensagens: list[dict[str, str]],
     settings: Settings,
     *,
     model: str | None = None,
-    schema: type[_SaidaT] = SaidaTriagem,  # type: ignore[assignment]
-) -> tuple[_SaidaT | None, str | None, int | None, int | None]:
+    schema: type[SaidaT] = SaidaTriagem,  # type: ignore[assignment]
+) -> tuple[SaidaT | None, str | None, int | None, int | None]:
     """Uma chamada estruturada + 1 retry em JSON inválido (Seção 2.1).
 
     Devolve ``(saida, erro, tokens_entrada, tokens_saida)`` — tokens somados
