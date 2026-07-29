@@ -34,9 +34,9 @@ async def _chamado_resolvido(
     cid = await conn.fetchval(
         f"""
         INSERT INTO chamados (empresa_id, cliente_id, departamento_id, titulo, descricao,
-                              status, operador_id, resolvido_em)
+                              status, operador_id, resolvido_em, telefone_contato)
         VALUES ($1, $2, $3, $4, $5, '{status}',
-                $6, CASE WHEN '{status}' = 'RESOLVIDO' THEN now() END)
+                $6, CASE WHEN '{status}' = 'RESOLVIDO' THEN now() END, '(51) 3333-4444')
         RETURNING id
         """,
         seed.empresa_id,

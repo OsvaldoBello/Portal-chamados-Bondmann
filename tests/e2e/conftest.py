@@ -117,8 +117,9 @@ async def _criar_chamado(
 ) -> uuid.UUID:
     return await conn.fetchval(
         """
-        INSERT INTO chamados (empresa_id, cliente_id, departamento_id, titulo, descricao, operador_id)
-        VALUES ($1, $2, $3, $4, 'descrição de teste e2e', $5)
+        INSERT INTO chamados (empresa_id, cliente_id, departamento_id, titulo, descricao,
+                              operador_id, telefone_contato)
+        VALUES ($1, $2, $3, $4, 'descrição de teste e2e', $5, '(51) 3333-4444')
         RETURNING id
         """,
         empresa_id,
