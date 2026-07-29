@@ -64,8 +64,11 @@ class FakeRepo:
     """Implementa a superfície usada pelas rotas do portal."""
 
     def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None,
-                 role="CLIENTE", departamento_id=None, chamados_colegas=None, avaliacao_pendente=None):
+                 role="CLIENTE", departamento_id=None, chamados_colegas=None, avaliacao_pendente=None,
+                 telefone=""):
         self._chamado = chamado
+        self._telefone = telefone
+        self.telefones_salvos: list[str] = []
         self._avaliacao_pendente = avaliacao_pendente
         self._role = role
         self._departamento_id = departamento_id
@@ -95,8 +98,12 @@ class FakeRepo:
     async def perfil(self, claims):
         return {
             "id": UID, "nome": "Cliente Teste", "role": self._role, "empresa_id": EMPRESA,
-            "departamento_id": self._departamento_id,
+            "departamento_id": self._departamento_id, "telefone": self._telefone,
         }
+
+    async def atualizar_telefone(self, claims, *, telefone):
+        self.telefones_salvos.append(telefone)
+        self._telefone = telefone
 
     async def chamados_departamento(self, claims, *, departamento_id=None, status=None,
                                      categoria_id=None, prioridade=None, limite=200):
@@ -440,6 +447,54 @@ def test_criar_com_telefone_valido_grava_no_chamado():
         )
     assert resp.status_code == 303
     assert repo.criados[0]["telefone_contato"] == "(11) 98765-4321"
+
+
+# --------------------------------------------------------------------------
+# Telefone no perfil: pré-preenche a abertura (2026-07-29, migration 0062)
+# --------------------------------------------------------------------------
+def test_form_de_abertura_vem_com_o_telefone_do_perfil():
+    repo = FakeRepo(telefone="(51) 98167-0729")
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/novo")
+    assert resp.status_code == 200
+    assert 'value="(51) 98167-0729"' in resp.text
+
+
+def test_form_de_abertura_sem_telefone_no_perfil_vem_vazio():
+    repo = FakeRepo()
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/novo")
+    assert resp.status_code == 200
+    assert 'name="telefone_contato" required value=""' in resp.text
+    # E avisa que o número informado aqui será guardado no perfil.
+    assert "não precisar digitar de novo" in resp.text
+
+
+def test_primeira_abertura_salva_o_telefone_no_perfil():
+    repo = FakeRepo()  # perfil ainda sem telefone
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados", data=_abertura_valida(telefone_contato="(11) 98765-4321"),
+            headers={"X-CSRF-Token": token}, follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert repo.telefones_salvos == ["(11) 98765-4321"]
+
+
+def test_abertura_com_telefone_diferente_nao_sobrescreve_o_do_perfil():
+    """Quem já cadastrou pode dar outro número NAQUELE chamado sem trocar o do
+    perfil — a troca é explícita, em "Meu perfil"."""
+    repo = FakeRepo(telefone="(51) 98167-0729")
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados", data=_abertura_valida(telefone_contato="(11) 3333-4444"),
+            headers={"X-CSRF-Token": token}, follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert repo.criados[0]["telefone_contato"] == "(11) 3333-4444"
+    assert repo.telefones_salvos == []
 
 
 # --------------------------------------------------------------------------

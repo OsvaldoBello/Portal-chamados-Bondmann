@@ -58,3 +58,45 @@ def test_shell_js_real_existe_e_gera_url_valida():
 
     assert (_STATIC_DIR / "js" / "shell.js").is_file()
     assert Path(_STATIC_DIR).name == "static"
+
+
+# --------------------------------------------------------------------------
+# `cor_rotulo` e `paragrafos_mensagem` (formatação do balão de chat)
+# --------------------------------------------------------------------------
+def test_cor_rotulo_e_estavel_e_neutra_para_vazio():
+    from app.templating import _ROTULO_NEUTRO, cor_rotulo
+
+    # Determinístico entre processos (MD5, não `hash()`): a mesma categoria
+    # precisa sair sempre com a mesma cor, senão o badge "pisca" a cada deploy.
+    assert cor_rotulo("Sistemas ERP") == cor_rotulo("  sistemas erp  ")
+    for vazio in ("", "   ", None):
+        assert cor_rotulo(vazio) == _ROTULO_NEUTRO
+
+
+def test_paragrafos_de_texto_vazio_some():
+    from app.templating import paragrafos_mensagem
+
+    for vazio in ("", None):
+        assert paragrafos_mensagem(vazio) == []
+    # Só linhas em branco: nenhum bloco é aberto (o fechamento é no-op).
+    assert paragrafos_mensagem("\n\n   \n") == []
+
+
+def test_paragrafos_rejuntam_quebra_manual_mas_preservam_lista():
+    from app.templating import paragrafos_mensagem
+
+    texto = (
+        "Bom dia, favor incluir o nome\r\n"
+        "da assessora no relatório.\n"
+        "\n"
+        "Preciso de:\n"
+        "- coluna de região\n"
+        "- coluna de assessora\n"
+    )
+    blocos = paragrafos_mensagem(texto)
+    # 1º parágrafo: quebrado na mão (colado de outro documento) → vira uma linha
+    # só, para o navegador reformatar na largura real do balão.
+    assert blocos[0] == "Bom dia, favor incluir o nome da assessora no relatório."
+    # 2º: tem marcador de lista → cada item continua em sua linha.
+    assert blocos[1] == "Preciso de:\n- coluna de região\n- coluna de assessora"
+    assert len(blocos) == 2

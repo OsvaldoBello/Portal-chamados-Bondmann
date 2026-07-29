@@ -34,15 +34,22 @@ def _user() -> CurrentUser:
 
 
 class FakeRepo:
-    def __init__(self):
+    def __init__(self, telefone=""):
         self.avatar_atualizado = None
+        self.telefone = telefone
+        self.telefones_salvos: list[str] = []
 
     async def perfil(self, claims):
         return {"id": UID, "nome": "Fulano", "role": "CLIENTE", "empresa_id": EMPRESA,
-                "departamento": "TI", "avatar_path": None, "avatar_atualizado_em": None}
+                "departamento": "TI", "avatar_path": None, "avatar_atualizado_em": None,
+                "telefone": self.telefone}
 
     async def atualizar_avatar(self, claims, *, avatar_path):
         self.avatar_atualizado = avatar_path
+
+    async def atualizar_telefone(self, claims, *, telefone):
+        self.telefones_salvos.append(telefone)
+        self.telefone = telefone
 
 
 @contextmanager
@@ -126,3 +133,118 @@ def test_upload_tipo_invalido_e_rejeitado(monkeypatch):
     assert r.status_code == 422
     assert "JPG ou PNG" in r.text
     assert repo.avatar_atualizado is None
+
+
+def test_post_sem_arquivo_selecionado_e_rejeitado_antes_da_rota():
+    """Input de arquivo vazio: o navegador manda a parte sem `filename`, o
+    Starlette a entrega como string e o FastAPI barra na validação de
+    `UploadFile` — 422 antes de qualquer efeito colateral. A guarda
+    `if not arquivo.filename` na rota é defesa em profundidade para o caso de
+    alguém montar o multipart na mão."""
+    repo = FakeRepo()
+    with perfil_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/perfil",
+            files={"arquivo": ("", BytesIO(b""), "image/png")},
+            headers={"X-CSRF-Token": t},
+        )
+    assert r.status_code == 422
+    assert repo.avatar_atualizado is None
+
+
+def test_upload_sem_sessao_valida_avisa_em_vez_de_500(monkeypatch):
+    """Sem o cookie de acesso não há JWT para o Storage (que roda com o token do
+    usuário, nunca service_role) — a pessoa precisa saber que é sessão, não foto."""
+    import app.routes.perfil as perfil_routes
+
+    async def _fake_enviar(*a, **k):
+        raise AssertionError("não deveria chegar ao Storage sem token")
+
+    monkeypatch.setattr(perfil_routes, "enviar_avatar", _fake_enviar)
+
+    repo = FakeRepo()
+    with perfil_client(repo) as c:
+        t = _csrf(c)
+        c.cookies.delete("sb_access")
+        r = c.post(
+            "/perfil",
+            files={"arquivo": ("foto.png", BytesIO(_PNG_3X5), "image/png")},
+            headers={"X-CSRF-Token": t},
+        )
+    assert r.status_code == 422
+    assert "Sessão expirada" in r.text
+    assert repo.avatar_atualizado is None
+
+
+def test_falha_do_storage_nao_grava_path_no_perfil(monkeypatch):
+    """Se o Storage recusa, `perfis.avatar_path` não pode apontar para um objeto
+    que não existe (o card mostraria imagem quebrada para sempre)."""
+    import app.routes.perfil as perfil_routes
+
+    async def _fake_enviar(*a, **k):
+        raise perfil_routes.AvatarStorageError("bucket fora do ar")
+
+    monkeypatch.setattr(perfil_routes, "enviar_avatar", _fake_enviar)
+
+    repo = FakeRepo()
+    with perfil_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/perfil",
+            files={"arquivo": ("foto.png", BytesIO(_PNG_3X5), "image/png")},
+            headers={"X-CSRF-Token": t},
+        )
+    assert r.status_code == 422
+    assert "Falha ao enviar a foto" in r.text
+    assert repo.avatar_atualizado is None
+
+
+# --------------------------------------------------------------------------
+# Telefone de contato no perfil (2026-07-29, migration 0062)
+# --------------------------------------------------------------------------
+def test_perfil_sem_telefone_avisa_que_a_abertura_vai_pedir():
+    with perfil_client(FakeRepo()) as c:
+        r = c.get("/perfil")
+    assert r.status_code == 200
+    assert 'action="/perfil/telefone"' in r.text
+    assert "Ainda não cadastrado" in r.text
+
+
+def test_perfil_com_telefone_preenche_o_campo():
+    with perfil_client(FakeRepo(telefone="(51) 98167-0729")) as c:
+        r = c.get("/perfil")
+    assert r.status_code == 200
+    assert 'value="(51) 98167-0729"' in r.text
+    assert "Ainda não cadastrado" not in r.text
+
+
+def test_salvar_telefone_valido_grava_e_redireciona():
+    repo = FakeRepo()
+    with perfil_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/perfil/telefone",
+            data={"telefone": "(51) 98167-0729"},
+            headers={"X-CSRF-Token": t},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/perfil")
+    assert repo.telefones_salvos == ["(51) 98167-0729"]
+
+
+def test_salvar_telefone_invalido_nao_grava():
+    repo = FakeRepo()
+    with perfil_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/perfil/telefone",
+            data={"telefone": "123"},
+            headers={"X-CSRF-Token": t},
+        )
+    assert r.status_code == 422
+    assert "contato válido" in r.text
+    assert repo.telefones_salvos == []
+    # O que foi digitado volta no campo, para a pessoa corrigir em vez de redigitar.
+    assert 'value="123"' in r.text

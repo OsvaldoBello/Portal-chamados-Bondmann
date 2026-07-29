@@ -875,9 +875,11 @@ class _FakeConnOrfaos:
     def __init__(self, ids: list[str]):
         self._ids = ids
         self.args: tuple | None = None
+        self.sql: str | None = None
 
     async def fetch(self, sql: str, *args):
         assert "ia_triagens" in sql and "chamados" in sql
+        self.sql = sql
         self.args = args
         return [{"id": i} for i in self._ids]
 
@@ -933,7 +935,27 @@ async def test_reconciliacao_reexecuta_cada_orfao():
         total = await triagem.reconciliar_triagens_perdidas()
     assert total == 2
     assert [c.args[0] for c in executar.await_args_list] == ["cid-1", "cid-2"]
-    assert conn.args == (["TI"], 2)  # departamentos_lista + teto de rodadas
+    # departamentos_lista + teto de rodadas + margem de idade do órfão
+    assert conn.args == (["TI"], 2, triagem._MARGEM_ORFAO)
+
+
+async def test_margem_de_orfao_e_de_um_minuto_e_vale_para_os_dois_casos():
+    """A margem existe só para não competir com o `create_task` recém-agendado
+    (~4 s no caminho normal). 1 min desde 2026-07-29: somada ao intervalo de
+    varredura, mantém o pior caso de recuperação em ~2 min (meta p95, Seção 9)
+    — com os 3 min anteriores dava ~8 min, o atraso visto no BOND-2026-00629.
+    Vale para as DUAS pernas do UNION (chamado novo e resposta do autor)."""
+    conn = _FakeConnOrfaos([])
+    with (
+        patch.object(triagem, "get_settings", return_value=_settings()),
+        patch.object(triagem, "admin_connection", _fake_admin_orfaos(conn)),
+    ):
+        await triagem.reconciliar_triagens_perdidas()
+    assert triagem._MARGEM_ORFAO == "1 minute"
+    assert conn.sql is not None
+    # Nenhum intervalo hardcoded sobrou no SQL: as duas pernas usam o parâmetro.
+    assert "interval '3 minutes'" not in conn.sql
+    assert conn.sql.count("now() - $3::interval") == 2
 
 
 async def test_reconciliacao_sem_orfaos_nao_chama_executar_triagem():

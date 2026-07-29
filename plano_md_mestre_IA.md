@@ -791,6 +791,24 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 > prefixando `doc IA`. Linha mais nova no topo. Decisões arquiteturais grandes viram ADR em
 > `docs/adr/`.
 
+- 2026-07-29 · doc IA · Seção 9 (latência) / 10.2 (KPI p95) · **Fechada a segunda metade do gap
+  de latência: recuperação de triagem perdida cai de ~8 min para ~2 min.** Investigação do
+  BOND-2026-00629 (nota interna 280 s após a abertura, `duracao_ms` de 3,8 s) com a série real:
+  das 19 triagens de rodada 1 desde 2026-07-23, **13 saíram em ~3,5 s** (caminho normal do
+  `create_task`, correção de 2026-07-23 funcionando) e **5 caíram na faixa 260–480 s** — janela
+  que só a **reconciliação** produz (varredura de 300 s + margem de 3 min para o chamado ser
+  considerado órfão). Ou seja: não existe triagem "meio lenta"; ou sai em segundos, ou o
+  `create_task` morreu (restart/redeploy) e a rede de segurança pegou depois. Correção em duas
+  frentes: `_MARGEM_ORFAO` 3 min → **1 min** (agora parâmetro `$3::interval` do SQL, não mais
+  literal duplicado nas duas pernas do UNION) e default de
+  `IA_TRIAGEM_RECONCILIACAO_INTERVALO_S` 300 s → **60 s** (o gestor já aplicou a env no
+  Railway). Encurtar a margem não arrisca dupla triagem: o motor revalida tudo no banco e o
+  UNIQUE `(chamado_id, rodada, passe)` + `ON CONFLICT DO NOTHING` fazem a execução repetida sair
+  sem gravar. **Limitação registrada:** a atribuição do sumiço da task a restart do container é
+  inferência do padrão dos gaps — o MCP do Railway segue sem acesso ao projeto de produção, e os
+  logs (`Task do chamado X iniciou N s após o agendamento`) confirmariam direto. Diagnóstico
+  reproduzível: gap entre `chamados.created_at` e `ia_triagens.created_at` dentro de
+  [margem, margem+intervalo] = reconciliação, não modelo.
 - 2026-07-27 · doc IA · F5 executada (Seções 7, 8.3, Estado) · **Red team do Químico entregue —
   zero vazamentos.** Corpus versionado (`tests/red_team/casos/*.json`) cobrindo as 6 categorias
   mínimas da Seção 8.3: pedido direto de formulação, "ignore as instruções anteriores"

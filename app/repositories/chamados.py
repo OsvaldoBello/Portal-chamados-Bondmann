@@ -76,7 +76,7 @@ class ChamadosRepo:
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """SELECT p.id, p.nome, p.role, p.empresa_id, p.departamento_id,
-                          p.avatar_path, p.updated_at AS avatar_atualizado_em,
+                          p.avatar_path, p.telefone, p.updated_at AS avatar_atualizado_em,
                           d.nome AS departamento,
                           COALESCE(d.nome = 'TI', false) AS is_ti,
                           COALESCE(d.recebe_chamados, false) AS recebe_chamados
@@ -99,6 +99,20 @@ class ChamadosRepo:
                 "UPDATE perfis SET avatar_path = $2 WHERE id = $1::uuid",
                 claims["sub"],
                 avatar_path,
+            )
+
+    async def atualizar_telefone(self, claims: dict, *, telefone: str) -> None:
+        """Grava o telefone de contato do PRÓPRIO usuário (migration 0062).
+
+        Mesma via do avatar: policy ``perfis_update_self`` (0033) restringe a
+        LINHA à do usuário e o trigger ``enforce_perfil_self_so_avatar`` (0062)
+        restringe a COLUNA — telefone de outra pessoa é barrado no banco, não só
+        aqui. O valor já vem validado por :func:`validar_telefone_contato`."""
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                "UPDATE perfis SET telefone = $2 WHERE id = $1::uuid",
+                claims["sub"],
+                telefone,
             )
 
     async def listar(self, claims: dict, *, limite: int = 100) -> list[dict[str, Any]]:

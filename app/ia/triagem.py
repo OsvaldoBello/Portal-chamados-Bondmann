@@ -813,6 +813,19 @@ async def _executar(chamado_id: str) -> None:
 # ------------------------------------------------------------------
 
 
+# Idade mínima do chamado (ou da resposta do autor) para a varredura considerá-lo
+# órfão. Existe só para não competir com o `create_task` recém-agendado que ainda
+# está no ar — o caminho normal termina em ~4 s (mediana real de produção, 19
+# triagens entre 2026-07-23 e 2026-07-29), então 1 min já é 15× a duração
+# esperada. Era 3 min até 2026-07-29: somado ao intervalo de varredura, punha o
+# pior caso de recuperação em ~8 min, longe da meta p95 < 2 min (Seção 9) — foi
+# o que se viu no BOND-2026-00629 (nota interna 4min40s após a abertura, com o
+# modelo levando 3,8 s). Encurtar não arrisca duplicar nada: o motor revalida
+# tudo no banco e o UNIQUE `(chamado_id, rodada, passe)` + `ON CONFLICT DO
+# NOTHING` fazem a segunda execução sair sem gravar nem duplicar mensagem.
+_MARGEM_ORFAO = "1 minute"
+
+
 async def _chamados_orfaos(conn: Any, settings: Settings) -> list[str]:
     """IDs de chamados com uma rodada de triagem "presa" (nunca rodou).
 
@@ -825,14 +838,14 @@ async def _chamados_orfaos(conn: Any, settings: Settings) -> list[str]:
     normalmente em poucos segundos). Duas formas de "órfão", espelhando as
     mesmas guardas de :func:`_executar`:
 
-    1. rodada 1 nunca rodou (chamado criado há mais de 3 min, nenhuma linha
-       em ``ia_triagens``);
-    2. a IA perguntou (rodada N), o autor respondeu há mais de 3 min, e a
-       rodada N+1 nunca rodou (mesma guarda de re-triagem: ``NOVO`` + sem
-       operador + dentro do teto de rodadas).
+    1. rodada 1 nunca rodou (chamado criado há mais de :data:`_MARGEM_ORFAO`,
+       nenhuma linha em ``ia_triagens``);
+    2. a IA perguntou (rodada N), o autor respondeu há mais de
+       :data:`_MARGEM_ORFAO`, e a rodada N+1 nunca rodou (mesma guarda de
+       re-triagem: ``NOVO`` + sem operador + dentro do teto de rodadas).
 
-    A margem de 3 min evita corrida com o ``create_task`` recém-agendado de
-    um chamado que acabou de abrir ou responder.
+    A margem evita corrida com o ``create_task`` recém-agendado de um chamado
+    que acabou de abrir ou responder.
     """
     departamentos = settings.ia_triagem_departamentos_lista
     if not departamentos:
@@ -844,7 +857,7 @@ async def _chamados_orfaos(conn: Any, settings: Settings) -> list[str]:
           JOIN departamentos d ON d.id = c.departamento_id
          WHERE d.nome = ANY($1::text[])
            AND c.status <> 'RESOLVIDO'
-           AND c.created_at < now() - interval '3 minutes'
+           AND c.created_at < now() - $3::interval
            AND NOT EXISTS (SELECT 1 FROM ia_triagens t WHERE t.chamado_id = c.id)
         UNION
         SELECT c.id::text AS id
@@ -865,11 +878,12 @@ async def _chamados_orfaos(conn: Any, settings: Settings) -> list[str]:
                  SELECT 1 FROM mensagens m
                   WHERE m.chamado_id = c.id AND m.remetente_id = c.cliente_id
                     AND m.is_interna = false AND m.created_at > ultima.created_at
-                    AND m.created_at < now() - interval '3 minutes'
+                    AND m.created_at < now() - $3::interval
                )
         """,
         departamentos,
         settings.ia_triagem_max_rodadas,
+        _MARGEM_ORFAO,
     )
     return [r["id"] for r in linhas]
 

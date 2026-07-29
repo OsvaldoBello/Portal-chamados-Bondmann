@@ -158,6 +158,11 @@ async def _render_form(
     Preserva o que o usuário digitou em ``form`` e recarrega as subcategorias da
     categoria escolhida (para o select vir preenchido no erro)."""
     form = form or {}
+    # Telefone de contato (2026-07-29): pré-preenchido com o do perfil
+    # (`perfis.telefone`, migration 0062) para ninguém redigitar o mesmo número
+    # a cada chamado. `setdefault`, não atribuição: no re-render de erro a chave
+    # já existe e vale o que a pessoa digitou (inclusive vazio, se apagou).
+    form.setdefault("telefone_contato", ctx.perfil.get("telefone") or "")
     # Catálogo unificado (0027): todo setor da empresa é um "departamento"; só os
     # que RECEBEM chamado (têm fila/staff) entram no destino do roteamento.
     setores_ativos = await repo.departamentos_ativos(ctx.user.claims)
@@ -462,6 +467,18 @@ async def criar_chamado(
         sem_prazo=sem_prazo_val,
         dados_formulario=dados_formulario_val,
     )
+
+    # Primeiro telefone informado vira o do perfil (2026-07-29): a partir daqui a
+    # abertura já vem preenchida e o campo deixa de ser digitado toda vez. Só
+    # preenche quando o perfil está VAZIO — quem já cadastrou pode informar um
+    # número diferente num chamado específico sem que isso troque o do perfil
+    # (a troca é explícita, em "Meu perfil"). Nunca derruba a abertura: o
+    # chamado já existe e o telefone dele já está gravado.
+    if not (ctx.perfil.get("telefone") or "").strip():
+        try:
+            await repo.atualizar_telefone(ctx.user.claims, telefone=telefone_contato)
+        except Exception as exc:  # noqa: BLE001 — conveniência, não requisito da abertura
+            log.warning("Não foi possível salvar o telefone no perfil: %s", exc)
 
     # IA: tarefas rodadas APÓS a resposta (BackgroundTasks anexada ao redirect).
     # Não bloqueiam o redirect e nunca derrubam a abertura se a IA falhar/estiver

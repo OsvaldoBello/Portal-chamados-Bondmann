@@ -170,7 +170,14 @@ class Settings(BaseSettings):
     # INSERT em `ia_triagens` apaga a tarefa sem deixar rastro — caso real do
     # BOND-2026-00593, 2026-07-23). `<= 0` desliga a varredura; o kill switch
     # geral (`ia_triagem_ativa`) também a desliga (Regra de Ouro #5).
-    ia_triagem_reconciliacao_intervalo_s: float = Field(default=300.0)
+    # 60 s desde 2026-07-29 (era 300): com a margem de órfão de 1 min
+    # (`app/ia/triagem.py::_MARGEM_ORFAO`), o pior caso de recuperação cai de
+    # ~8 min para ~2 min, dentro da meta p95 da Seção 9 — investigação do
+    # BOND-2026-00629, cujo atraso de 4min40s foi inteiramente a espera pela
+    # varredura (o modelo respondeu em 3,8 s). Mesmo valor configurado no
+    # Railway. A varredura é uma consulta indexada e barata: sem chamado órfão
+    # ela não chama o modelo nem escreve nada.
+    ia_triagem_reconciliacao_intervalo_s: float = Field(default=60.0)
 
     @property
     def ia_resumo_ativo(self) -> bool:
