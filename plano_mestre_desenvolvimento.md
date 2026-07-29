@@ -495,6 +495,7 @@ Headers obrigatórios em todas as respostas (middleware):
 - **RLS em `storage.objects`** com path **tenant-scoped**: convenção **`{empresa_id}/{chamado_id}/{arquivo}`**. Policies garantem que CLIENTE só acessa objetos sob o prefixo da própria empresa; OPERADOR/ADMIN conforme matriz.
 - **Validação de upload server-side (obrigatória):**
   - **Limite 10MB** por arquivo (rejeitar antes de persistir; checar `Content-Length` e tamanho real do stream).
+  - **Limite de 20 arquivos por envio** (`app/anexos.py::MAX_ANEXOS`, era 5 até 2026-07-29) — vale para todos os tipos da allow-list e para os três forms com anexo (abertura, chat do Portal, chat do Workspace) e o inbound de e-mail. Exposto ao Jinja como global `MAX_ANEXOS` para os textos de UI não repetirem o número.
   - **Allow-list de tipos:** `pdf, jpg, png, mp4, docx, xlsx, pptx`.
   - **Validação do MIME real por *magic bytes*** (`python-magic`) — **não** confiar no `Content-Type`/extensão enviados pelo cliente.
   - **Sanitização do nome de arquivo** (remover path traversal, normalizar; preferir nome gerado/UUID + extensão validada).

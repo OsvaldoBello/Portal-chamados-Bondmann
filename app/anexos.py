@@ -17,8 +17,11 @@ from app.storage import AnexosStorage, StorageError, ensure_storage
 
 log = logging.getLogger("app.anexos")
 
-# Limite de anexos por mensagem (bound de trabalho/carga).
-MAX_ANEXOS = 5
+# Limite de anexos por mensagem (bound de trabalho/carga). Vale para **todos** os
+# tipos da allow-list (Seção 3.9) — o teto por arquivo continua sendo
+# ``anexo_max_bytes`` (10MB). Exposto ao Jinja como global ``MAX_ANEXOS``
+# (``app/templating.py``) para os textos de UI não repetirem o número.
+MAX_ANEXOS = 20
 
 
 def access_token(request: Request) -> str | None:

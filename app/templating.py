@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
+from app.anexos import MAX_ANEXOS
 from app.avatar_storage import avatar_public_url
 from app.domain.sla_visual import barra_sla, estado_sla
 from app.security.csrf import CSRF_HEADER, get_csrf
@@ -164,6 +165,7 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 # Jinja2Templates já liga autoescape para .html; reforçado explicitamente.
 templates.env.autoescape = True
 templates.env.globals.update(
+    MAX_ANEXOS=MAX_ANEXOS,   # limite de anexos por envio, exibido nos forms
     STATUS_META=STATUS_META,
     PRIORIDADE_META=PRIORIDADE_META,
     cor_rotulo=cor_rotulo,   # cor estável por setor/categoria no Kanban
