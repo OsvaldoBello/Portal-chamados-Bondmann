@@ -4,6 +4,11 @@ Testa a matriz de visibilidade de RLS contra um Postgres real (Supabase local),
 não contra `FakeRepo`/mocks — cobre a classe de bug "mock verde × banco real
 divergente" que motivou este item (caso 0028/`chamados_departamento`).
 
+Por extensão, a pasta também abriga regra de negócio que **só existe em trigger**
+e que nenhum mock consegue exercitar — hoje `test_sla_projetos.py` (prazo de 1
+mês da coluna "Projetos", migration `0064`). Mesmo marker (`rls`), mesmo job de
+CI, mesmo skip automático sem `RLS_DATABASE_URL`.
+
 ## Rodar localmente
 
 Pré-requisitos: Docker rodando + [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started).

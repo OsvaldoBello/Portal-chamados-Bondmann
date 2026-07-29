@@ -58,16 +58,17 @@
 
       {# Telefone de contato — obrigatório, para o setor conseguir falar direto
       quando o chat não é ágil o bastante. Vem preenchido com o telefone do
-      perfil (migration 0062); quem ainda não cadastrou informa aqui, e o número
-      é salvo no perfil para não ser pedido de novo. #}
+      perfil (migration 0062) e o que for enviado aqui passa a ser o do perfil:
+      corrigir o número na abertura já atualiza o cadastro. #}
       <label class="block">
         <span class="block text-[13px] font-semibold text-navy mb-1.5">Telefone de contato</span>
         <input type="tel" name="telefone_contato" required value="{{ f.get('telefone_contato', '') }}"
           placeholder="(00) 00000-0000"
           class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
         <span class="block text-xs text-muted mt-1">Celular ou ramal para o setor responsável falar com você.
-          {% if perfil.telefone %}Preenchido com o telefone do seu perfil — dá para trocar só neste chamado, ou
-          alterar de vez em <a href="/perfil" class="underline hover:text-navy">Meu perfil</a>.
+          {% if perfil.telefone %}Preenchido com o telefone do seu
+          <a href="/perfil" class="underline hover:text-navy">perfil</a> — se você trocar aqui, o do perfil
+          é atualizado junto.
           {% else %}Vamos salvá-lo no seu <a href="/perfil" class="underline hover:text-navy">perfil</a> para você
           não precisar digitar de novo nos próximos chamados.{% endif %}</span>
       </label>

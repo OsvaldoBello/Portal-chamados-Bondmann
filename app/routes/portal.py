@@ -468,13 +468,16 @@ async def criar_chamado(
         dados_formulario=dados_formulario_val,
     )
 
-    # Primeiro telefone informado vira o do perfil (2026-07-29): a partir daqui a
-    # abertura já vem preenchida e o campo deixa de ser digitado toda vez. Só
-    # preenche quando o perfil está VAZIO — quem já cadastrou pode informar um
-    # número diferente num chamado específico sem que isso troque o do perfil
-    # (a troca é explícita, em "Meu perfil"). Nunca derruba a abertura: o
-    # chamado já existe e o telefone dele já está gravado.
-    if not (ctx.perfil.get("telefone") or "").strip():
+    # O telefone informado na abertura vira o do perfil (2026-07-29, revisto a
+    # pedido do gestor): SEMPRE, não só na primeira vez. O número digitado aqui é
+    # o contato atual da pessoa — se ela trocou de celular, trocou pra valer, e
+    # obrigá-la a repetir a correção em "Meu perfil" só deixaria o cadastro
+    # desatualizado. Só escreve quando MUDOU (evita UPDATE inútil a cada
+    # abertura). O `chamados.telefone_contato` continua sendo o histórico
+    # imutável daquela abertura (migration 0062) — isto aqui não reescreve
+    # chamados antigos. Nunca derruba a abertura: o chamado já existe e o
+    # telefone dele já está gravado.
+    if telefone_contato != (ctx.perfil.get("telefone") or "").strip():
         try:
             await repo.atualizar_telefone(ctx.user.claims, telefone=telefone_contato)
         except Exception as exc:  # noqa: BLE001 — conveniência, não requisito da abertura

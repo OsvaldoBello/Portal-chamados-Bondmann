@@ -46,9 +46,9 @@
     </form>
   </div>
 
-  {# Telefone de contato (2026-07-29): cadastrado uma vez aqui, o formulário de
-  abertura já vem preenchido com ele. Quem não tem número cadastrado continua
-  informando na abertura — e aquele primeiro número é salvo aqui. #}
+  {# Telefone de contato (2026-07-29): cadastrado aqui, o formulário de abertura
+  já vem preenchido com ele — e o caminho inverso também vale, o número enviado
+  numa abertura de chamado passa a ser o do perfil. #}
   <div class="bg-white rounded-xl shadow-card border border-line/60 p-6 space-y-5">
     <div>
       <h3 class="font-display font-bold text-lg text-navy">Telefone de contato</h3>
@@ -67,8 +67,8 @@
                placeholder="(00) 00000-0000"
                class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm placeholder:text-faint">
         <span class="block text-xs text-muted mt-1">É o número que o setor responsável usa para falar
-          com você quando o chat não é ágil o bastante. Você pode alterá-lo a qualquer momento — e
-          também trocar o número em um chamado específico, na hora de abrir.</span>
+          com você quando o chat não é ágil o bastante. Você pode alterá-lo a qualquer momento aqui —
+          ou direto no formulário de abertura, que também atualiza este cadastro.</span>
       </label>
       <button type="submit"
               class="px-5 py-2.5 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 transition">

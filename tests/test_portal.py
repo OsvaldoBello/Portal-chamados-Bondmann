@@ -482,9 +482,10 @@ def test_primeira_abertura_salva_o_telefone_no_perfil():
     assert repo.telefones_salvos == ["(11) 98765-4321"]
 
 
-def test_abertura_com_telefone_diferente_nao_sobrescreve_o_do_perfil():
-    """Quem já cadastrou pode dar outro número NAQUELE chamado sem trocar o do
-    perfil — a troca é explícita, em "Meu perfil"."""
+def test_abertura_com_telefone_diferente_atualiza_o_do_perfil():
+    """Telefone informado na abertura é o contato ATUAL da pessoa: trocar o
+    número aqui atualiza o perfil, sem exigir uma segunda edição em "Meu perfil"
+    (pedido do gestor, 2026-07-29). O chamado guarda o número daquela abertura."""
     repo = FakeRepo(telefone="(51) 98167-0729")
     with portal_client(repo) as client:
         token = _csrf_token(client)
@@ -494,6 +495,20 @@ def test_abertura_com_telefone_diferente_nao_sobrescreve_o_do_perfil():
         )
     assert resp.status_code == 303
     assert repo.criados[0]["telefone_contato"] == "(11) 3333-4444"
+    assert repo.telefones_salvos == ["(11) 3333-4444"]
+
+
+def test_abertura_com_o_mesmo_telefone_do_perfil_nao_reescreve():
+    """Caso mais comum (campo veio pré-preenchido e ninguém mexeu): nada a
+    gravar — sem UPDATE inútil no perfil a cada chamado aberto."""
+    repo = FakeRepo(telefone="(11) 98765-4321")
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados", data=_abertura_valida(telefone_contato="(11) 98765-4321"),
+            headers={"X-CSRF-Token": token}, follow_redirects=False,
+        )
+    assert resp.status_code == 303
     assert repo.telefones_salvos == []
 
 
