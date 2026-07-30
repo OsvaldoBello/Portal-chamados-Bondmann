@@ -57,6 +57,21 @@ class AnexosStorage:
             log.warning("falha no upload de anexo", extra={"status": resp.status_code})
             raise StorageError(f"upload falhou ({resp.status_code})")
 
+    async def download(self, token: str, path: str) -> bytes | None:
+        """Baixa o objeto do bucket privado. ``None`` em qualquer falha
+        (rede/status) — mesma política de degradação de :meth:`signed_url`;
+        quem chama decide a política de falha (ex.: leitura de anexo pela
+        IA, Regra de Ouro #5 — nunca derruba a triagem)."""
+        url = f"{self._base}/storage/v1/object/{self._bucket}/{path}"
+        try:
+            resp = await self._http.get(url, headers={"Authorization": f"Bearer {token}"})
+        except httpx.HTTPError:
+            log.exception("erro ao baixar anexo")
+            return None
+        if resp.status_code >= 400:
+            return None
+        return resp.content
+
     async def signed_url(self, token: str, path: str) -> str | None:
         """Gera uma signed URL (TTL 1h) para o objeto. ``None`` em caso de falha
         (o template degrada para 'anexo indisponível')."""

@@ -22,7 +22,12 @@ operacional ou de segurança.
 ## Uso das fontes
 
 Use prioritariamente a base interna fornecida na mensagem (dados do produto,
-ficha técnica, playbook de diagnóstico, regras de conduta). Quando a
+ficha técnica, playbook de diagnóstico, regras de conduta). Pode haver
+também fotos anexadas pelo cliente (do produto, embalagem, defeito relatado)
+e/ou uma seção "Texto extraído de PDFs anexados" (laudo do cliente, por
+exemplo) — use como evidência complementar quando presentes, sem presumir
+anexo se nada aparecer na mensagem; isso NÃO substitui nem contradiz a base
+técnica interna, é só o relato visual/documental do próprio caso. Quando a
 informação estiver incompleta, ausente ou incerta, informe isso claramente,
 com frases como: "Com base nas informações disponíveis...", "Não há informação
 suficiente para concluir com segurança...", "A hipótese mais provável,

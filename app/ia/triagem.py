@@ -58,10 +58,11 @@ from pydantic import BaseModel, ValidationError
 from app.config import Settings, get_settings
 from app.db import admin_connection
 from app.domain.formularios_quimico import rotular
-from app.ia import cliente, contexto_quimico
+from app.ia import anexos_contexto, cliente, contexto_quimico
 from app.ia.schemas import SaidaPasseB, SaidaTriagem
 from app.notification import notificar_nova_mensagem_email
 from app.repositories import ia_busca
+from app.storage import ensure_storage
 
 log = logging.getLogger("app.ia_triagem")
 
@@ -109,7 +110,9 @@ def _prompt(nome: str) -> str:
     return texto.split("\n---\n", 1)[1].strip()
 
 
-def _linhas_chamado(chamado: dict[str, Any]) -> list[str]:
+def _linhas_chamado(
+    chamado: dict[str, Any], anexos: anexos_contexto.ResultadoAnexos | None = None
+) -> list[str]:
     """Fatos do chamado — comuns ao passe único, ao Passe A e ao Passe B."""
     linhas = [
         "## Chamado",
@@ -125,7 +128,20 @@ def _linhas_chamado(chamado: dict[str, Any]) -> list[str]:
     if pares:
         linhas += ["", "Campos do formulário:"]
         linhas += [f"- {rotulo}: {valor}" for rotulo, valor in pares]
+    if anexos and anexos.texto_pdfs:
+        linhas += ["", "## Texto extraído de PDFs anexados (pode estar incompleto)", anexos.texto_pdfs]
     return linhas
+
+
+def _conteudo_usuario(linhas: list[str], anexos: anexos_contexto.ResultadoAnexos | None) -> Any:
+    """Content do turno do usuário: string simples (formato de sempre) quando
+    não há imagem anexada, ou lista de blocos texto+``image_url`` (formato
+    multimodal OpenAI) quando há — payload idêntico ao anterior sem imagem,
+    base do teste de regressão do kill switch de anexos."""
+    texto = "\n".join(linhas)
+    if not anexos or not anexos.blocos_imagem:
+        return texto
+    return [{"type": "text", "text": texto}, *anexos.blocos_imagem]
 
 
 def montar_mensagens(
@@ -133,15 +149,18 @@ def montar_mensagens(
     categorias: list[str],
     conversa: list[dict[str, str]] | None = None,
     playbook: list[dict[str, Any]] | None = None,
-) -> list[dict[str, str]]:
+    anexos: anexos_contexto.ResultadoAnexos | None = None,
+) -> list[dict[str, Any]]:
     """Mensagens system+user do passe único (TI) / Passe A (Químico, F4).
 
     ``conversa`` (rodadas > 1): lista de ``{"papel": ..., "conteudo": ...}`` com
     a troca pública até aqui — perguntas da IA e respostas do autor.
     ``playbook`` (só Químico): roteiro de perguntas de investigação por
     cenário (:func:`app.ia.contexto_quimico.playbook_perguntas`) — SEM
-    qualquer dado de produto/base sigilosa (Seção 3.1 do plano IA)."""
-    linhas = _linhas_chamado(chamado)
+    qualquer dado de produto/base sigilosa (Seção 3.1 do plano IA).
+    ``anexos`` (F7): imagens/PDFs do próprio chamado — não é dado sigiloso da
+    Bondmann (Regra de Ouro #4), então participa também do canal público."""
+    linhas = _linhas_chamado(chamado, anexos)
     if playbook:
         linhas += [
             "",
@@ -168,26 +187,29 @@ def montar_mensagens(
     prompt_nome = "quimico_passe_a" if _eh_quimico(chamado.get("departamento")) else "ti"
     return [
         {"role": "system", "content": _prompt(prompt_nome)},
-        {"role": "user", "content": "\n".join(linhas)},
+        {"role": "user", "content": _conteudo_usuario(linhas, anexos)},
     ]
 
 
 def montar_mensagens_passe_b(
-    chamado: dict[str, Any], contexto: contexto_quimico.ContextoQuimico | None
-) -> list[dict[str, str]]:
+    chamado: dict[str, Any],
+    contexto: contexto_quimico.ContextoQuimico | None,
+    anexos: anexos_contexto.ResultadoAnexos | None = None,
+) -> list[dict[str, Any]]:
     """Mensagens system+user do Passe B do Químico (F4) — canal interno.
 
     ``contexto`` é a recuperação seletiva da base sigilosa (produto citado +
     ficha + playbooks, SEM quantidades — C7); ``None``/vazio degrada
     graciosamente (o modelo recebe só o chamado, mesmo padrão do passe único
-    sem contexto extra)."""
-    linhas = _linhas_chamado(chamado)
+    sem contexto extra). ``anexos`` (F7): mesmo objeto já baixado/processado
+    para o Passe A — reaproveitado aqui sem novo download (Regra de Ouro #9)."""
+    linhas = _linhas_chamado(chamado, anexos)
     texto_contexto = contexto_quimico.formatar_contexto(contexto) if contexto else ""
     if texto_contexto:
         linhas += ["", texto_contexto]
     return [
         {"role": "system", "content": _prompt("quimico_passe_b")},
-        {"role": "user", "content": "\n".join(linhas)},
+        {"role": "user", "content": _conteudo_usuario(linhas, anexos)},
     ]
 
 
@@ -413,7 +435,7 @@ def _soma_tokens(acumulado: int | None, novo: int | None) -> int | None:
 
 
 async def _chamar_modelo[SaidaT: BaseModel](
-    mensagens: list[dict[str, str]],
+    mensagens: list[dict[str, Any]],
     settings: Settings,
     *,
     model: str | None = None,
@@ -605,6 +627,24 @@ async def _executar(chamado_id: str) -> None:
             )
         ]
 
+        # Anexos (F7): metadados só, gated pelo kill switch (zero query extra
+        # quando desligado). Cobre a mensagem de abertura (conteudo="", por
+        # isso FORA do filtro `conteudo <> ''` usado acima para `conversa`) e
+        # qualquer anexo enviado em respostas seguintes.
+        anexos_brutos: list[dict[str, Any]] = []
+        if settings.ia_triagem_anexos_ativo:
+            for r in await conn.fetch(
+                """
+                SELECT m.anexos FROM mensagens m
+                 WHERE m.chamado_id = $1::uuid AND m.is_interna = false
+                   AND m.anexos <> '[]'::jsonb
+                 ORDER BY m.created_at
+                """,
+                chamado_id,
+            ):
+                bruto = r["anexos"]
+                anexos_brutos += json.loads(bruto) if isinstance(bruto, str) else bruto
+
     if isinstance(chamado.get("dados_formulario"), str):  # jsonb chega como str no asyncpg
         chamado["dados_formulario"] = json.loads(chamado["dados_formulario"])
 
@@ -616,12 +656,31 @@ async def _executar(chamado_id: str) -> None:
         # que este caminho pode chamar (Seção 3.1 do plano IA).
         playbook = await contexto_quimico.playbook_perguntas(settings)
 
+    # 1b) Download/processamento de anexos (F7) — HTTP fica FORA da conexão,
+    # mesma disciplina do resto do arquivo. Roda uma única vez e é
+    # reaproveitado no Passe A e no Passe B do Químico (sem download nem
+    # chamada de modelo duplicada — Regra de Ouro #9). Nunca lança: falha
+    # aqui nunca derruba a triagem (Regra de Ouro #5).
+    resultado_anexos = anexos_contexto.ResultadoAnexos()
+    if anexos_brutos:
+        storage = await ensure_storage()
+        if storage is not None and settings.supabase_service_role_key:
+            try:
+                resultado_anexos = await anexos_contexto.montar_contexto_anexos(
+                    storage, settings.supabase_service_role_key, anexos_brutos,
+                    settings, eh_quimico=eh_quimico,
+                )
+            except Exception as exc:  # noqa: BLE001 — anexos nunca derrubam a triagem
+                log.warning(
+                    "[IA TRIAGEM] Contexto de anexos falhou no chamado %s: %s", chamado_id, exc
+                )
+
     # 2) Passe A / passe único — uma chamada estruturada (+1 retry de JSON,
     # Regra #9). O Passe B do Químico (item 5) só roda depois, se este decidir
     # NOTA_INTERNA — cada passe continua sendo uma única chamada estruturada.
     inicio = time.monotonic()
     saida, erro, tokens_in, tokens_out = await _chamar_modelo(
-        montar_mensagens(chamado, categorias, conversa or None, playbook or None),
+        montar_mensagens(chamado, categorias, conversa or None, playbook or None, resultado_anexos),
         settings,
         schema=SaidaTriagem,
     )
@@ -737,7 +796,11 @@ async def _executar(chamado_id: str) -> None:
                 await notificar_nova_mensagem_email(chamado, str(perfil_id), email_pergunta)
             except Exception as exc:  # noqa: BLE001 — e-mail nunca derruba a triagem
                 log.warning("[IA TRIAGEM] Falha ao notificar pergunta por e-mail: %s", exc)
-        log.info("[IA TRIAGEM] Chamado %s triado (rodada %s, %s ms).", chamado_id, rodada, duracao_ms)
+        log.info(
+            "[IA TRIAGEM] Chamado %s triado (rodada %s, %s ms, anexos processados=%s ignorados=%s).",
+            chamado_id, rodada, duracao_ms,
+            resultado_anexos.processados, resultado_anexos.ignorados,
+        )
         return
 
     # 5) Passe B do Químico (F4) — recuperação seletiva da base sigilosa
@@ -750,7 +813,7 @@ async def _executar(chamado_id: str) -> None:
     modelo_passe_b = settings.ia_triagem_model_passe_b or settings.ia_triagem_model
     inicio_b = time.monotonic()
     saida_b, erro_b, tokens_in_b, tokens_out_b = await _chamar_modelo(
-        montar_mensagens_passe_b(chamado, contexto_b),
+        montar_mensagens_passe_b(chamado, contexto_b, resultado_anexos),
         settings,
         model=modelo_passe_b,
         schema=SaidaPasseB,
@@ -799,11 +862,14 @@ async def _executar(chamado_id: str) -> None:
             )
 
     log.info(
-        "[IA TRIAGEM] Chamado %s triado (rodada %s, %s ms + %s ms Químico).",
+        "[IA TRIAGEM] Chamado %s triado (rodada %s, %s ms + %s ms Químico, "
+        "anexos processados=%s ignorados=%s).",
         chamado_id,
         rodada,
         duracao_ms,
         duracao_ms_b,
+        resultado_anexos.processados,
+        resultado_anexos.ignorados,
     )
 
 

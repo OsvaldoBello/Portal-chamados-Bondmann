@@ -86,6 +86,7 @@ class FakeConn:
         triagem_insert_id: int | None = 1,
         semelhantes: tuple[dict, ...] = (),
         busca_quebra: bool = False,
+        anexos_mensagens: tuple[dict, ...] = (),
     ):
         self._chamado = chamado
         self._ultima_rodada = ultima_rodada
@@ -97,6 +98,9 @@ class FakeConn:
         self._triagem_insert_id = triagem_insert_id
         self._semelhantes = semelhantes
         self._busca_quebra = busca_quebra
+        # Linhas de `mensagens.anexos` (F7) — cada item já é o valor da coluna
+        # (lista de {path, nome, mime, tamanho}), como `asyncpg` devolveria.
+        self._anexos_mensagens = anexos_mensagens
         self.busca_args: tuple | None = None  # captura os args da busca FTS (F3)
         self.triagem_inserts: list[tuple] = []
         self.executes: list[tuple[str, tuple]] = []
@@ -130,6 +134,8 @@ class FakeConn:
             return [dict(s) for s in self._semelhantes]
         if "FROM categorias" in sql:
             return [{"nome": n} for n in self._categorias]
+        if "m.anexos" in sql:  # checar ANTES do genérico "FROM mensagens" abaixo
+            return [{"anexos": a} for a in self._anexos_mensagens]
         if "FROM mensagens" in sql:
             return [dict(m) for m in self._conversa]
         raise AssertionError(f"fetch inesperado: {sql}")
@@ -202,6 +208,54 @@ async def test_departamento_fora_da_lista_nao_tria():
         await triagem.executar_triagem("cid")
     completar.assert_not_awaited()
     assert conn.triagem_inserts == [] and conn.executes == []
+
+
+async def test_kill_switch_anexos_off_sem_query_extra_nem_storage():
+    """`ia_triagem_anexos_ativo=False` (default): zero query de anexos, zero
+    chamada a `ensure_storage`/`montar_contexto_anexos` — mesmo com
+    `ia_triagem_ativa=True` (flag geral independente da de anexos)."""
+    conn = FakeConn(anexos_mensagens=({"path": "a.jpg", "nome": "a.jpg", "mime": "image/jpeg", "tamanho": 100},))
+    completar = AsyncMock(return_value=_resposta_ok())
+    ensure_storage = AsyncMock()
+    montar_contexto = AsyncMock()
+    with (
+        _patched(conn, _settings(), completar),
+        patch.object(triagem, "ensure_storage", ensure_storage),
+        patch.object(triagem.anexos_contexto, "montar_contexto_anexos", montar_contexto),
+    ):
+        await triagem.executar_triagem("cid")
+    ensure_storage.assert_not_awaited()
+    montar_contexto.assert_not_awaited()
+    # `content` da mensagem continua string simples — payload idêntico ao de
+    # sempre (base do teste de regressão: nenhuma mudança sem o flag ligado).
+    mensagens = completar.await_args.kwargs["mensagens"]
+    assert isinstance(mensagens[1]["content"], str)
+
+
+async def test_anexos_ativo_inclui_blocos_de_imagem_na_mensagem():
+    """Com o flag ligado, o resultado de `montar_contexto_anexos` (aqui
+    isolado da lógica de bytes real — já coberta em
+    `test_ia_anexos_contexto.py`) entra no `content` da mensagem enviada ao
+    modelo como lista de blocos, incluindo o bloco de imagem."""
+    conn = FakeConn(
+        anexos_mensagens=({"path": "a.jpg", "nome": "a.jpg", "mime": "image/jpeg", "tamanho": 100},)
+    )
+    completar = AsyncMock(return_value=_resposta_ok())
+    bloco_imagem = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,xyz", "detail": "low"}}
+    resultado = triagem.anexos_contexto.ResultadoAnexos(blocos_imagem=[bloco_imagem], processados=1)
+    montar_contexto = AsyncMock(return_value=resultado)
+    settings = _settings(ia_triagem_anexos_ativo=True, supabase_service_role_key="srv-role-key")
+    with (
+        _patched(conn, settings, completar),
+        patch.object(triagem, "ensure_storage", AsyncMock(return_value=object())),
+        patch.object(triagem.anexos_contexto, "montar_contexto_anexos", montar_contexto),
+    ):
+        await triagem.executar_triagem("cid")
+    montar_contexto.assert_awaited_once()
+    mensagens = completar.await_args.kwargs["mensagens"]
+    conteudo_usuario = mensagens[1]["content"]
+    assert isinstance(conteudo_usuario, list)
+    assert bloco_imagem in conteudo_usuario
 
 
 async def test_atendente_ja_atuando_rodada1_ainda_gera_nota_interna():

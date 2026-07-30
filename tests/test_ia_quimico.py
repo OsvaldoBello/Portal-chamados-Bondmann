@@ -130,10 +130,11 @@ def _settings(**overrides) -> Settings:
 class FakeConn:
     """Conexão administrativa scriptada (subset do FakeConn da suíte F1)."""
 
-    def __init__(self, chamado: dict | None = None):
+    def __init__(self, chamado: dict | None = None, anexos_mensagens: tuple[dict, ...] = ()):
         self._chamado = dict(chamado or _CHAMADO_QUIMICO)
         self.triagem_inserts: list[tuple] = []
         self.executes: list[tuple[str, tuple]] = []
+        self._anexos_mensagens = anexos_mensagens
 
     async def fetchrow(self, sql: str, *args):
         if "FROM chamados" in sql:
@@ -155,6 +156,8 @@ class FakeConn:
             return []
         if "FROM categorias" in sql:
             return [{"nome": "Registro de Ocorrência"}, {"nome": "Visita Técnica"}]
+        if "m.anexos" in sql:
+            return [{"anexos": a} for a in self._anexos_mensagens]
         raise AssertionError(f"fetch inesperado: {sql}")
 
     async def execute(self, sql: str, *args):
@@ -224,6 +227,39 @@ async def test_quimico_suficiente_roda_dois_passes_e_nota_vem_do_passe_b():
     assert "HIPOTESE-SENTINELA-6M" in args[2]
     assert "ESCALAR" in args[2]  # escalar_para_quimico=True sinalizado
     assert "Diluição utilizada" in args[2]  # dados_faltantes na nota
+
+
+async def test_anexos_sao_baixados_uma_unica_vez_e_reaproveitados_nos_dois_passes():
+    """F7: mesmo com Passe A + Passe B rodando, o download/processamento de
+    anexos roda UMA vez só (Regra de Ouro #9 — sem chamada/download
+    duplicado) e os DOIS passes recebem o mesmo bloco de imagem."""
+    conn = FakeConn(
+        anexos_mensagens=({"path": "foto.jpg", "nome": "foto.jpg", "mime": "image/jpeg", "tamanho": 100},)
+    )
+    completar = AsyncMock(side_effect=[_resposta(_SAIDA_A_SUFICIENTE), _resposta(_SAIDA_B_OK)])
+    bloco_imagem = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,xyz", "detail": "low"}}
+    resultado_anexos = triagem.anexos_contexto.ResultadoAnexos(blocos_imagem=[bloco_imagem], processados=1)
+    montar_contexto = AsyncMock(return_value=resultado_anexos)
+    settings = _settings(ia_triagem_anexos_ativo=True, supabase_service_role_key="srv-role-key")
+    with (
+        _patched(conn, settings, completar),
+        patch.object(triagem, "ensure_storage", AsyncMock(return_value=object())),
+        patch.object(triagem.anexos_contexto, "montar_contexto_anexos", montar_contexto),
+    ):
+        await triagem.executar_triagem("cid-q")
+
+    montar_contexto.assert_awaited_once()  # um único download/processamento
+    conteudo_a = completar.await_args_list[0].kwargs["mensagens"][1]["content"]
+    conteudo_b = completar.await_args_list[1].kwargs["mensagens"][1]["content"]
+    assert bloco_imagem in conteudo_a
+    assert bloco_imagem in conteudo_b  # mesmo objeto reaproveitado, sem novo download
+
+    # Estruturalmente, o conteúdo derivado de anexo não carrega nada da base
+    # sigilosa (o `resultado_anexos` acima nem participa da montagem do
+    # contexto B — vem de `contexto_quimico`, caminho totalmente separado).
+    payload_a = json.dumps(conteudo_a, ensure_ascii=False)
+    assert "FICHA-SENTINELA" not in payload_a
+    assert "COMPONENTE-SENTINELA" not in payload_a
 
 
 async def test_resultado_do_passe_b_guarda_metadados_nunca_a_pre_analise():

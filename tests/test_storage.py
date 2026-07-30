@@ -20,16 +20,17 @@ PATH = "empresa-1/chamado-9/arquivo.pdf"
 
 
 class _Resp:
-    def __init__(self, status_code: int, payload: dict | None = None):
+    def __init__(self, status_code: int, payload: dict | None = None, content: bytes = b""):
         self.status_code = status_code
         self._payload = payload or {}
+        self.content = content
 
     def json(self) -> dict:
         return self._payload
 
 
 class _FakeHttp:
-    """Só implementa `.post` — é tudo que `AnexosStorage` usa."""
+    """Implementa `.post` e `.get` — é tudo que `AnexosStorage` usa."""
 
     def __init__(self, resposta: _Resp | Exception):
         self._resposta = resposta
@@ -37,6 +38,12 @@ class _FakeHttp:
 
     async def post(self, url, *, content=None, json=None, headers=None):
         self.chamadas.append({"url": url, "content": content, "json": json, "headers": headers})
+        if isinstance(self._resposta, Exception):
+            raise self._resposta
+        return self._resposta
+
+    async def get(self, url, *, headers=None):
+        self.chamadas.append({"url": url, "headers": headers})
         if isinstance(self._resposta, Exception):
             raise self._resposta
         return self._resposta
@@ -132,6 +139,26 @@ async def test_ensure_storage_sem_supabase_configurado_devolve_none(monkeypatch)
         "app.config.get_settings", lambda: type("S", (), {"supabase_url": ""})()
     )
     assert await storage_mod.ensure_storage() is None
+
+
+async def test_download_devolve_bytes_do_objeto():
+    st, http = _storage(_Resp(200, content=b"conteudo-do-arquivo"))
+    conteudo = await st.download(TOKEN, PATH)
+    assert conteudo == b"conteudo-do-arquivo"
+    chamada = http.chamadas[0]
+    assert chamada["url"] == f"https://proj.supabase.co/storage/v1/object/chamados-anexos/{PATH}"
+    assert chamada["headers"]["Authorization"] == f"Bearer {TOKEN}"
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 500])
+async def test_download_com_erro_http_degrada_para_none(status):
+    st, _ = _storage(_Resp(status))
+    assert await st.download(TOKEN, PATH) is None
+
+
+async def test_download_com_excecao_de_rede_degrada_para_none():
+    st, _ = _storage(httpx.ConnectError("sem rede"))
+    assert await st.download(TOKEN, PATH) is None
 
 
 async def test_ensure_storage_inicializa_quando_ha_supabase(monkeypatch):

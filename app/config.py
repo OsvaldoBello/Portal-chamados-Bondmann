@@ -182,6 +182,47 @@ class Settings(BaseSettings):
     # ela não chama o modelo nem escreve nada.
     ia_triagem_reconciliacao_intervalo_s: float = Field(default=60.0)
 
+    # --- Leitura de anexos (imagem/PDF) pela triagem ---
+    # Kill switch ESTREITO e independente do geral (ia_triagem_ativa): liga a
+    # LEITURA de anexos no contexto da triagem. Separado da flag geral de
+    # propósito — permite rollout em sombra e rollback isolado desta
+    # sub-feature sem desligar toda a triagem (lição do incidente de
+    # 2026-07-29 com `_MARGEM_ORFAO`: preferir chave estreita e nomeada a
+    # reaproveitar a flag geral).
+    ia_triagem_anexos_ativo: bool = Field(default=False)
+    # Tetos por tipo (independentes — imagem custa muito mais em tokens que
+    # PDF em texto extraído).
+    ia_triagem_anexos_max_arquivos_imagem: int = Field(default=2)
+    ia_triagem_anexos_max_arquivos_pdf: int = Field(default=2)
+    # Teto de bytes por arquivo LIDO pela IA — independente do teto de upload
+    # (`anexo_max_bytes`/`anexo_max_bytes_quimico`, até 100MB no Químico):
+    # aqui bounda memória/CPU do processamento (Pillow/pypdf) na task de
+    # fundo. Químico ganha teto maior, mesmo padrão de `anexo_max_bytes_quimico`.
+    ia_triagem_anexos_max_bytes: int = Field(default=8 * 1024 * 1024)
+    ia_triagem_anexos_max_bytes_quimico: int = Field(default=25 * 1024 * 1024)
+    # Redimensionamento de imagem antes do envio (maior lado, px) e qualidade
+    # JPEG na recompressão.
+    ia_triagem_anexos_max_dimensao_px: int = Field(default=1024)
+    ia_triagem_anexos_qualidade_jpeg: int = Field(default=78)
+    # Nível de detalhe enviado ao modelo (auto/low/high) — controla custo em
+    # tokens (baixo = ~85 tokens fixos/imagem). Inválido degrada para "low"
+    # (conservador — mesmo padrão de `ia_triagem_perguntas_confianca_minima`).
+    ia_triagem_anexos_detail: str = Field(default="low")
+    # Extração de texto de PDF: páginas e caracteres por arquivo (sem OCR —
+    # PDF escaneado/sem texto extraível é ignorado graciosamente).
+    ia_triagem_anexos_pdf_max_paginas: int = Field(default=5)
+    ia_triagem_anexos_pdf_max_chars: int = Field(default=6000)
+
+    @property
+    def ia_triagem_anexos_detail_normalizado(self) -> str:
+        """auto/low/high; qualquer outro valor degrada para "low"."""
+        valor = self.ia_triagem_anexos_detail.strip().lower()
+        return valor if valor in {"auto", "low", "high"} else "low"
+
+    def ia_triagem_anexos_max_bytes_para(self, *, eh_quimico: bool) -> int:
+        """Teto de leitura por arquivo — maior para o Químico (laudos maiores)."""
+        return self.ia_triagem_anexos_max_bytes_quimico if eh_quimico else self.ia_triagem_anexos_max_bytes
+
     @property
     def ia_resumo_ativo(self) -> bool:
         """A geração de resumo por IA está configurada (há chave)?"""
