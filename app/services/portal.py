@@ -46,10 +46,15 @@ class PortalService:
         no Marketing: a trava de avaliação travava a abertura de um novo
         chamado mesmo quando quem resolveu foi um colega do próprio setor).
         Requer ``chamado["cliente_departamento_id"]`` no dict (join feito em
-        ``AtendimentoRepo.obter``)."""
+        ``AtendimentoRepo.obter``).
+
+        Duplicado de combinação (0065) também não avalia: ninguém atendeu
+        *aquele* chamado — ele foi encerrado por ser repetido, e o atendimento
+        que merece nota é o do principal, onde o autor está em cópia."""
         return (
             chamado.get("status") == "RESOLVIDO"
             and str(chamado.get("cliente_id")) == str(user_id)
+            and not chamado.get("chamado_principal_id")
             and str(chamado.get("departamento_id")) != str(chamado.get("cliente_departamento_id"))
         )
 
@@ -61,10 +66,16 @@ class PortalService:
         chamados endereçados ao PRÓPRIO departamento do autor (autoatendimento):
         reabrir não é uma nota de CSAT sobre "quem prestou o serviço", é dizer
         "isso não foi resolvido de verdade" — faz sentido mesmo quando quem
-        resolveu foi o próprio setor."""
+        resolveu foi o próprio setor.
+
+        Duplicado de combinação (0065) é a exceção: reabri-lo devolveria ao
+        quadro um chamado que continua fora dos indicadores e cujo assunto já
+        está sendo tratado no principal. Quem não se sente atendido reclama no
+        principal (está em cópia nele) ou o staff desfaz a combinação."""
         return (
             chamado.get("status") == "RESOLVIDO"
             and str(chamado.get("cliente_id")) == str(user_id)
+            and not chamado.get("chamado_principal_id")
         )
 
     @staticmethod

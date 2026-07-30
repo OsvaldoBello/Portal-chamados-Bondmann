@@ -9,6 +9,18 @@
   <a href="/portal" class="text-sm text-muted hover:text-navy">&larr; Voltar aos chamados</a>
 </div>
 
+{# Combinação de chamados (0065): este chamado era repetido e foi juntado a
+   outro. O autor não fica no escuro — ele está em cópia no principal. #}
+{% if chamado.chamado_principal_id %}
+<div class="mb-5 rounded-lg bg-navy-100 border border-navy-500/20 px-4 py-3 text-sm text-navy">
+  Este chamado tratava da <strong>mesma ocorrência</strong> de
+  {% if chamado.principal_codigo %}<strong>{{ chamado.principal_codigo }}</strong>{% else %}outro chamado já aberto{% endif %},
+  então os dois foram <strong>combinados</strong> em um só. Você está <strong>em cópia</strong> no chamado
+  principal e recebe as atualizações por lá — inclusive a solução, quando ela vier.
+  <a href="/portal/chamados/{{ chamado.chamado_principal_id }}" class="font-semibold underline">Abrir o chamado principal →</a>
+</div>
+{% endif %}
+
 {% if avaliar_pendente %}
 <div class="mb-5 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
   Antes de abrir um novo chamado, avalie este atendimento já resolvido — é rapidinho, 1 a 5 estrelas.

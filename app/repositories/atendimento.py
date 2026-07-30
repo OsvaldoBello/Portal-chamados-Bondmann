@@ -8,10 +8,28 @@ partes do domínio: cada método abre uma transação curta via
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date
 from typing import Any
 
+from asyncpg import PostgresError
+
 from app.db import admin_connection, rls_connection
+from app.domain.combinacao import anexos_combinacao, texto_combinacao
+
+log = logging.getLogger("app.repositories.atendimento")
+
+# Whitelist completa do enum `status_chamado` (o que cada setor OFERECE na UI é
+# um subconjunto — ver `app/routes/workspace.py::_status_ui`). Vive aqui, junto
+# de quem escreve status no banco, e é reexportada pela fachada `ChamadosRepo`.
+STATUS_CHAMADO = (
+    "NOVO", "A_FAZER", "PROJETOS", "EM_ATENDIMENTO", "RESPOSTA_CLIENTE",
+    "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO",
+)
+
+# Status para o qual um duplicado volta ao desfazer a combinação, quando o
+# histórico não guarda de onde ele veio (registro apagado/anterior à 0065).
+STATUS_PADRAO_DESCOMBINAR = "EM_ATENDIMENTO"
 
 
 class AtendimentoRepo:
@@ -31,18 +49,25 @@ class AtendimentoRepo:
                        c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
                        c.volume, c.origem_demanda, c.causa_atraso,
                        c.dados_formulario, c.resumo_ia, c.resumo_ia_em,
+                       c.chamado_principal_id, c.combinado_em,
                        cat.nome AS categoria, sub.nome AS subcategoria,
                        dep.nome AS departamento, dep.autoatendimento,
                        autor.nome AS cliente_nome, autor.avatar_path AS cliente_avatar_path,
                        autor.updated_at AS cliente_avatar_atualizado_em,
                        autor.departamento_id AS cliente_departamento_id,
-                       op.nome AS operador_nome
+                       op.nome AS operador_nome,
+                       princ.codigo AS principal_codigo
                   FROM chamados c
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
                   LEFT JOIN subcategorias sub ON sub.id = c.subcategoria_id
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                   LEFT JOIN perfis op ON op.id = c.operador_id
+                  -- Combinação (0065): o código do principal alimenta o aviso
+                  -- "combinado com BOND-…" no Portal e no Workspace. Quem não
+                  -- enxerga o principal (RLS) recebe NULL aqui — mas o autor de
+                  -- um duplicado sempre enxerga, pois entra em cópia no principal.
+                  LEFT JOIN chamados princ ON princ.id = c.chamado_principal_id
                  WHERE c.id = $1::uuid
                 """,
                 chamado_id,
@@ -195,7 +220,12 @@ class AtendimentoRepo:
         pra avaliar). Antes disso a regra comparava ``operador_id`` com
         ``cliente_id``, mas isso falhava sempre que o card era resolvido por
         um colega do mesmo setor (ou arrastado direto até "Resolvido" sem
-        nunca ser reivindicado, deixando ``operador_id`` nulo)."""
+        nunca ser reivindicado, deixando ``operador_id`` nulo).
+
+        Duplicado de uma combinação (0065) também fica de fora: ele é encerrado
+        como RESOLVIDO sem ninguém ter atendido *aquele* chamado, então travar a
+        abertura de um novo chamado pedindo nota nele seria pedir CSAT de um
+        atendimento que acontece no principal (onde o autor está em cópia)."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
@@ -205,6 +235,7 @@ class AtendimentoRepo:
                  WHERE c.cliente_id = $1::uuid
                    AND c.status = 'RESOLVIDO'
                    AND c.avaliacao_nota IS NULL
+                   AND c.chamado_principal_id IS NULL
                    AND c.departamento_id IS DISTINCT FROM cli.departamento_id
                  ORDER BY c.resolvido_em ASC NULLS LAST
                  LIMIT 1
@@ -359,6 +390,253 @@ class AtendimentoRepo:
             await self._registrar(
                 conn, chamado_id, claims["sub"], "DEPARTAMENTO_ALTERADO",
                 {"de": str(atual), "para": str(departamento_id)},
+            )
+            return dict(row)
+
+    # ---------------------------------------------------------------------
+    # Combinação de chamados duplicados (migration 0065)
+    # ---------------------------------------------------------------------
+    async def combinados(self, claims: dict, chamado_id: str) -> list[dict[str, Any]]:
+        """Chamados combinados NESTE (os duplicados que ele absorveu)."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT c.id, c.codigo, c.titulo, c.combinado_em,
+                       autor.nome AS cliente_nome
+                  FROM chamados c
+                  LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                 WHERE c.chamado_principal_id = $1::uuid
+                 ORDER BY c.combinado_em ASC NULLS LAST
+                """,
+                chamado_id,
+            )
+            return [dict(r) for r in rows]
+
+    async def combinar(
+        self, claims: dict, *, principal_id: str, duplicado_id: str
+    ) -> dict[str, Any]:
+        """Combina ``duplicado_id`` no chamado ``principal_id`` (0065).
+
+        Tudo **sob RLS** — nada de conexão administrativa: as três escritas
+        (marcar o duplicado, mover a cópia, publicar a digest) já são permitidas
+        ao staff do setor pelas policies existentes. Elas ficam num SAVEPOINT
+        comum, então ou a combinação inteira vale, ou nenhuma parte dela vale —
+        nunca um chamado marcado como duplicado sem ninguém em cópia.
+
+        O que acontece com o duplicado: ganha ``chamado_principal_id`` e é
+        encerrado como ``RESOLVIDO`` (para o relógio de SLA e sai do quadro).
+        Quem o exclui dos indicadores é a coluna, não o status — ver a migration.
+
+        O que acontece com o principal: recebe **uma** mensagem pública com o
+        conteúdo do duplicado (`app/domain/combinacao.py`) e passa a ter, em
+        cópia (`chamados_observadores`, 0034), o autor do duplicado e quem já
+        estava em cópia nele — é o que faz "todo mundo receber as atualizações
+        em conjunto" sem nenhuma policy nova.
+
+        Devolve ``{"ok", "codigo", "erro"}``: as recusas são de negócio (o
+        usuário precisa entender o motivo), não exceções. O banco reforça as
+        mesmas regras no trigger ``enforce_combinacao_chamados`` — o que é
+        checado aqui é para dar a mensagem certa, não para valer como trava.
+        """
+        if str(principal_id) == str(duplicado_id):
+            return {"ok": False, "codigo": None, "erro": "Um chamado não pode ser combinado com ele mesmo."}
+
+        async with rls_connection(claims) as conn:
+            principal = await conn.fetchrow(
+                """
+                SELECT c.id, c.codigo, c.cliente_id, c.operador_id, c.departamento_id,
+                       c.chamado_principal_id, COALESCE(dep.autoatendimento, false) AS autoatendimento
+                  FROM chamados c
+                  LEFT JOIN departamentos dep ON dep.id = c.departamento_id
+                 WHERE c.id = $1::uuid
+                """,
+                principal_id,
+            )
+            duplicado = await conn.fetchrow(
+                """
+                SELECT c.id, c.codigo, c.titulo, c.descricao, c.status, c.created_at,
+                       c.cliente_id, c.telefone_contato, c.departamento_id, c.chamado_principal_id,
+                       autor.nome AS cliente_nome, dep_autor.nome AS cliente_departamento
+                  FROM chamados c
+                  LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                  LEFT JOIN departamentos dep_autor ON dep_autor.id = autor.departamento_id
+                 WHERE c.id = $1::uuid
+                """,
+                duplicado_id,
+            )
+            if principal is None or duplicado is None:
+                return {"ok": False, "codigo": None,
+                        "erro": "Chamado não encontrado ou fora do seu escopo de atendimento."}
+
+            codigo = duplicado["codigo"]
+            if duplicado["chamado_principal_id"] is not None:
+                return {"ok": False, "codigo": codigo, "erro": f"{codigo} já está combinado com outro chamado."}
+            if principal["chamado_principal_id"] is not None:
+                return {"ok": False, "codigo": codigo,
+                        "erro": "Este chamado é um duplicado — combine no chamado principal."}
+            if str(duplicado["departamento_id"]) != str(principal["departamento_id"]):
+                return {"ok": False, "codigo": codigo,
+                        "erro": f"{codigo} é de outro departamento de destino e não pode ser combinado aqui."}
+            if await conn.fetchval(
+                "SELECT 1 FROM chamados WHERE chamado_principal_id = $1::uuid LIMIT 1", duplicado_id
+            ):
+                return {"ok": False, "codigo": codigo,
+                        "erro": f"{codigo} já é o principal de outros chamados — desfaça aquelas combinações antes."}
+            # A digest é uma mensagem pública do staff no principal, e a policy
+            # `mensagens_insert` (0042) só a aceita em chamado já assumido e por
+            # quem não seja o autor dele (fora do autoatendimento). Barrar aqui
+            # dá uma instrução; deixar passar geraria erro de RLS no meio da
+            # transação e um 500 sem explicação.
+            if principal["operador_id"] is None:
+                return {"ok": False, "codigo": codigo,
+                        "erro": "Assuma este chamado (Iniciar atendimento) antes de combinar outros nele."}
+            if (
+                str(principal["cliente_id"]) == str(claims["sub"])
+                and not principal["autoatendimento"]
+            ):
+                return {"ok": False, "codigo": codigo,
+                        "erro": "Você abriu este chamado — outra pessoa do setor precisa fazer a combinação."}
+
+            mensagens = [dict(r) for r in await conn.fetch(
+                """
+                SELECT m.conteudo, m.created_at, m.anexos, p.nome AS remetente_nome
+                  FROM mensagens m
+                  LEFT JOIN perfis p ON p.id = m.remetente_id
+                 WHERE m.chamado_id = $1::uuid AND m.is_interna = false
+                 ORDER BY m.created_at ASC
+                """,
+                duplicado_id,
+            )]
+            for m in mensagens:
+                bruto = m.get("anexos")
+                m["anexos"] = json.loads(bruto) if isinstance(bruto, str) else (bruto or [])
+
+            # SAVEPOINT (`conn.transaction()` aninhado): as escritas abaixo
+            # rodam dentro da transação do REQUEST, que é compartilhada por
+            # todas as chamadas do repositório (`rls_request_scope`). Sem o
+            # savepoint, um erro de banco aqui — uma corrida entre dois
+            # operadores combinando ao mesmo tempo, que as checagens acima não
+            # têm como pegar — abortaria a transação inteira e levaria junto as
+            # combinações já feitas neste POST e o render da página.
+            try:
+                async with conn.transaction():
+                    marcado = await conn.fetchrow(
+                        """
+                        UPDATE chamados
+                           SET chamado_principal_id = $2::uuid,
+                               status = 'RESOLVIDO'::status_chamado,
+                               resolvido_em = COALESCE(resolvido_em, now())
+                         WHERE id = $1::uuid AND chamado_principal_id IS NULL
+                     RETURNING id, codigo
+                        """,
+                        duplicado_id,
+                        principal_id,
+                    )
+                    if marcado is None:
+                        # RLS permitiu LER o duplicado (ex.: líder de setor
+                        # acompanhando a própria equipe, 0028) mas não ESCREVER.
+                        return {"ok": False, "codigo": codigo,
+                                "erro": f"Sem permissão para combinar {codigo} — só o setor de destino dele pode."}
+
+                    # Em cópia: o autor do duplicado + quem já estava em cópia
+                    # nele. O autor do PRINCIPAL fica de fora (já é o dono).
+                    await conn.execute(
+                        """
+                        INSERT INTO chamados_observadores (chamado_id, perfil_id, criado_por)
+                        SELECT $1::uuid, s.pid, $3::uuid
+                          FROM (
+                                SELECT $2::uuid AS pid
+                                 UNION
+                                SELECT o.perfil_id FROM chamados_observadores o
+                                 WHERE o.chamado_id = $4::uuid
+                               ) s
+                         WHERE s.pid IS DISTINCT FROM $5::uuid
+                        ON CONFLICT DO NOTHING
+                        """,
+                        principal_id,
+                        duplicado["cliente_id"],
+                        claims["sub"],
+                        duplicado_id,
+                        principal["cliente_id"],
+                    )
+
+                    await conn.execute(
+                        """
+                        INSERT INTO mensagens (chamado_id, remetente_id, conteudo, is_interna, anexos)
+                        VALUES ($1::uuid, $2::uuid, $3, false, $4::jsonb)
+                        """,
+                        principal_id,
+                        claims["sub"],
+                        texto_combinacao(dict(duplicado), mensagens),
+                        json.dumps(anexos_combinacao(mensagens)),
+                    )
+
+                    await self._registrar(
+                        conn, duplicado_id, claims["sub"], "COMBINADO",
+                        {
+                            "principal_id": str(principal_id),
+                            "principal_codigo": principal["codigo"],
+                            # De onde ele veio, para o "desfazer" saber ao que voltar.
+                            "status_anterior": duplicado["status"],
+                        },
+                    )
+                    await self._registrar(
+                        conn, principal_id, claims["sub"], "COMBINACAO_RECEBIDA",
+                        {"duplicado_id": str(duplicado_id), "duplicado_codigo": codigo},
+                    )
+            except PostgresError:
+                # A mensagem do banco não vai para a tela (pode carregar detalhe
+                # de schema); o motivo real fica no log para investigação.
+                log.exception("Falha ao combinar %s em %s", duplicado_id, principal_id)
+                return {"ok": False, "codigo": codigo,
+                        "erro": f"Não foi possível combinar {codigo}. Recarregue a página e tente de novo."}
+            return {"ok": True, "codigo": codigo, "erro": None}
+
+    async def desfazer_combinacao(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
+        """Devolve um duplicado à vida própria (0065): limpa o vínculo e restaura
+        o status que ele tinha antes, lido do ``COMBINADO`` mais recente no
+        histórico.
+
+        Não desfaz os efeitos colaterais de propósito: a digest publicada no
+        principal continua lá (é histórico do atendimento, não lixo) e quem
+        entrou em cópia continua em cópia — tirar alguém que talvez tenha sido
+        adicionado por outro motivo faria mais estrago do que deixar. Removê-los
+        segue possível, um a um, em "Em cópia" no Portal.
+        """
+        async with rls_connection(claims) as conn:
+            atual = await conn.fetchval(
+                "SELECT chamado_principal_id FROM chamados WHERE id = $1::uuid", chamado_id
+            )
+            if atual is None:
+                return None
+            anterior = await conn.fetchval(
+                """
+                SELECT h.detalhes->>'status_anterior'
+                  FROM historico_chamados h
+                 WHERE h.chamado_id = $1::uuid AND h.acao = 'COMBINADO'
+                 ORDER BY h.created_at DESC
+                 LIMIT 1
+                """,
+                chamado_id,
+            )
+            status = anterior if anterior in STATUS_CHAMADO else STATUS_PADRAO_DESCOMBINAR
+            row = await conn.fetchrow(
+                """
+                UPDATE chamados
+                   SET chamado_principal_id = NULL,
+                       status = $2::status_chamado,
+                       resolvido_em = CASE WHEN $2 = 'RESOLVIDO' THEN resolvido_em ELSE NULL END
+                 WHERE id = $1::uuid AND chamado_principal_id IS NOT NULL
+             RETURNING id, status
+                """,
+                chamado_id,
+                status,
+            )
+            if row is None:
+                return None
+            await self._registrar(
+                conn, chamado_id, claims["sub"], "COMBINACAO_DESFEITA",
+                {"principal_id": str(atual), "status": status},
             )
             return dict(row)
 

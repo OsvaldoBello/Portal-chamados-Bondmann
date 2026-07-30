@@ -1351,3 +1351,39 @@ def test_responder_como_nao_autor_nao_agenda_re_triagem():
             )
     assert resp.status_code == 303
     executar.assert_not_called()
+
+
+# --------------------------------------------------------------------------
+# 2026-07-30: chamado combinado (duplicado) na visão do autor (migration 0065).
+# --------------------------------------------------------------------------
+def test_detalhe_de_chamado_combinado_avisa_o_autor_e_aponta_o_principal():
+    """O autor não pode ficar no escuro: o chamado dele foi encerrado por ser
+    repetido, e o atendimento (que ele acompanha em cópia) segue no principal."""
+    repo = FakeRepo(
+        chamado=_chamado(chamado_principal_id="p1", principal_codigo="BOND-2026-00007")
+    )
+    with portal_client(repo) as c:
+        r = c.get("/portal/chamados/aaa")
+    assert r.status_code == 200
+    assert "combinados" in r.text
+    assert "BOND-2026-00007" in r.text
+    assert "em cópia" in r.text
+    assert "/portal/chamados/p1" in r.text
+
+
+def test_chamado_combinado_nao_pede_avaliacao_nem_reabertura():
+    """Ninguém atendeu o duplicado — CSAT dele mediria um atendimento que
+    aconteceu em outro chamado, e reabri-lo devolveria ao quadro algo que
+    continua fora dos indicadores."""
+    # Sem a combinação, este mesmo chamado (RESOLVIDO, do próprio autor, aberto
+    # para outro setor) mostraria as duas coisas — é o que torna o teste válido.
+    with portal_client(FakeRepo(chamado=_chamado())) as c:
+        base = c.get("/portal/chamados/aaa").text
+    assert "Reabrir chamado" in base
+    assert "Como você avalia a resolução deste chamado?" in base
+
+    repo = FakeRepo(chamado=_chamado(chamado_principal_id="p1"))
+    with portal_client(repo) as c:
+        r = c.get("/portal/chamados/aaa")
+    assert "Reabrir chamado" not in r.text
+    assert "Como você avalia a resolução deste chamado?" not in r.text

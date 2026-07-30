@@ -31,7 +31,12 @@ from app.config import get_settings
 from app.db import rls_request_scope
 from app.domain.formularios_quimico import rotular
 from app.domain.sla_visual import estado_sla
-from app.repositories.chamados import PRIORIDADES, ChamadosRepo, get_chamados_repo
+from app.repositories.chamados import (
+    PRIORIDADES,
+    STATUS_CHAMADO,
+    ChamadosRepo,
+    get_chamados_repo,
+)
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
 from app.services.atendimento import AtendimentoService
@@ -39,10 +44,11 @@ from app.templating import render
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
-STATUS_VALIDOS = (
-    "NOVO", "A_FAZER", "PROJETOS", "EM_ATENDIMENTO", "RESPOSTA_CLIENTE",
-    "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO",
-)
+# Whitelist server-side da troca de status = o enum inteiro do banco. Definido
+# uma vez em `app/repositories/atendimento.py` (junto de quem escreve status) e
+# reexportado pela fachada — as duas cópias saíam de sincronia a cada status
+# novo de setor (PROJETOS/RESPOSTA_CLIENTE).
+STATUS_VALIDOS = STATUS_CHAMADO
 
 # Status oferecidos na UI (dropdown de atendimento e colunas do Kanban) variam por
 # setor: "A fazer" (A_FAZER) e "Aguardando terceiros" (AGUARDANDO_TERCEIROS) são
@@ -464,6 +470,16 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
     # IA ganha um bloco de avaliação 1–5 ★ (KPI "notas úteis ≥ 70%", Seção
     # 10.2). Sob RLS: quem não é staff do departamento recebe None.
     ia_triagem = await repo.ia_triagem_nota(ctx.user.claims, chamado_id)
+    # Combinação de chamados (0065): os duplicados que ESTE chamado absorveu, e
+    # — só para quem pode atender um chamado que ainda não é duplicado — os
+    # candidatos a combinar, já ordenados por semelhança com este.
+    combinados = await repo.combinados(ctx.user.claims, chamado_id)
+    eh_duplicado = bool(chamado.get("chamado_principal_id"))
+    candidatos_combinacao = (
+        await repo.candidatos_combinacao(ctx.user.claims, chamado_id)
+        if pode_atender and not eh_duplicado
+        else []
+    )
     settings = get_settings()
     ctx_render = {
         "perfil": ctx.perfil,
@@ -475,9 +491,15 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         "categorias_edit": categorias_edit,
         "subcategorias_edit": subcategorias_edit,
         "observadores": observadores,
+        "combinados": combinados,
+        "candidatos_combinacao": candidatos_combinacao,
         "eh_autor": eh_autor,
         "pode_reivindicar": pode_reivindicar,
         "pode_atender": pode_atender,
+        # Desfazer combinação é do setor de destino, não de quem "pode atender":
+        # o duplicado fica RESOLVIDO e às vezes sem operador, então nem
+        # pode_atender nem pode_reivindicar descrevem quem tem direito aqui.
+        "dept_bate": perm.dept_bate,
         "prioridades": PRIORIDADES,
         "status_validos": _status_ui(chamado.get("departamento")),
         "supabase_url": settings.supabase_url or None,
@@ -746,6 +768,90 @@ async def transferir(
     departamento_id = departamento_id.strip()
     if departamento_id and ctx.perfil.get("is_ti"):
         await repo.transferir(ctx.user.claims, chamado_id, departamento_id=departamento_id)
+    return _voltar(chamado_id, origem)
+
+
+# --------------------------------------------------------------------------
+# Combinação de chamados duplicados (migration 0065)
+# --------------------------------------------------------------------------
+@router.get("/chamados/{chamado_id}/combinar/candidatos")
+async def combinar_candidatos(
+    request: Request,
+    chamado_id: str,
+    busca: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+):
+    """Lista de candidatos a combinar (fragmento HTMX do campo de busca).
+
+    Sem filtro digitado a lista já vem ordenada por semelhança com este chamado
+    (FTS) — é o caminho normal de uso: o operador abre o chamado do incidente e
+    os repetidos estão ali, sem procurar.
+    """
+    candidatos = await repo.candidatos_combinacao(
+        ctx.user.claims, chamado_id, busca=busca.strip() or None
+    )
+    return render(
+        request, "workspace/_combinar_candidatos.html", {"candidatos_combinacao": candidatos}
+    )
+
+
+@router.post("/chamados/{chamado_id}/combinar")
+async def combinar(
+    request: Request,
+    chamado_id: str,
+    duplicados: list[str] = Form(default=[]),
+    origem: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Combina os chamados marcados NESTE (que passa a ser o principal).
+
+    Um a um, cada um no seu SAVEPOINT (ver ``AtendimentoRepo.combinar``): se o
+    3º de 5 for recusado (outro setor, já combinado, sem permissão), os outros 4
+    continuam valendo e o operador vê exatamente qual falhou — em vez de perder
+    a seleção inteira.
+    """
+    alvos = {d.strip() for d in duplicados if d.strip()}
+    combinados_ok: list[str] = []
+    erros: list[str] = []
+    for duplicado_id in alvos:
+        resultado = await repo.combinar(
+            ctx.user.claims, principal_id=chamado_id, duplicado_id=duplicado_id
+        )
+        if resultado.get("ok"):
+            combinados_ok.append(resultado.get("codigo") or "")
+        else:
+            erros.append(resultado.get("erro") or "Não foi possível combinar o chamado.")
+
+    if erros:
+        # Sem redirect: a mensagem de erro precisa chegar à tela, e a única via
+        # de "flash" deste projeto é o próprio re-render (mesmo padrão de
+        # `erro_composer` em `responder`).
+        return await _carregar_atendimento(
+            request, chamado_id, ctx, repo, origem=origem,
+            erro_combinacao=" ".join(erros),
+            aviso_combinacao=(
+                f"{len(combinados_ok)} chamado(s) combinado(s): {', '.join(combinados_ok)}."
+                if combinados_ok else ""
+            ),
+        )
+    return _voltar(chamado_id, origem)
+
+
+@router.post("/chamados/{chamado_id}/descombinar")
+async def descombinar(
+    request: Request,
+    chamado_id: str,
+    origem: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Desfaz a combinação: o chamado volta a ser independente, no status que
+    tinha antes. Escopo pela RLS (staff do setor de destino)."""
+    await repo.desfazer_combinacao(ctx.user.claims, chamado_id)
     return _voltar(chamado_id, origem)
 
 

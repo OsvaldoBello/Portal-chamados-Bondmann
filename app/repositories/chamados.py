@@ -27,7 +27,7 @@ from datetime import date
 from typing import Any
 
 from app.db import rls_connection
-from app.repositories.atendimento import AtendimentoRepo
+from app.repositories.atendimento import STATUS_CHAMADO, AtendimentoRepo
 from app.repositories.catalogo import (
     CACHE_CATEGORIAS,
     CACHE_DEPARTAMENTOS,
@@ -45,6 +45,7 @@ __all__ = [
     "validar_comentario_avaliacao",
     "validar_telefone_contato",
     "PRIORIDADES",
+    "STATUS_CHAMADO",
     "CACHE_CATEGORIAS",
     "CACHE_DEPARTAMENTOS",
     "CACHE_SUBCATEGORIAS",
@@ -120,16 +121,23 @@ class ChamadosRepo:
 
         Filtra por `cliente_id = auth.uid()` para que também o staff (que via RLS
         enxerga a fila do seu setor) veja aqui apenas os próprios. A fila de
-        atendimento por departamento é o Workspace (Fase 4)."""
+        atendimento por departamento é o Workspace (Fase 4).
+
+        Duplicado de combinação (0065) **continua aparecendo** aqui, ao
+        contrário da fila e dos indicadores: quem abriu o chamado precisa saber
+        o que aconteceu com ele. `chamado_principal_id`/`principal_codigo`
+        trocam o badge de status por "Combinado com BOND-…" na listagem."""
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
                 SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade,
                        c.created_at, c.limite_resolucao, c.avaliacao_nota,
+                       c.chamado_principal_id, princ.codigo AS principal_codigo,
                        cat.nome AS categoria, dep.nome AS departamento
                   FROM chamados c
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
+                  LEFT JOIN chamados princ ON princ.id = c.chamado_principal_id
                  WHERE c.cliente_id = $1::uuid
                  ORDER BY c.created_at DESC
                  LIMIT $2
@@ -315,6 +323,13 @@ class ChamadosRepo:
             claims, departamento_id=departamento_id, excluir_id=excluir_id
         )
 
+    async def candidatos_combinacao(
+        self, claims: dict, chamado_id: str, *, busca: str | None = None, limite: int = 10
+    ) -> list[dict[str, Any]]:
+        return await self._fila.candidatos_combinacao(
+            claims, chamado_id, busca=busca, limite=limite
+        )
+
     # -- AtendimentoRepo ---------------------------------------------------------
 
     async def obter(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
@@ -388,6 +403,19 @@ class ChamadosRepo:
         self, claims: dict, chamado_id: str, *, departamento_id: str
     ) -> dict[str, Any] | None:
         return await self._atendimento.transferir(claims, chamado_id, departamento_id=departamento_id)
+
+    async def combinados(self, claims: dict, chamado_id: str) -> list[dict[str, Any]]:
+        return await self._atendimento.combinados(claims, chamado_id)
+
+    async def combinar(
+        self, claims: dict, *, principal_id: str, duplicado_id: str
+    ) -> dict[str, Any]:
+        return await self._atendimento.combinar(
+            claims, principal_id=principal_id, duplicado_id=duplicado_id
+        )
+
+    async def desfazer_combinacao(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
+        return await self._atendimento.desfazer_combinacao(claims, chamado_id)
 
     async def avaliacao_pendente(self, claims: dict) -> dict[str, Any] | None:
         return await self._atendimento.avaliacao_pendente(claims)

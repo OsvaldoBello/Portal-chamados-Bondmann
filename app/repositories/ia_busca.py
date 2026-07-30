@@ -6,6 +6,12 @@ Fase A: FTS português (migration ``0053``) sobre chamados ``RESOLVIDO`` do
 registrada) é citado na nota interna. Fase B (pgvector) fica para quando o
 volume justificar (Seção 4.5).
 
+Chamado combinado (duplicado, ``chamado_principal_id``, migration 0065) fica de
+fora: ele foi encerrado por ser repetido, não por ter sido resolvido — a
+"resolução registrada" dele seria a digest da combinação, e citar isso como
+caso semelhante mandaria o operador para um beco sem saída em vez de para o
+chamado que realmente foi atendido (o principal continua elegível).
+
 Campos pesquisados: o casamento e o ranqueamento cobrem **título + descrição**
 (coluna gerada ``chamados.fts``) **e a resolução registrada** — esta última
 concatenada ao ``tsvector`` em tempo de busca (``c.fts || to_tsvector(res)``),
@@ -50,6 +56,7 @@ SELECT c.id::text AS id, c.codigo, c.titulo, res.conteudo AS resolucao
  WHERE c.departamento_id = $1
    AND c.id <> $2::uuid
    AND c.status = 'RESOLVIDO'
+   AND c.chamado_principal_id IS NULL
    AND (c.fts || to_tsvector('portuguese', coalesce(res.conteudo, '')))
        @@ websearch_to_tsquery('portuguese', $3)
  ORDER BY ts_rank(c.fts || to_tsvector('portuguese', coalesce(res.conteudo, '')),

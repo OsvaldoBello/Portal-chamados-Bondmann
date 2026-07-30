@@ -1072,7 +1072,7 @@ _CSV_COLS = [
     "codigo", "titulo", "descricao", "status", "prioridade", "departamento",
     "categoria", "subcategoria", "solicitante", "operador", "created_at",
     "limite_resolucao", "respondido_em", "resolvido_em", "avaliacao_nota",
-    "avaliacao_em", "avaliacao_comentario",
+    "avaliacao_em", "avaliacao_comentario", "combinado_com",
 ]
 
 # Cabeçalho legível (pt-BR) — mesmo padrão de planilha de relatório usado pela
@@ -1095,6 +1095,9 @@ _CSV_HEADERS = {
     "avaliacao_nota": "Avaliação",
     "avaliacao_em": "Avaliado em",
     "avaliacao_comentario": "Comentário da avaliação",
+    # Combinação de chamados (0065): vazio = chamado normal; preenchido = este
+    # chamado é duplicado do código indicado e NÃO conta nos indicadores.
+    "combinado_com": "Combinado com",
 }
 
 

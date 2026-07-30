@@ -15,6 +15,18 @@ from app.db import admin_connection, rls_connection
 
 
 class AdminRepo:
+    """Indicadores e gestão do painel Admin.
+
+    🔁 **Combinação de chamados (migration 0065):** toda agregação desta classe
+    ignora duplicados (``chamados.chamado_principal_id IS NOT NULL``) — é o
+    ponto da feature. Um incidente que gerou 8 chamados iguais passa a contar
+    como 1 no volume, no CSAT, no TMA, na conformidade de SLA e na
+    produtividade por operador. O ÚNICO lugar que continua listando o duplicado
+    é o export CSV (:meth:`exportar`), com a coluna "Combinado com": relatório
+    é dado bruto, e quem analisa filtra a coluna se quiser — apagar a linha
+    esconderia que o incidente teve 8 pessoas afetadas.
+    """
+
     def _kpi_scope(self, claims: dict, todos_setores: bool):
         """Conexão para os indicadores.
 
@@ -80,6 +92,7 @@ class AdminRepo:
                            LIMIT 1)                                   AS resolvido_de
                     FROM chamados c
                    WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                     AND c.chamado_principal_id IS NULL
                 )
                 SELECT
                   count(*) FILTER (
@@ -156,6 +169,7 @@ class AdminRepo:
             rows = await conn.fetch(
                 """SELECT status, count(*) n FROM chamados
                     WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                      AND chamado_principal_id IS NULL
                       AND (
                         CASE WHEN status = 'RESOLVIDO' THEN
                           ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
@@ -185,6 +199,7 @@ class AdminRepo:
             rows = await conn.fetch(
                 """SELECT avaliacao_nota n, count(*) c FROM chamados
                     WHERE avaliacao_nota IS NOT NULL
+                      AND chamado_principal_id IS NULL
                       AND ($1::uuid IS NULL OR departamento_id = $1::uuid)
                       AND ($2::timestamptz IS NULL OR avaliacao_em >= $2::timestamptz)
                       AND ($3::timestamptz IS NULL OR avaliacao_em < $3::timestamptz)
@@ -220,6 +235,7 @@ class AdminRepo:
                                                                         AS atribuidos
                   FROM chamados c LEFT JOIN perfis op ON op.id = c.operador_id
                  WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                   AND c.chamado_principal_id IS NULL
                  GROUP BY op.nome ORDER BY resolvidos DESC NULLS LAST LIMIT 15
                 """,
                 departamento_id,
@@ -249,6 +265,7 @@ class AdminRepo:
                   FROM chamados c
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                  WHERE c.avaliacao_nota IS NOT NULL
+                   AND c.chamado_principal_id IS NULL
                    AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
                    AND ($3::timestamptz IS NULL OR c.avaliacao_em >= $3::timestamptz)
                    AND ($4::timestamptz IS NULL OR c.avaliacao_em < $4::timestamptz)
@@ -284,6 +301,7 @@ class AdminRepo:
                   FROM chamados c
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                  WHERE c.avaliacao_nota = $1
+                   AND c.chamado_principal_id IS NULL
                    AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
                    AND ($3::timestamptz IS NULL OR c.avaliacao_em >= $3::timestamptz)
                    AND ($4::timestamptz IS NULL OR c.avaliacao_em < $4::timestamptz)
@@ -311,6 +329,7 @@ class AdminRepo:
                 SELECT COALESCE(d.nome, '—') AS departamento, count(*) AS total
                   FROM chamados c LEFT JOIN departamentos d ON d.id = c.departamento_id
                  WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                   AND c.chamado_principal_id IS NULL
                    AND ($2::timestamptz IS NULL OR c.created_at >= $2::timestamptz)
                    AND ($3::timestamptz IS NULL OR c.created_at < $3::timestamptz)
                  GROUP BY d.nome ORDER BY total DESC
@@ -331,6 +350,7 @@ class AdminRepo:
                 SELECT COALESCE(setor, 'Não informado') AS setor, count(*) AS total
                   FROM chamados
                  WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                   AND chamado_principal_id IS NULL
                    AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
                    AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
                  GROUP BY setor ORDER BY total DESC
@@ -700,6 +720,11 @@ class AdminRepo:
 
     # ---- Export CSV -----------------------------------------------------
     async def exportar(self, claims: dict) -> list[dict[str, Any]]:
+        """Dado bruto para relatório. Diferente dos KPIs, **mantém** os chamados
+        combinados (0065) e marca de qual principal eles são na coluna
+        ``combinado_com`` — quem analisa a planilha decide se filtra ou não, e o
+        tamanho real do incidente (quantas pessoas foram afetadas) não se perde.
+        """
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
@@ -707,13 +732,15 @@ class AdminRepo:
                        dep.nome AS departamento, cat.nome AS categoria, sub.nome AS subcategoria,
                        autor.nome AS solicitante, op.nome AS operador,
                        c.created_at, c.limite_resolucao, c.respondido_em, c.resolvido_em,
-                       c.avaliacao_nota, c.avaliacao_em, c.avaliacao_comentario
+                       c.avaliacao_nota, c.avaliacao_em, c.avaliacao_comentario,
+                       princ.codigo AS combinado_com
                   FROM chamados c
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                   LEFT JOIN categorias cat ON cat.id = c.categoria_id
                   LEFT JOIN subcategorias sub ON sub.id = c.subcategoria_id
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                   LEFT JOIN perfis op ON op.id = c.operador_id
+                  LEFT JOIN chamados princ ON princ.id = c.chamado_principal_id
                  ORDER BY c.created_at DESC
                 """
             )

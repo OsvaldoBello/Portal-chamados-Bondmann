@@ -43,9 +43,15 @@ def _chamado(**extra):
 class FakeRepo:
     def __init__(self, *, is_ti=True, status="NOVO", perfil_departamento_id="d1",
                  operador_id=None, cliente_id="aaa", observadores=None, departamento="TI",
-                 recebe_chamados=True, ia_triagem=None):
+                 recebe_chamados=True, ia_triagem=None, combinados=None,
+                 candidatos_combinacao=None, chamado_principal_id=None,
+                 combinar_erro=None):
         self.acoes = []
         self._ia_triagem = ia_triagem
+        self._combinados = combinados or []
+        self._candidatos = candidatos_combinacao or []
+        self._chamado_principal_id = chamado_principal_id
+        self._combinar_erro = combinar_erro
         self._is_ti = is_ti
         self._status = status
         self._perfil_departamento_id = perfil_departamento_id
@@ -105,7 +111,10 @@ class FakeRepo:
 
     async def obter(self, claims, cid):
         return _chamado(id=cid, status=self._status, operador_id=self._operador_id,
-                         cliente_id=self._cliente_id)
+                         cliente_id=self._cliente_id,
+                         chamado_principal_id=self._chamado_principal_id,
+                         principal_codigo="BOND-2026-00009" if self._chamado_principal_id else None,
+                         combinado_em=NOW if self._chamado_principal_id else None)
 
     async def marcar_notificacao_vista(self, claims, cid):
         self.acoes.append(("visto", cid))
@@ -156,6 +165,23 @@ class FakeRepo:
 
     async def excluir(self, claims, cid):
         self.acoes.append(("excluir", cid)); return True
+
+    async def combinados(self, claims, cid):
+        return self._combinados
+
+    async def candidatos_combinacao(self, claims, cid, *, busca=None, limite=10):
+        self.acoes.append(("candidatos", cid, busca))
+        return self._candidatos
+
+    async def combinar(self, claims, *, principal_id, duplicado_id):
+        self.acoes.append(("combinar", principal_id, duplicado_id))
+        if self._combinar_erro:
+            return {"ok": False, "codigo": "BOND-2026-00002", "erro": self._combinar_erro}
+        return {"ok": True, "codigo": "BOND-2026-00002", "erro": None}
+
+    async def desfazer_combinacao(self, claims, cid):
+        self.acoes.append(("descombinar", cid))
+        return {"id": cid, "status": "EM_ATENDIMENTO"}
 
     async def ia_triagem_nota(self, claims, cid):
         return self._ia_triagem
@@ -812,3 +838,102 @@ def test_alterar_categoria_invalida_e_ignorada_mas_nao_quebra():
     assert r.status_code == 303
     # categoria inválida -> gravada como None (defesa em profundidade)
     assert ("categoria", "c1", None, None) in repo.acoes
+
+
+# --------------------------------------------------------------------------
+# 2026-07-30: combinação de chamados duplicados (migration 0065).
+# --------------------------------------------------------------------------
+def _candidato(**extra):
+    base = {"id": "c2", "codigo": "BOND-2026-00002", "titulo": "Servidor fora do ar",
+            "status": "NOVO", "created_at": NOW, "cliente_nome": "Bruno"}
+    base.update(extra)
+    return base
+
+
+def test_combinar_so_aparece_com_o_chamado_assumido():
+    """O painel de combinação vive dentro de `pode_atender`: quem ainda não
+    assumiu o chamado não combina nada nele (é também o que a policy
+    `mensagens_insert` exige para a digest ser publicada)."""
+    with ws_client(FakeRepo(candidatos_combinacao=[_candidato()])) as c:
+        r = c.get("/workspace/chamados/c1")  # status NOVO, sem operador
+    assert "Combinar chamados" not in r.text
+
+    with ws_client(FakeRepo(status="EM_ATENDIMENTO", operador_id=OP,
+                            candidatos_combinacao=[_candidato()])) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert "Combinar chamados" in r.text
+    assert 'value="c2"' in r.text
+    assert "BOND-2026-00002" in r.text
+
+
+def test_candidatos_fragmento_repassa_a_busca():
+    repo = FakeRepo(candidatos_combinacao=[_candidato()])
+    with ws_client(repo) as c:
+        r = c.get("/workspace/chamados/c1/combinar/candidatos?busca=servidor")
+    assert r.status_code == 200
+    assert ("candidatos", "c1", "servidor") in repo.acoes
+    assert "BOND-2026-00002" in r.text
+
+
+def test_combinar_chama_o_repo_para_cada_selecionado_e_redireciona():
+    repo = FakeRepo(status="EM_ATENDIMENTO", operador_id=OP)
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/combinar",
+            data={"csrf_token": t, "duplicados": ["c2", "c3"]},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert ("combinar", "c1", "c2") in repo.acoes
+    assert ("combinar", "c1", "c3") in repo.acoes
+
+
+def test_combinar_recusado_mostra_o_motivo_na_tela():
+    """Recusa é regra de negócio, não exceção: a tela volta com o motivo em vez
+    de redirecionar em silêncio (o operador precisa saber qual falhou)."""
+    repo = FakeRepo(status="EM_ATENDIMENTO", operador_id=OP,
+                    combinar_erro="BOND-2026-00002 já está combinado com outro chamado.")
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/combinar",
+            data={"csrf_token": t, "duplicados": ["c2"]},
+            follow_redirects=False,
+        )
+    assert r.status_code == 200
+    assert "já está combinado" in r.text
+
+
+def test_chamado_combinado_mostra_aviso_e_botao_de_desfazer():
+    with ws_client(FakeRepo(status="RESOLVIDO", chamado_principal_id="c9")) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert "Chamado combinado" in r.text
+    assert "BOND-2026-00009" in r.text            # link para o principal
+    assert "não conta nos indicadores" in r.text
+    assert "Desfazer combinação" in r.text
+    # Um duplicado não oferece combinar outros nele (evita corrente).
+    assert "Combinar selecionados neste chamado" not in r.text
+
+
+def test_descombinar_chama_o_repo():
+    repo = FakeRepo(status="RESOLVIDO", chamado_principal_id="c9")
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/descombinar",
+            data={"csrf_token": t},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert ("descombinar", "c1") in repo.acoes
+
+
+def test_lista_de_combinados_aparece_no_chamado_principal():
+    combinados = [{"id": "c2", "codigo": "BOND-2026-00002", "titulo": "Rede caiu",
+                   "cliente_nome": "Bruno", "combinado_em": NOW}]
+    with ws_client(FakeRepo(status="EM_ATENDIMENTO", operador_id=OP, combinados=combinados)) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert "Chamados combinados neste (1)" in r.text
+    assert "BOND-2026-00002" in r.text
+    assert "Bruno" in r.text

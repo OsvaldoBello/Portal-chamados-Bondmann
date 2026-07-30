@@ -25,6 +25,14 @@ class FilaRepo:
       - chamados_departamento() (novo): chamados abertos por OUTRO colega do
         MEU setor de origem, para QUALQUER departamento de destino (mesmo
         recorte de leitura da RLS de líder de setor, migration 0028).
+
+    🔁 Combinação de chamados (migration 0065): **nenhum** dos recortes acima
+    devolve duplicados (``chamado_principal_id IS NOT NULL``). Eles saíram do
+    quadro no momento em que foram combinados — o atendimento acontece no
+    chamado principal, e contá-los na fila/nos cartões seria o mesmo problema
+    de volume inflado que a feature existe para resolver. O duplicado continua
+    acessível pelo link direto (``/workspace/chamados/{id}``) e em "Meus
+    chamados" do autor, com o aviso de para onde ele foi.
     """
 
     _FILA_COLUNAS = """
@@ -90,6 +98,7 @@ class FilaRepo:
                 self._FILA_COLUNAS
                 + """
                  WHERE ($6::uuid IS NULL OR c.departamento_id = $6::uuid)
+                   AND c.chamado_principal_id IS NULL
                    AND (
                      dep.autoatendimento
                      OR (c.cliente_id <> auth.uid() AND autor.departamento_id IS DISTINCT FROM c.departamento_id)
@@ -157,6 +166,7 @@ class FilaRepo:
                 + """
                  WHERE ($5::uuid IS NULL OR autor.departamento_id = $5::uuid)
                    AND c.cliente_id <> auth.uid()
+                   AND c.chamado_principal_id IS NULL
                    AND ($1::status_chamado IS NULL OR c.status = $1::status_chamado)
                    AND ($3::uuid IS NULL OR c.categoria_id = $3::uuid)
                    AND ($4::prioridade_chamado IS NULL OR c.prioridade = $4::prioridade_chamado)
@@ -187,6 +197,7 @@ class FilaRepo:
                      LEFT JOIN perfis autor ON autor.id = c.cliente_id
                      LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                     WHERE ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
+                      AND c.chamado_principal_id IS NULL
                       AND (
                         dep.autoatendimento
                         OR (c.cliente_id <> auth.uid() AND autor.departamento_id IS DISTINCT FROM c.departamento_id)
@@ -209,6 +220,7 @@ class FilaRepo:
                      LEFT JOIN perfis autor ON autor.id = c.cliente_id
                      LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                     WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                      AND c.chamado_principal_id IS NULL
                       AND (
                         dep.autoatendimento
                         OR (c.cliente_id <> auth.uid() AND autor.departamento_id IS DISTINCT FROM c.departamento_id)
@@ -228,6 +240,52 @@ class FilaRepo:
             "AGUARDANDO": por.get("AGUARDANDO", 0),
             "RESOLVIDO": por.get("RESOLVIDO", 0),
         }
+
+    async def candidatos_combinacao(
+        self, claims: dict, chamado_id: str, *, busca: str | None = None, limite: int = 10
+    ) -> list[dict[str, Any]]:
+        """Chamados que podem ser combinados NESTE (migration 0065).
+
+        Elegível = mesmo departamento de destino, ainda em aberto, que não seja
+        duplicado nem principal de ninguém (o trigger recusaria os dois casos —
+        aqui a lista já nasce sem eles, para não oferecer o que vai falhar).
+
+        Ordenação **por semelhança com o chamado atual**, e é isso que faz a
+        tela servir ao caso real: quando o servidor cai e chegam 8 chamados
+        parecidos, os candidatos certos vêm no topo sem ninguém digitar nada. O
+        ranking usa a coluna FTS em português (``chamados.fts``, migration 0053,
+        já usada pela busca de semelhantes da IA) contra o título deste chamado;
+        como é ORDER BY e não WHERE, um casamento fraco não some da lista —
+        apenas desce. ``busca`` (código/assunto/descrição) filtra por cima,
+        para quem já sabe o número do chamado repetido.
+        """
+        busca_norm = f"%{busca.strip()}%" if busca and busca.strip() else None
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT c.id, c.codigo, c.titulo, c.status, c.created_at,
+                       autor.nome AS cliente_nome
+                  FROM chamados c
+                  JOIN chamados alvo ON alvo.id = $1::uuid
+                  LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                 WHERE c.id <> alvo.id
+                   AND c.departamento_id = alvo.departamento_id
+                   AND c.chamado_principal_id IS NULL
+                   AND c.status <> 'RESOLVIDO'::status_chamado
+                   AND NOT EXISTS (
+                     SELECT 1 FROM chamados f WHERE f.chamado_principal_id = c.id
+                   )
+                   AND ($2::text IS NULL
+                        OR c.codigo ILIKE $2 OR c.titulo ILIKE $2 OR c.descricao ILIKE $2)
+                 ORDER BY ts_rank(c.fts, plainto_tsquery('portuguese', alvo.titulo)) DESC,
+                          c.created_at DESC
+                 LIMIT $3
+                """,
+                chamado_id,
+                busca_norm,
+                limite,
+            )
+            return [dict(r) for r in rows]
 
     async def operadores(
         self, claims: dict, *, departamento_id: str | None = None, excluir_id: str | None = None

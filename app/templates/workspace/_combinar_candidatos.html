@@ -1,0 +1,19 @@
+{# Candidatos a combinar (migration 0065) — fragmento recarregado por HTMX a
+   cada busca. Só checkboxes: o submit é do form que envolve este container. #}
+{% for c in candidatos_combinacao %}
+<label class="flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-surface2 cursor-pointer">
+  <input type="checkbox" name="duplicados" value="{{ c.id }}"
+         class="mt-1 rounded border-line text-navy-900 focus:ring-navy-500">
+  <span class="min-w-0 flex-1">
+    <span class="font-mono text-[10px] text-muted">{{ c.codigo }}</span>
+    <span class="block text-[13px] font-medium text-navy leading-tight">{{ c.titulo }}</span>
+    <span class="block text-[11px] text-muted">
+      {{ c.cliente_nome or "—" }} · {{ fmt_dt(c.created_at, "%d/%m %H:%M") }}
+    </span>
+  </span>
+</label>
+{% else %}
+<p class="px-1 py-2 text-xs text-muted">
+  Nenhum outro chamado em aberto neste setor para combinar.
+</p>
+{% endfor %}

@@ -133,6 +133,11 @@ class MensagensRepo:
         ``cliente_id``, mas isso falhava sempre que o card era resolvido por
         um colega do mesmo setor.
 
+        Duplicado de combinação (``chamado_principal_id``, migration 0065) não
+        entra em nenhum dos dois recortes: quem precisa de atenção é o chamado
+        principal, e o autor do duplicado já está em cópia nele — o sino
+        apontaria duas vezes para o mesmo trabalho.
+
         ``nao_visto`` (2026-07-23): a lista em si continua mostrando TODO
         pendente, mas a bolinha do sino (``_notificacoes.html``, que só olha
         NOVO/RESOLVIDO) precisa saber se o usuário já ABRIU aquele chamado
@@ -154,10 +159,13 @@ class MensagensRepo:
                   LEFT JOIN perfis cli ON cli.id = c.cliente_id
                   LEFT JOIN chamados_notificacoes_vistas v
                          ON v.chamado_id = c.id AND v.perfil_id = auth.uid()
-                 WHERE c.status <> 'RESOLVIDO'
-                    OR (c.resolvido_em IS NOT NULL AND c.avaliacao_nota IS NULL
-                        AND c.cliente_id = auth.uid()
-                        AND c.departamento_id IS DISTINCT FROM cli.departamento_id)
+                 WHERE c.chamado_principal_id IS NULL
+                   AND (
+                     c.status <> 'RESOLVIDO'
+                     OR (c.resolvido_em IS NOT NULL AND c.avaliacao_nota IS NULL
+                         AND c.cliente_id = auth.uid()
+                         AND c.departamento_id IS DISTINCT FROM cli.departamento_id)
+                   )
                  ORDER BY COALESCE(c.updated_at, c.created_at) DESC
                  LIMIT $1
                 """,

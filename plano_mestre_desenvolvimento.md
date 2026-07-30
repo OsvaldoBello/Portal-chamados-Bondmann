@@ -749,6 +749,67 @@ CREATE INDEX idx_chamados_depto_status ON chamados(departamento_id, status);
 > `Bondmann Química` semeada em `0008`); `empresa_id` continua no schema (path do Storage +
 > motor de SLA), mas **não** é mais o eixo de isolamento. Sem venda/gestão self-service.
 
+#### 🔁 9. Combinação de chamados duplicados (migration `0065`)
+
+Adendo ao schema canônico. **`[DECISÃO DE PRODUTO]` 2026-07-30 (gestor):** quando um
+incidente atinge todo mundo ao mesmo tempo (servidor/internet/ERP fora do ar), N pessoas
+abrem N chamados da MESMA ocorrência. O setor responde N vezes e o indicador conta N
+demandas — volume do mês e TMA inflados por um único evento. A feature junta tudo num
+chamado só, com as informações dos repetidos, mantendo os autores **em cópia**.
+
+```sql
+-- Auto-referência (1:N), não tabela de ligação: a pergunta que o sistema faz o
+-- tempo todo é "esta linha conta?", e uma coluna nula responde isso num índice
+-- parcial, sem JOIN em toda agregação do Admin.
+ALTER TABLE chamados
+  ADD COLUMN chamado_principal_id uuid REFERENCES chamados(id) ON DELETE SET NULL,
+  ADD COLUMN combinado_em         timestamptz,
+  ADD COLUMN combinado_por        uuid REFERENCES perfis(id) ON DELETE SET NULL;
+ALTER TABLE chamados ADD CONSTRAINT chamados_combinacao_nao_auto
+  CHECK (chamado_principal_id IS NULL OR chamado_principal_id <> id);
+CREATE INDEX idx_chamados_principal
+  ON chamados(chamado_principal_id) WHERE chamado_principal_id IS NOT NULL;
+```
+
+> **`[DECISÃO]` Sem status `COMBINADO` no enum.** Um status novo obrigaria a tocar cada
+> `_status_ui`, cada badge, o Kanban de três setores e as triggers de SLA/`RESPOSTA_CLIENTE`
+> (`0061`). O duplicado é encerrado como **`RESOLVIDO`** (para o relógio de SLA e sai do
+> quadro) e quem o tira dos indicadores é a **coluna**, não o status.
+
+> **`[DECISÃO]` "Em cópia" reaproveita `chamados_observadores` (`0034`) na íntegra.** O autor
+> do duplicado — e quem já estava em cópia nele — vira observador do principal e ganha, pela
+> RLS que já existe, leitura do chamado + mensagens públicas + sino/Realtime. **Nenhuma
+> policy nova.** Limite herdado do modelo de observador: quem está em cópia **lê**, não
+> responde (`mensagens_insert`, `0042`) e não recebe e-mail (`notificar_nova_mensagem_email`
+> só endereça autor/operador) — ver a pendência `⚠️` ao final desta seção.
+
+> **`[DECISÃO]` Conteúdo consolidado como UMA mensagem pública**, publicada no principal por
+> quem combinou (`app/domain/combinacao.py`): cabeçalho + assunto + descrição + as falas
+> públicas do duplicado + os anexos dele (mesmos `path`; o bucket é escopado por
+> `empresa_id`, `0007`, então a signed URL segue válida sem recopiar bytes). Copiar cada
+> mensagem preservando `remetente_id` exigiria conexão administrativa (a policy exige
+> `remetente_id = auth.uid()`) e produziria falas antigas surgindo no meio do histórico do
+> principal, sem contexto.
+
+**Integridade no banco (trigger `enforce_combinacao_chamados`), não só no Python:**
+sem correntes (não se combina com quem já é duplicado, nem vira duplicado quem já é
+principal), **mesmo `departamento_id` de destino** (combinar entre setores furaria o escopo
+de RLS e moveria observadores para fora do alcance de quem combinou) e **CLIENTE nunca
+combina**. Este último é o ponto sensível: `enforce_cliente_so_avaliacao` (`0006`/`0059`) é
+uma **lista de colunas**, então toda coluna nova nasce liberada ao autor num UPDATE do
+próprio chamado — a `0065` acrescenta as três colunas à lista *e* recusa `CLIENTE` no
+trigger. Sem isso, um funcionário apontaria o próprio chamado resolvido para qualquer
+chamado do setor e se auto-incluiria em cópia nele (vazamento de conteúdo de terceiros).
+
+**Onde o duplicado deixa de contar** (todas as agregações ganham
+`chamado_principal_id IS NULL`): KPIs/CSAT/TMA/conformidade/produtividade/gráficos do Admin,
+views mensais do Marketing (`0032`, reescritas na `0065`), fila/Kanban/`fila_stats`/
+`chamados_departamento`, sino (`notificacoes`), trava de CSAT (`avaliacao_pendente`,
+`pode_avaliar`, `pode_reabrir`) e busca de semelhantes da IA (`ia_busca`). **Onde ele
+continua aparecendo**, de propósito: "Meus chamados" do autor (com o selo "Combinado com
+BOND-…") e o **export CSV** do Admin, que ganha a coluna `Combinado com` — relatório é dado
+bruto, e apagar a linha esconderia quantas pessoas o incidente afetou.
+
 ### 5.2 SLA — regras
 
 - **URGENTE = 50% do tempo de ALTA** (resposta e resolução), conforme spec.
@@ -773,7 +834,8 @@ CREATE INDEX idx_chamados_depto_status ON chamados(departamento_id, status);
 3. **`calcular_sla_chamado`** — `BEFORE INSERT` (e em mudança de prioridade) em `chamados`: calcula `limite_resposta`/`limite_resolucao` conforme 5.2 + escada C1. **🔁 `0064`:** respeita as exceções de 5.2 — `sem_prazo` e `PROJETOS` saem antes da escada, para que uma troca de prioridade não derrube o prazo de um projeto.
 3.1. **🔁 `sla_projetos_um_mes`** *(migration `0064`)* — `BEFORE INSERT OR UPDATE OF status` em `chamados`: ao ENTRAR em `PROJETOS`, escreve o mês de prazo (5.2). Roda depois de `sla_pausa_aguardando` (ordem alfabética de trigger), então a retomada da pausa não sobrescreve o prazo do projeto.
 4. **`handle_new_user`** — `AFTER INSERT` em `auth.users`: cria `perfis` com `role = 'CLIENTE'`. **🔁 `0008`:** vincula o novo usuário à **org interna única** (`empresa_id` = primeira `empresas`), pois o cadastro passa a ser **direto no Supabase** (sem signup público); a promoção de papel/departamento é feita por SQL (`supabase/registro_usuarios.sql`).
-5. **🔁 `enforce_cliente_so_avaliacao`** — atualizada em `0008` para incluir `departamento_id` no conjunto imutável (o autor não redireciona o chamado).
+5. **🔁 `enforce_cliente_so_avaliacao`** — atualizada em `0008` para incluir `departamento_id` no conjunto imutável (o autor não redireciona o chamado). **🔁 `0065`:** inclui também `chamado_principal_id`/`combinado_em`/`combinado_por` — a trava é uma **lista de colunas**, então toda coluna nova precisa entrar nela explicitamente ou nasce liberada ao autor (ver Seção 5.1, item 9).
+5.1. **🔁 `enforce_combinacao_chamados`** *(migration `0065`)* — `BEFORE INSERT OR UPDATE OF chamado_principal_id` em `chamados`: recusa corrente de combinações, combinação entre departamentos diferentes e `CLIENTE`; carimba `combinado_em`/`combinado_por` a partir de `auth.uid()` (autoria não vem do POST) e os limpa ao desfazer.
 5. **`enforce_cliente_so_avaliacao`** *(adicionado na Fase 3, migration 0006)* — `BEFORE UPDATE` em `chamados`: quando `auth_role() = 'CLIENTE'`, rejeita qualquer `UPDATE` que altere colunas que não sejam de avaliação (`avaliacao_nota`/`avaliacao_comentario`/`avaliacao_em`). Complementa a policy `chamados_update_cliente_avaliacao` (RLS não restringe colunas). `REVOKE EXECUTE` aplicado (não é RPC), como nas demais functions de trigger (Seção 0005).
 
 #### `gerar_codigo_chamado` — concorrência, escopo, reset, overflow `[LACUNA]`
@@ -935,6 +997,7 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 | Storage privado + signed URLs (TTL 1h) | ✅ Implementado | 3 | Migration `0007_storage_anexos` (bucket privado + RLS path-scoped). `app/security/uploads.py` (10MB, allow-list, magic bytes, sanitização) + `app/storage.py` (REST via httpx com JWT do usuário; signed URL TTL 1h on-demand). Upload multipart no detalhe; 45 testes verdes. Validação e2e contra Supabase live pendente. |
 | Workspace Operador (Kanban/Lista + SLA visual) | ✅ Implementado | 4 | `/workspace`: fila Lista (polling 15s) + Kanban (Sortable.js DnD → HTMX/fetch persiste status) com **indicador de SLA por cor** (`app/domain/sla_visual.py`, verde/amarelo<25%/vermelho<10%-vencido piscante). Tela de atendimento com ações rápidas. Testado (unit + rotas). **🔁 Colunas extras por setor:** Marketing tem `A_FAZER`/`AGUARDANDO_TERCEIROS` (migrations `0024`/`0043`, exclusivas desde `0048`); **TI tem `PROJETOS`** ("Projetos", migration `0057`, 2026-07-24, **aplicada em produção**), status ativo/não-pausado para demanda de projeto sem vínculo de atendimento reativo; **TI e RH têm `RESPOSTA_CLIENTE`** ("Última Interação do Usuário", migrations `0060`/`0061`, 2026-07-24, ainda **não aplicadas em produção**) — automática via trigger em `mensagens`: entra quando a última mensagem pública é de quem abriu o chamado, sai (volta a `EM_ATENDIMENTO`) quando o setor responde. `app/routes/workspace.py::_status_ui()` ramifica por setor; ver `docs/CHANGELOG.md`. |
 | **🔁 SLA próprio da coluna "Projetos" (1 mês)** | ✅ Implementado | 4 | Migration `0064` (2026-07-29, pedido do gestor, **aplicada em produção**): entrar em `PROJETOS` passa a dar **1 mês** de `limite_resolucao` (22 dias úteis, `sla_prazo_projeto()`), em vez das 24h úteis do plano da empresa — ver Seção 5.2. Trigger `sla_projetos_um_mes` + ramo de `PROJETOS` na `calcular_sla_chamado` (para a troca de prioridade não derrubar o mês); backfill dos projetos abertos na própria migration. 6 testes e2e (`tests/e2e/test_sla_projetos.py`). |
+| **🔁 Combinação de chamados duplicados** | ✅ Implementado + **migration aplicada em produção** (2026-07-30) | 4/5 | Migration `0065` (2026-07-30, pedido do gestor): incidente que gera N chamados iguais passa a ser atendido como **um só**. Modelagem, decisões e o ponto de segurança da trava de coluna do CLIENTE estão na **Seção 5.1, item 9** — não duplicar aqui. Superfície: `POST /workspace/chamados/{id}/combinar` (multi-seleção), `/descombinar` (desfaz, restaurando o status anterior lido do histórico `COMBINADO`) e o fragmento HTMX `/combinar/candidatos` (candidatos do mesmo setor **ordenados por semelhança com o chamado atual** via FTS `0053` — no caso "servidor caiu" os repetidos já vêm no topo sem ninguém digitar). Painel só aparece com o chamado **assumido** (`pode_atender`), que é também o que a policy `mensagens_insert` (`0042`) exige para publicar a digest. Toda a operação roda **sob RLS numa transação só** (marcar duplicado + mover a cópia + publicar a digest), sem `admin_connection`. Histórico: `COMBINADO` / `COMBINACAO_RECEBIDA` / `COMBINACAO_DESFEITA`. Testes: `tests/test_combinacao.py` (digest pura, incl. o contrato com `paragrafos_mensagem`), 7 casos de rota em `tests/test_workspace.py`, 2 no `tests/test_portal.py` e `tests/e2e/test_rls_combinacao.py` (guarda-corpos do trigger + o CLIENTE não escapar pela coluna nova). Suíte: 606 verdes. **Aplicada em produção em 2026-07-30**, com conferência prévia do estado real do banco — foi ela que pegou a armadilha das views (ver `docs/CHANGELOG.md`). |
 | **🔁 TMA de "Projetos" separado nos indicadores do Admin** | ✅ Implementado | 5 | `AdminRepo.kpis()` (2026-07-24, pedido do usuário): TMA geral **exclui** chamados resolvidos diretamente a partir da coluna Projetos (identificado via `historico_chamados`, sem coluna nova); `tma_projetos_horas`/`projetos_resolvidos` como métricas próprias, cards dedicados no dashboard só pro TI. Ver `docs/CHANGELOG.md`. |
 | Ações rápidas + histórico (status/prioridade/atribuição) | ✅ Implementado | 4 | Cada mudança grava `historico_chamados`; prioridade recalcula SLA (trigger); `respondido_em` na 1ª resposta pública. Escopo por RLS (TI tudo, RH/Mkt seu setor). |
 | **Iniciar atendimento + barra de SLA + repasse por TI** | ✅ Implementado | 3 | Botão "Iniciar atendimento" (NOVO→EM_ATENDIMENTO + assume). **Barra de progresso** de SLA (`barra_sla`, verde→amarelo na metade→vermelho; largura via CSSOM CSP-safe). Responsável atribuível **só do setor do chamado**; **TI repassa** para outro departamento (`transferir`; RLS já restringe ao TI, sem migration). Testes verdes. |
@@ -970,4 +1033,5 @@ Consolida as **5 fases** da spec (Seção 6 do .docx), preservando os critérios
 - **Realtime + RLS:** confirmar que a entrega respeita `is_interna` e CSP `connect-src wss`.
 - **Versões `⚠️ A CONFIRMAR`:** travar patches exatos no lockfile no setup (Seção 0).
 - **Relatórios para OPERADOR:** confirmar se só ADMIN acessa.
+- **Combinação de chamados (`0065`):** quem entra "em cópia" recebe atualização por **sino/Realtime**, não por **e-mail** — `notificar_nova_mensagem_email` endereça só autor/operador, e o reply-to inbound é assinado por usuário (um observador respondendo por e-mail esbarraria na `mensagens_insert`). ⚠️ **VALIDAR COM O GESTOR** se o e-mail para observadores é necessário; se for, é trabalho próprio (destinatários múltiplos + o que fazer com o inbound), não um ajuste desta entrega.
 - **CSAT:** depende de e-mail transacional (pode ir a backlog).
