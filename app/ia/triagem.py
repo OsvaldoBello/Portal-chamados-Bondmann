@@ -128,8 +128,12 @@ def _linhas_chamado(
     if pares:
         linhas += ["", "Campos do formulário:"]
         linhas += [f"- {rotulo}: {valor}" for rotulo, valor in pares]
-    if anexos and anexos.texto_pdfs:
-        linhas += ["", "## Texto extraído de PDFs anexados (pode estar incompleto)", anexos.texto_pdfs]
+    if anexos and anexos.texto_documentos:
+        linhas += [
+            "",
+            "## Texto extraído de documentos anexados (PDF/Word/Excel/PowerPoint — pode estar incompleto)",
+            anexos.texto_documentos,
+        ]
     return linhas
 
 

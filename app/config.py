@@ -182,7 +182,7 @@ class Settings(BaseSettings):
     # ela não chama o modelo nem escreve nada.
     ia_triagem_reconciliacao_intervalo_s: float = Field(default=60.0)
 
-    # --- Leitura de anexos (imagem/PDF) pela triagem ---
+    # --- Leitura de anexos (imagem/documento) pela triagem ---
     # Kill switch ESTREITO e independente do geral (ia_triagem_ativa): liga a
     # LEITURA de anexos no contexto da triagem. Separado da flag geral de
     # propósito — permite rollout em sombra e rollback isolado desta
@@ -191,15 +191,17 @@ class Settings(BaseSettings):
     # reaproveitar a flag geral).
     ia_triagem_anexos_ativo: bool = Field(default=False)
     # Tetos por tipo (independentes — imagem custa muito mais em tokens que
-    # PDF em texto extraído).
+    # documento em texto extraído). "Documento" cobre PDF, Word, Excel e
+    # PowerPoint — mesmo perfil de custo (texto extraído, sem visão).
     ia_triagem_anexos_max_arquivos_imagem: int = Field(default=2)
-    ia_triagem_anexos_max_arquivos_pdf: int = Field(default=2)
+    ia_triagem_anexos_max_arquivos_documento: int = Field(default=2)
     # Teto de bytes por arquivo LIDO pela IA — independente do teto de upload
-    # (`anexo_max_bytes`/`anexo_max_bytes_quimico`, até 100MB no Químico):
-    # aqui bounda memória/CPU do processamento (Pillow/pypdf) na task de
-    # fundo. Químico ganha teto maior, mesmo padrão de `anexo_max_bytes_quimico`.
+    # (`anexo_max_bytes`/`anexo_max_bytes_quimico`): aqui bounda memória/CPU
+    # do processamento (Pillow/pypdf/python-docx/openpyxl/python-pptx) na
+    # task de fundo. Químico igual ao teto de upload (100MB — laudos/fotos de
+    # análise costumam passar dos 8MB padrão; pedido do gestor 2026-07-30).
     ia_triagem_anexos_max_bytes: int = Field(default=8 * 1024 * 1024)
-    ia_triagem_anexos_max_bytes_quimico: int = Field(default=25 * 1024 * 1024)
+    ia_triagem_anexos_max_bytes_quimico: int = Field(default=100 * 1024 * 1024)
     # Redimensionamento de imagem antes do envio (maior lado, px) e qualidade
     # JPEG na recompressão.
     ia_triagem_anexos_max_dimensao_px: int = Field(default=1024)
@@ -208,10 +210,13 @@ class Settings(BaseSettings):
     # tokens (baixo = ~85 tokens fixos/imagem). Inválido degrada para "low"
     # (conservador — mesmo padrão de `ia_triagem_perguntas_confianca_minima`).
     ia_triagem_anexos_detail: str = Field(default="low")
-    # Extração de texto de PDF: páginas e caracteres por arquivo (sem OCR —
-    # PDF escaneado/sem texto extraível é ignorado graciosamente).
+    # Extração de texto de documento (PDF/Word/Excel/PowerPoint): caracteres
+    # por arquivo (sem OCR — documento escaneado/sem texto extraível é
+    # ignorado graciosamente). `_max_paginas` vale só para PDF (conceito de
+    # "página" não existe do mesmo jeito em planilha/slide — Excel/PowerPoint
+    # já param de ler ao bater o teto de caracteres).
     ia_triagem_anexos_pdf_max_paginas: int = Field(default=5)
-    ia_triagem_anexos_pdf_max_chars: int = Field(default=6000)
+    ia_triagem_anexos_documento_max_chars: int = Field(default=6000)
 
     @property
     def ia_triagem_anexos_detail_normalizado(self) -> str:

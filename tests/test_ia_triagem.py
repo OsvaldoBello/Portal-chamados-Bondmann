@@ -66,6 +66,10 @@ def _settings(**overrides) -> Settings:
         # dev (alias de transição da F0 tem precedência sobre o default).
         ia_triagem_model="gpt-5.4-mini",
         ia_triagem_base_url="https://api.openai.com/v1",
+        # Idem: explícito para não herdar IA_TRIAGEM_ANEXOS_ATIVO=true do
+        # `.env` local do dev (F7) — os testes que precisam dela ligada
+        # passam a própria kwarg.
+        ia_triagem_anexos_ativo=False,
     )
     base.update(overrides)
     return Settings(**base)

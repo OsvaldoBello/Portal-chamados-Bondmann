@@ -122,6 +122,10 @@ def _settings(**overrides) -> Settings:
         ia_triagem_model="gpt-5.4-mini",
         ia_triagem_base_url="https://api.openai.com/v1",
         ia_worker_database_url="postgresql://ia_worker:x@localhost/teste",
+        # Explícito para não herdar IA_TRIAGEM_ANEXOS_ATIVO=true do `.env`
+        # local do dev (F7) — o teste que precisa dela ligada passa a
+        # própria kwarg.
+        ia_triagem_anexos_ativo=False,
     )
     base.update(overrides)
     return Settings(**base)

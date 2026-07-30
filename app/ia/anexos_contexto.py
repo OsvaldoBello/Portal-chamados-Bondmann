@@ -1,4 +1,4 @@
-"""Leitura de anexos (imagem/PDF) para o contexto da triagem (F7).
+"""Leitura de anexos (imagem/documento) para o contexto da triagem (F7).
 
 Duas camadas: funções **puras** de processamento de bytes (testáveis sem
 I/O — lição do incidente de 2026-07-29, quando um teste com conexão
@@ -7,9 +7,10 @@ totalmente mockada travou um valor que nunca passou pelo encoder real do
 lança (Regra de Ouro #5 — falha de anexo jamais derruba a triagem).
 
 Escopo desta entrega: imagens (``image/jpeg``, ``image/png``) via visão e
-PDF (``application/pdf``) via extração de texto. Vídeo, docx/xlsx/pptx e OCR
-de PDF escaneado ficam FORA de escopo — o dispatch por mime abaixo é a
-fronteira estrutural, não só uma convenção de código.
+documentos — PDF, Word (``.docx``), Excel (``.xlsx``) e PowerPoint
+(``.pptx``) — via extração de texto. Vídeo e OCR de documento escaneado
+ficam FORA de escopo — o dispatch por mime/extensão abaixo é a fronteira
+estrutural, não só uma convenção de código.
 """
 
 from __future__ import annotations
@@ -21,7 +22,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+import openpyxl
+from docx import Document
 from PIL import Image
+from pptx import Presentation
 from pypdf import PdfReader
 
 from app.config import Settings
@@ -31,6 +35,46 @@ log = logging.getLogger("app.ia.anexos_contexto")
 
 _MIME_IMAGEM = {"image/jpeg", "image/png"}
 _MIME_PDF = {"application/pdf"}
+_MIME_DOCX = {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+_MIME_XLSX = {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+_MIME_PPTX = {"application/vnd.openxmlformats-officedocument.presentationml.presentation"}
+_TIPOS_DOCUMENTO = {"pdf", "docx", "xlsx", "pptx"}
+
+
+def _tipo_anexo(anexo: dict[str, Any]) -> str | None:
+    """``"imagem"`` | ``"pdf"`` | ``"docx"`` | ``"xlsx"`` | ``"pptx"`` |
+    ``None`` (fora do escopo desta leitura).
+
+    docx/xlsx/pptx são contêineres ZIP (OOXML): libmagic antigo devolve
+    ``application/zip`` em vez do mime específico — mesma ambiguidade já
+    documentada em ``app/security/uploads.py``. Nesse caso, desempata pela
+    extensão do ``path`` (atribuída pelo servidor no upload a partir da
+    extensão validada — nunca o nome exibido, que é só metadado do
+    cliente)."""
+    mime = anexo.get("mime")
+    if mime in _MIME_IMAGEM:
+        return "imagem"
+    if mime in _MIME_PDF:
+        return "pdf"
+    if mime in _MIME_DOCX:
+        return "docx"
+    if mime in _MIME_XLSX:
+        return "xlsx"
+    if mime in _MIME_PPTX:
+        return "pptx"
+    if mime == "application/zip":
+        ext = (anexo.get("path") or "").rsplit(".", 1)[-1].lower()
+        return ext if ext in {"docx", "xlsx", "pptx"} else None
+    return None
+
+
+def _truncar(texto: str, max_chars: int) -> str:
+    texto = texto.strip()
+    if not texto:
+        return ""
+    if len(texto) > max_chars:
+        return texto[:max_chars].rstrip() + " […truncado]"
+    return texto
 
 
 def redimensionar_imagem(conteudo: bytes, *, max_dimensao: int, qualidade: int) -> str | None:
@@ -65,12 +109,78 @@ def extrair_texto_pdf(conteudo: bytes, *, max_paginas: int, max_chars: int) -> s
     except Exception:  # noqa: BLE001 — PDF corrompido/criptografado = sem texto
         log.warning("Falha ao extrair texto de PDF anexado", exc_info=True)
         return ""
-    texto = "\n\n".join(p for p in partes if p)
-    if not texto:
+    return _truncar("\n\n".join(p for p in partes if p), max_chars)
+
+
+def extrair_texto_docx(conteudo: bytes, *, max_chars: int) -> str:
+    """Extrai texto de parágrafos e tabelas de um ``.docx``. ``""`` quando
+    vazio/corrompido; nunca lança."""
+    try:
+        documento = Document(io.BytesIO(conteudo))
+        partes = [p.text.strip() for p in documento.paragraphs if p.text.strip()]
+        for tabela in documento.tables:
+            for linha in tabela.rows:
+                celulas = [c.text.strip() for c in linha.cells if c.text.strip()]
+                if celulas:
+                    partes.append(" | ".join(celulas))
+    except Exception:  # noqa: BLE001 — docx corrompido = sem texto
+        log.warning("Falha ao extrair texto de DOCX anexado", exc_info=True)
         return ""
-    if len(texto) > max_chars:
-        texto = texto[:max_chars].rstrip() + " […truncado]"
-    return texto
+    return _truncar("\n".join(partes), max_chars)
+
+
+def extrair_texto_xlsx(conteudo: bytes, *, max_chars: int) -> str:
+    """Extrai valores de célula de todas as planilhas em modo leitura
+    otimizado (``read_only`` — não carrega o arquivo inteiro na memória) e
+    para assim que atinge ``max_chars``, importante com o teto de 100MB do
+    Químico. ``""`` quando vazio/corrompido; nunca lança."""
+    try:
+        pasta = openpyxl.load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
+    except Exception:  # noqa: BLE001 — xlsx corrompido = sem texto
+        log.warning("Falha ao abrir XLSX anexado", exc_info=True)
+        return ""
+    partes: list[str] = []
+    total = 0
+    try:
+        for planilha in pasta.worksheets:
+            partes.append(f"## {planilha.title}")
+            for linha in planilha.iter_rows(values_only=True):
+                valores = [str(v).strip() for v in linha if v is not None and str(v).strip()]
+                if not valores:
+                    continue
+                texto_linha = " | ".join(valores)
+                partes.append(texto_linha)
+                total += len(texto_linha)
+                if total >= max_chars:
+                    break
+            if total >= max_chars:
+                break
+    except Exception:  # noqa: BLE001 — planilha malformada = sem texto
+        log.warning("Falha ao ler células do XLSX anexado", exc_info=True)
+        return ""
+    finally:
+        pasta.close()
+    return _truncar("\n".join(partes), max_chars)
+
+
+def extrair_texto_pptx(conteudo: bytes, *, max_chars: int) -> str:
+    """Extrai texto das caixas de texto de cada slide de um ``.pptx``.
+    ``""`` quando vazio/corrompido; nunca lança."""
+    try:
+        apresentacao = Presentation(io.BytesIO(conteudo))
+        partes = []
+        for indice, slide in enumerate(apresentacao.slides, start=1):
+            textos = [
+                shape.text_frame.text.strip()
+                for shape in slide.shapes
+                if shape.has_text_frame and shape.text_frame.text.strip()
+            ]
+            if textos:
+                partes.append(f"## Slide {indice}\n" + "\n".join(textos))
+    except Exception:  # noqa: BLE001 — pptx corrompido = sem texto
+        log.warning("Falha ao extrair texto de PPTX anexado", exc_info=True)
+        return ""
+    return _truncar("\n\n".join(partes), max_chars)
 
 
 @dataclass(frozen=True)
@@ -81,7 +191,7 @@ class ResultadoAnexos:
     não vaza nada que o cliente já não tenha)."""
 
     blocos_imagem: list[dict[str, Any]] = field(default_factory=list)
-    texto_pdfs: str = ""
+    texto_documentos: str = ""
     processados: int = 0
     ignorados: int = 0
 
@@ -101,44 +211,46 @@ async def montar_contexto_anexos(
         return ResultadoAnexos()
 
     max_bytes = settings.ia_triagem_anexos_max_bytes_para(eh_quimico=eh_quimico)
-    candidatos_imagem: list[dict[str, Any]] = []
-    candidatos_pdf: list[dict[str, Any]] = []
+    candidatos_imagem: list[tuple[dict[str, Any], str]] = []
+    candidatos_documento: list[tuple[dict[str, Any], str]] = []
     ignorados = 0
     for anexo in anexos:
-        mime = anexo.get("mime")
+        tipo = _tipo_anexo(anexo)
         tamanho = anexo.get("tamanho") or 0
-        if mime in _MIME_IMAGEM and len(candidatos_imagem) < settings.ia_triagem_anexos_max_arquivos_imagem:
+        if tipo == "imagem" and len(candidatos_imagem) < settings.ia_triagem_anexos_max_arquivos_imagem:
             alvo = candidatos_imagem
-        elif mime in _MIME_PDF and len(candidatos_pdf) < settings.ia_triagem_anexos_max_arquivos_pdf:
-            alvo = candidatos_pdf
+        elif tipo in _TIPOS_DOCUMENTO and len(candidatos_documento) < settings.ia_triagem_anexos_max_arquivos_documento:
+            alvo = candidatos_documento
         else:
             ignorados += 1
             continue
         if tamanho > max_bytes:
             ignorados += 1
             continue
-        alvo.append(anexo)
+        alvo.append((anexo, tipo))
 
-    candidatos = candidatos_imagem + candidatos_pdf
+    candidatos = candidatos_imagem + candidatos_documento
     if not candidatos:
         return ResultadoAnexos(ignorados=ignorados)
 
     conteudos = await asyncio.gather(
-        *(storage.download(token, a["path"]) for a in candidatos),
+        *(storage.download(token, anexo["path"]) for anexo, _tipo in candidatos),
         return_exceptions=True,
     )
 
     detail = settings.ia_triagem_anexos_detail_normalizado
+    max_chars_doc = settings.ia_triagem_anexos_documento_max_chars
     blocos_imagem: list[dict[str, Any]] = []
-    partes_pdf: list[str] = []
+    partes_documento: list[str] = []
     processados = 0
-    for anexo, conteudo in zip(candidatos, conteudos):
+    for (anexo, tipo), conteudo in zip(candidatos, conteudos):
         if isinstance(conteudo, BaseException) or conteudo is None:
             if isinstance(conteudo, BaseException):
                 log.warning("Falha ao baixar anexo %s: %s", anexo.get("path"), conteudo)
             ignorados += 1
             continue
-        if anexo.get("mime") in _MIME_IMAGEM:
+
+        if tipo == "imagem":
             data_uri = redimensionar_imagem(
                 conteudo,
                 max_dimensao=settings.ia_triagem_anexos_max_dimensao_px,
@@ -151,22 +263,29 @@ async def montar_contexto_anexos(
                 {"type": "image_url", "image_url": {"url": data_uri, "detail": detail}}
             )
             processados += 1
-        else:
+            continue
+
+        if tipo == "pdf":
             texto = extrair_texto_pdf(
-                conteudo,
-                max_paginas=settings.ia_triagem_anexos_pdf_max_paginas,
-                max_chars=settings.ia_triagem_anexos_pdf_max_chars,
+                conteudo, max_paginas=settings.ia_triagem_anexos_pdf_max_paginas, max_chars=max_chars_doc
             )
-            if not texto:
-                ignorados += 1
-                continue
-            nome = anexo.get("nome") or "anexo.pdf"
-            partes_pdf.append(f"### {nome}\n{texto}")
-            processados += 1
+        elif tipo == "docx":
+            texto = extrair_texto_docx(conteudo, max_chars=max_chars_doc)
+        elif tipo == "xlsx":
+            texto = extrair_texto_xlsx(conteudo, max_chars=max_chars_doc)
+        else:  # pptx
+            texto = extrair_texto_pptx(conteudo, max_chars=max_chars_doc)
+
+        if not texto:
+            ignorados += 1
+            continue
+        nome = anexo.get("nome") or f"anexo.{tipo}"
+        partes_documento.append(f"### {nome}\n{texto}")
+        processados += 1
 
     return ResultadoAnexos(
         blocos_imagem=blocos_imagem,
-        texto_pdfs="\n\n".join(partes_pdf),
+        texto_documentos="\n\n".join(partes_documento),
         processados=processados,
         ignorados=ignorados,
     )

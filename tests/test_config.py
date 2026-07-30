@@ -100,6 +100,29 @@ def test_ia_triagem_defaults_desligados(monkeypatch: pytest.MonkeyPatch):
     assert s.ia_worker_database_url == ""
 
 
+def test_ia_triagem_anexos_defaults_desligados(monkeypatch: pytest.MonkeyPatch):
+    s = _settings_ia(monkeypatch)
+    assert s.ia_triagem_anexos_ativo is False  # kill switch estreito: nasce desligado
+    assert s.ia_triagem_anexos_max_arquivos_imagem == 2
+    assert s.ia_triagem_anexos_max_arquivos_documento == 2
+    assert s.ia_triagem_anexos_max_bytes == 8 * 1024 * 1024
+    # Químico igual ao teto de upload (100MB) desde o pedido do gestor 2026-07-30.
+    assert s.ia_triagem_anexos_max_bytes_quimico == 100 * 1024 * 1024
+    assert s.ia_triagem_anexos_max_bytes_para(eh_quimico=False) == 8 * 1024 * 1024
+    assert s.ia_triagem_anexos_max_bytes_para(eh_quimico=True) == 100 * 1024 * 1024
+    assert s.ia_triagem_anexos_detail == "low"
+    assert s.ia_triagem_anexos_detail_normalizado == "low"
+    assert s.ia_triagem_anexos_pdf_max_paginas == 5
+    assert s.ia_triagem_anexos_documento_max_chars == 6000
+
+
+def test_ia_triagem_anexos_detail_invalido_degrada_para_low(monkeypatch: pytest.MonkeyPatch):
+    s = _settings_ia(monkeypatch, ia_triagem_anexos_detail="algo-invalido")
+    assert s.ia_triagem_anexos_detail == "algo-invalido"  # valor cru preservado
+    assert s.ia_triagem_anexos_detail_normalizado == "low"  # normalizado degrada
+    assert _settings_ia(monkeypatch, ia_triagem_anexos_detail="HIGH").ia_triagem_anexos_detail_normalizado == "high"
+
+
 def test_ia_triagem_sombra_por_departamento(monkeypatch: pytest.MonkeyPatch):
     """F2 (2026-07-24): departamento em IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS sai
     da sombra mesmo com a global ligada; MODO_SOMBRA=false tira todos (F6)."""
