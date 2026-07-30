@@ -25,6 +25,7 @@
   var campoVolume = document.getElementById("campo-volume");
   var semPrazoCheckbox = document.getElementById("sem-prazo-checkbox");
   var dataEntregaInput = document.getElementById("data-entrega-input");
+  var anexosHint = document.getElementById("anexos-limite-hint");
 
   function ehMarketing() {
     return marketingId !== "" && depSelect && depSelect.value === marketingId;
@@ -67,6 +68,13 @@
     if (tituloInput) tituloInput.required = !quimico;
     if (campoDescricao) campoDescricao.style.display = quimico ? "none" : "block";
     if (descricao) descricao.required = !quimico;
+    // Químico aceita anexos maiores (laudos/fotos/vídeos de análise) — troca o
+    // aviso de limite exibido pelo mesmo padrão do placeholder do Marketing.
+    if (anexosHint) {
+      var hintPadrao = anexosHint.getAttribute("data-hint-padrao") || "";
+      var hintQuimico = anexosHint.getAttribute("data-hint-quimico") || "";
+      anexosHint.innerHTML = quimico ? hintQuimico : hintPadrao;
+    }
   }
 
   // "Sem data limite": desabilita (e limpa) o campo de data enquanto marcado,

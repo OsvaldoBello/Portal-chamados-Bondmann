@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     anexos_bucket: str = Field(default="chamados-anexos")
     # Limite de 10MB por arquivo (rejeição server-side antes de persistir).
     anexo_max_bytes: int = Field(default=10 * 1024 * 1024)
+    # Limite do Dpto Químico na abertura do chamado: 100MB (laudos/fotos/vídeos
+    # de análise costumam passar dos 10MB padrão — pedido do gestor 2026-07-30).
+    anexo_max_bytes_quimico: int = Field(default=100 * 1024 * 1024)
     # TTL da signed URL: 1 hora (C2). Regenerada a cada renderização; nunca cacheada.
     signed_url_ttl: int = Field(default=3600)
 

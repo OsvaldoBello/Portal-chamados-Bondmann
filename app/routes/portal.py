@@ -451,10 +451,13 @@ async def criar_chamado(
     origem_demanda_val = "Solicitação"
 
     # Valida anexos ANTES de criar (barra tipos/tamanhos inválidos sem efeito colateral).
+    # Dpto Químico: limite maior (100MB — laudos/fotos/vídeos de análise).
+    settings_anexo = get_settings()
+    max_bytes_anexo = (
+        settings_anexo.anexo_max_bytes_quimico if eh_quimico else settings_anexo.anexo_max_bytes
+    )
     try:
-        validados = await _validar_uploads(
-            arquivos, max_bytes=get_settings().anexo_max_bytes
-        )
+        validados = await _validar_uploads(arquivos, max_bytes=max_bytes_anexo)
     except UploadInvalido as exc:
         return await _erro(str(exc), status.HTTP_422_UNPROCESSABLE_ENTITY)
 
