@@ -110,8 +110,12 @@ class FakeRepo:
         return ["Comercial", "Financeiro"]
 
     async def obter(self, claims, cid):
+        # O setor do CHAMADO acompanha o do perfil fake: é ele que decide os
+        # status oferecidos na tela de atendimento (`_status_ui`), e não o do
+        # usuário — um chamado de TI aberto num FakeRepo de RH daria as colunas
+        # do TI a quem não as tem.
         return _chamado(id=cid, status=self._status, operador_id=self._operador_id,
-                         cliente_id=self._cliente_id,
+                         cliente_id=self._cliente_id, departamento=self._departamento,
                          chamado_principal_id=self._chamado_principal_id,
                          principal_codigo="BOND-2026-00009" if self._chamado_principal_id else None,
                          combinado_em=NOW if self._chamado_principal_id else None)
@@ -159,6 +163,11 @@ class FakeRepo:
     async def transferir(self, claims, cid, *, departamento_id):
         self.acoes.append(("transferir", cid, departamento_id))
         return {"id": cid, "departamento_id": departamento_id}
+
+    async def definir_prazo_projeto(self, claims, cid, dias):
+        self.acoes.append(("prazo_projeto", cid, dias))
+        return {"id": cid, "prazo_projeto_dias": dias, "projeto_em": NOW,
+                "limite_resolucao": NOW + timedelta(days=dias or 30)}
 
     async def responder_staff(self, claims, cid, *, conteudo, is_interna, anexos=None):
         self.acoes.append(("msg", cid, conteudo, is_interna, anexos)); return {"id": "m1", "created_at": NOW}
@@ -937,3 +946,52 @@ def test_lista_de_combinados_aparece_no_chamado_principal():
     assert "Chamados combinados neste (1)" in r.text
     assert "BOND-2026-00002" in r.text
     assert "Bruno" in r.text
+
+
+# --------------------------------------------------------------------------
+# Prazo configurável da coluna "Projetos" (migration 0066)
+# --------------------------------------------------------------------------
+def test_campo_de_prazo_do_projeto_so_no_setor_com_a_coluna():
+    """O campo acompanha a coluna: aparece onde `PROJETOS` está entre os status
+    do setor (TI) e não existe onde a coluna não existe (RH)."""
+    with ws_client(FakeRepo(status="EM_ATENDIMENTO", operador_id=OP)) as c:  # TI
+        r = c.get("/workspace/chamados/c1")
+    assert "Prazo do projeto (dias)" in r.text
+
+    with ws_client(FakeRepo(status="EM_ATENDIMENTO", operador_id=OP,
+                            departamento="RH", is_ti=False)) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert "Prazo do projeto (dias)" not in r.text
+
+
+def test_definir_prazo_do_projeto_chama_o_repo_e_redireciona():
+    repo = FakeRepo(status="PROJETOS", operador_id=OP)
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/prazo-projeto",
+                   data={"csrf_token": t, "dias": "70"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ("prazo_projeto", "c1", 70) in repo.acoes
+
+
+def test_prazo_em_branco_volta_ao_padrao_do_setor():
+    """Campo vazio não é erro: é "sem prazo próprio" — o chamado passa a usar
+    `planos_sla.projeto_dias` de novo."""
+    repo = FakeRepo(status="PROJETOS", operador_id=OP)
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/prazo-projeto",
+                   data={"csrf_token": t, "dias": ""}, follow_redirects=False)
+    assert r.status_code == 303
+    assert ("prazo_projeto", "c1", None) in repo.acoes
+
+
+def test_prazo_fora_da_faixa_volta_na_tela_com_o_motivo():
+    repo = FakeRepo(status="PROJETOS", operador_id=OP)
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/prazo-projeto",
+                   data={"csrf_token": t, "dias": "9000"}, follow_redirects=False)
+    assert r.status_code == 200
+    assert "Prazo fora da faixa" in r.text
+    assert not [a for a in repo.acoes if a[0] == "prazo_projeto"]

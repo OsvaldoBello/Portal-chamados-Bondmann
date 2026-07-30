@@ -320,6 +320,34 @@
         <p class="text-[11px] text-muted">Alterar a prioridade recalcula os prazos de SLA.</p>
       </form>
 
+      {# Prazo do projeto (0066): só faz sentido onde a coluna "Projetos" existe
+         (TI). Cada projeto tem um escopo — 2 meses, 70 dias, 4 meses —, então o
+         prazo é digitado aqui em vez de ser o mês fixo da 0064. Em branco = o
+         padrão do setor (/admin/gestao). Definir antes de arrastar para a
+         coluna também vale: o trigger aplica o número na entrada. #}
+      {% if 'PROJETOS' in status_validos %}
+      <form method="post" action="/workspace/chamados/{{ chamado.id }}/prazo-projeto{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-1.5 pt-1 border-t border-line/60">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label class="block text-[13px] font-semibold text-navy pt-3" for="prazo-projeto">Prazo do projeto (dias)</label>
+        <div class="flex items-center gap-2">
+          <input type="number" id="prazo-projeto" name="dias" value="{{ chamado.prazo_projeto_dias or '' }}"
+                 min="{{ prazo_projeto_min }}" max="{{ prazo_projeto_max }}" step="1" placeholder="padrão do setor"
+                 class="w-28 px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+          <button type="submit" class="px-3 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 transition">Salvar prazo</button>
+        </div>
+        {% if erro_prazo_projeto %}
+        <p class="text-[11px] text-sla-danger font-semibold">{{ erro_prazo_projeto }}</p>
+        {% endif %}
+        <p class="text-[11px] text-muted">
+          Dias corridos, contados de quando o chamado entrou em <strong>Projetos</strong>{% if chamado.projeto_em %} ({{ fmt_dt(chamado.projeto_em, "%d/%m/%Y") }}){% endif %}.
+          Ex.: 60 = 2 meses · 120 = 4 meses. Em branco usa o padrão do setor.
+          {% if chamado.status == 'PROJETOS' and chamado.limite_resolucao %}
+          Prazo atual: <strong>{{ fmt_dt(chamado.limite_resolucao) }}</strong>.
+          {% endif %}
+        </p>
+      </form>
+      {% endif %}
+
       <form method="post" action="/workspace/chamados/{{ chamado.id }}/categoria{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-1.5 pt-1 border-t border-line/60">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="block text-[13px] font-semibold text-navy pt-3">Categoria</label>
@@ -382,8 +410,9 @@
       <h3 class="font-display font-bold text-navy">Combinar chamados</h3>
       <p class="text-[11px] text-muted leading-relaxed">
         Marque os chamados que são <strong>a mesma ocorrência</strong> deste. Eles são encerrados
-        como repetidos, <strong>saem dos indicadores</strong>, o conteúdo vem para a conversa daqui
-        e os autores entram <strong>em cópia</strong> — todo mundo acompanha por um chamado só.
+        como repetidos, <strong>saem dos indicadores</strong>, o <strong>descritivo</strong> de cada um
+        (com os anexos, sem a conversa) vem para o chat daqui e os autores entram
+        <strong>em cópia</strong> — todo mundo acompanha por um chamado só.
       </p>
       {# Fora do <form> de propósito: dentro dele, Enter na busca enviaria a combinação. #}
       <input type="search" name="busca" placeholder="Buscar por código ou assunto…"

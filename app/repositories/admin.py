@@ -463,19 +463,26 @@ class AdminRepo:
                 SELECT id, nome,
                        resposta_baixa_min, resposta_media_min, resposta_alta_min,
                        resolucao_baixa_min, resolucao_media_min, resolucao_alta_min,
-                       resposta_default_min, resolucao_default_min, ativo
+                       resposta_default_min, resolucao_default_min,
+                       projeto_dias, ativo
                   FROM planos_sla ORDER BY nome
                 """
             )
             return [dict(r) for r in rows]
 
     async def atualizar_plano(
-        self, claims: dict, plano_id: str, *, campos: dict[str, int | None]
+        self, claims: dict, plano_id: str, *,
+        campos: dict[str, int | None], projeto_dias: int | None = None,
     ) -> None:
         """Atualiza os tempos de SLA (minutos) de um plano. As colunas são de uma
         allow-list fixa (não vêm do usuário como identificador), então o nome é
         seguro; os valores são parametrizados. URGENTE não é editável (derivado =
-        50% de ALTA). Vale para os chamados criados **a partir de agora** (trigger)."""
+        50% de ALTA). Vale para os chamados criados **a partir de agora** (trigger).
+
+        ``projeto_dias`` (0066) é o prazo PADRÃO da coluna "Projetos", em dias
+        corridos — fora da allow-list acima porque a unidade é outra e a coluna é
+        ``NOT NULL``: ``None`` (campo em branco/inválido) **mantém** o valor
+        atual, em vez de apagá-lo como acontece com os minutos."""
         cols = [
             "resposta_baixa_min", "resposta_media_min", "resposta_alta_min",
             "resolucao_baixa_min", "resolucao_media_min", "resolucao_alta_min",
@@ -485,9 +492,12 @@ class AdminRepo:
         valores = [campos.get(c) for c in cols]
         async with rls_connection(claims) as conn:
             await conn.execute(
-                f"UPDATE planos_sla SET {set_sql}, updated_at = now() WHERE id = $1::uuid",
+                f"UPDATE planos_sla SET {set_sql}, "
+                f"projeto_dias = COALESCE(${len(cols) + 2}::integer, projeto_dias), "
+                "updated_at = now() WHERE id = $1::uuid",
                 plano_id,
                 *valores,
+                projeto_dias,
             )
 
     # ---- Usuários (criar/promover/excluir conta — só TI; foto — ver abaixo) ----

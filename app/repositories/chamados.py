@@ -44,6 +44,9 @@ __all__ = [
     "validar_nota",
     "validar_comentario_avaliacao",
     "validar_telefone_contato",
+    "validar_prazo_projeto",
+    "PRAZO_PROJETO_MIN_DIAS",
+    "PRAZO_PROJETO_MAX_DIAS",
     "PRIORIDADES",
     "STATUS_CHAMADO",
     "CACHE_CATEGORIAS",
@@ -60,6 +63,13 @@ NOTA_MIN, NOTA_MAX = 1, 5
 NOTA_COMENTARIO_OBRIGATORIO = 4
 COMENTARIO_MIN_CHARS = 50
 TELEFONE_MIN_DIGITOS = 8
+# Prazo da coluna "Projetos" em DIAS CORRIDOS (migration 0066): o operador de TI
+# define quanto cada projeto merece — 60 (2 meses), 70, 120 (4 meses)… A faixa é
+# a mesma da CHECK `chamados_prazo_projeto_faixa`/`planos_sla_projeto_dias_faixa`
+# no banco: de um dia a dois anos. Zero/negativo não é prazo, e acima de dois
+# anos é erro de digitação (um projeto assim não é acompanhado por SLA).
+PRAZO_PROJETO_MIN_DIAS = 1
+PRAZO_PROJETO_MAX_DIAS = 730
 
 
 class ChamadosRepo:
@@ -435,6 +445,11 @@ class ChamadosRepo:
     ) -> dict[str, Any] | None:
         return await self._atendimento.atribuir(claims, chamado_id, operador_id)
 
+    async def definir_prazo_projeto(
+        self, claims: dict, chamado_id: str, dias: int | None
+    ) -> dict[str, Any] | None:
+        return await self._atendimento.definir_prazo_projeto(claims, chamado_id, dias)
+
     async def alterar_categoria(
         self, claims: dict, chamado_id: str, *,
         categoria_id: str | None, subcategoria_id: str | None,
@@ -486,6 +501,26 @@ def validar_comentario_avaliacao(nota: int, comentario: str) -> str | None:
             f"{COMENTARIO_MIN_CHARS} caracteres o motivo da nota e o que pode melhorar."
         )
     return comentario_limpo or None
+
+
+def validar_prazo_projeto(raw: str | int | None) -> int | None:
+    """Valida o prazo (dias corridos) de um chamado da coluna "Projetos" (0066).
+
+    Vazio devolve ``None`` — "sem prazo próprio", isto é, volta a valer o padrão
+    do plano (``planos_sla.projeto_dias``). Levanta ``ValueError`` fora da faixa,
+    com a mesma mensagem que a UI mostra ao operador."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    try:
+        dias = int(str(raw).strip())
+    except ValueError:
+        raise ValueError("Informe o prazo do projeto em dias (ex.: 60 para dois meses).")
+    if not (PRAZO_PROJETO_MIN_DIAS <= dias <= PRAZO_PROJETO_MAX_DIAS):
+        raise ValueError(
+            f"Prazo fora da faixa: informe de {PRAZO_PROJETO_MIN_DIAS} a "
+            f"{PRAZO_PROJETO_MAX_DIAS} dias, ou deixe em branco para usar o padrão."
+        )
+    return dias
 
 
 def validar_telefone_contato(raw: str) -> str:

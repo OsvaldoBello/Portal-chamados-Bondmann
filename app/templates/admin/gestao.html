@@ -169,6 +169,19 @@
           </tbody>
         </table>
       </div>
+      {# Prazo da coluna "Projetos" (0066) — em DIAS, não em minutos: é o padrão
+         de quem não tiver prazo próprio definido no chamado (Workspace →
+         Ações → "Prazo do projeto"). #}
+      <div class="mt-4 pt-3 border-t border-line/60 flex flex-wrap items-center gap-2 text-sm">
+        <label class="font-medium text-navy" for="projeto-dias-{{ p.id }}">Prazo padrão de <strong>Projetos</strong></label>
+        <input type="number" id="projeto-dias-{{ p.id }}" name="projeto_dias" value="{{ p.projeto_dias or 30 }}"
+               min="1" max="730" step="1"
+               class="w-20 px-2 py-1.5 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
+        <span class="text-xs text-muted">
+          dias corridos (30 = 1 mês · 60 = 2 meses · 120 = 4 meses). Cada projeto pode ter o seu,
+          na tela de atendimento; este é o padrão de quem não tiver.
+        </span>
+      </div>
     </form>
     {% else %}
     <p class="text-sm text-muted">Nenhum plano de SLA cadastrado.</p>

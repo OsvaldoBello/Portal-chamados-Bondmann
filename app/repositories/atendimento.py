@@ -50,6 +50,7 @@ class AtendimentoRepo:
                        c.volume, c.origem_demanda, c.causa_atraso,
                        c.dados_formulario, c.resumo_ia, c.resumo_ia_em,
                        c.chamado_principal_id, c.combinado_em,
+                       c.prazo_projeto_dias, c.projeto_em,
                        cat.nome AS categoria, sub.nome AS subcategoria,
                        dep.nome AS departamento, dep.autoatendimento,
                        autor.nome AS cliente_nome, autor.avatar_path AS cliente_avatar_path,
@@ -428,10 +429,11 @@ class AtendimentoRepo:
         Quem o exclui dos indicadores é a coluna, não o status — ver a migration.
 
         O que acontece com o principal: recebe **uma** mensagem pública com o
-        conteúdo do duplicado (`app/domain/combinacao.py`) e passa a ter, em
-        cópia (`chamados_observadores`, 0034), o autor do duplicado e quem já
-        estava em cópia nele — é o que faz "todo mundo receber as atualizações
-        em conjunto" sem nenhuma policy nova.
+        DESCRITIVO do duplicado (`app/domain/combinacao.py` — assunto, descrição
+        e anexos; a conversa do duplicado não é copiada, ver o módulo) e passa a
+        ter, em cópia (`chamados_observadores`, 0034), o autor do duplicado e
+        quem já estava em cópia nele — é o que faz "todo mundo receber as
+        atualizações em conjunto" sem nenhuma policy nova.
 
         Devolve ``{"ok", "codigo", "erro"}``: as recusas são de negócio (o
         usuário precisa entender o motivo), não exceções. O banco reforça as
@@ -497,11 +499,14 @@ class AtendimentoRepo:
                 return {"ok": False, "codigo": codigo,
                         "erro": "Você abriu este chamado — outra pessoa do setor precisa fazer a combinação."}
 
+            # Só os ANEXOS das mensagens públicas entram na digest (o texto da
+            # conversa não é copiado — ver `app/domain/combinacao.py`). O filtro
+            # `is_interna = false` continua valendo: anexo de nota interna do
+            # duplicado não pode virar anexo de mensagem pública do principal.
             mensagens = [dict(r) for r in await conn.fetch(
                 """
-                SELECT m.conteudo, m.created_at, m.anexos, p.nome AS remetente_nome
+                SELECT m.anexos
                   FROM mensagens m
-                  LEFT JOIN perfis p ON p.id = m.remetente_id
                  WHERE m.chamado_id = $1::uuid AND m.is_interna = false
                  ORDER BY m.created_at ASC
                 """,
@@ -567,7 +572,7 @@ class AtendimentoRepo:
                         """,
                         principal_id,
                         claims["sub"],
-                        texto_combinacao(dict(duplicado), mensagens),
+                        texto_combinacao(dict(duplicado)),
                         json.dumps(anexos_combinacao(mensagens)),
                     )
 
@@ -706,6 +711,43 @@ class AtendimentoRepo:
                 conn, chamado_id, claims["sub"], "PRIORIDADE_ALTERADA",
                 {"de": atual, "para": nova_prioridade},
             )
+            return dict(row)
+
+    async def definir_prazo_projeto(
+        self, claims: dict, chamado_id: str, dias: int | None
+    ) -> dict[str, Any] | None:
+        """Define o prazo (em dias corridos) de um chamado da coluna "Projetos"
+        (0066). ``None`` devolve o chamado ao padrão do plano.
+
+        Quem escreve o ``limite_resolucao`` é o trigger ``sla_projetos_prazo``,
+        não este método: o prazo é contado da ENTRADA na coluna
+        (``chamados.projeto_em``), então trocar os dias de um projeto que começou
+        há três semanas ajusta a data final sem recomeçar a contagem de hoje. Um
+        chamado que ainda não está em PROJETOS aceita o valor e só o aplica ao
+        entrar na coluna.
+
+        A faixa aceita já foi validada na rota (``validar_prazo_projeto``) e é
+        reforçada pela CHECK ``chamados_prazo_projeto_faixa`` no banco."""
+        async with rls_connection(claims) as conn:
+            atual = await conn.fetchval(
+                "SELECT prazo_projeto_dias FROM chamados WHERE id = $1::uuid", chamado_id
+            )
+            row = await conn.fetchrow(
+                """
+                UPDATE chamados SET prazo_projeto_dias = $2::integer
+                 WHERE id = $1::uuid
+             RETURNING id, prazo_projeto_dias, projeto_em, limite_resolucao
+                """,
+                chamado_id,
+                dias,
+            )
+            if row is None:
+                return None
+            if atual != dias:
+                await self._registrar(
+                    conn, chamado_id, claims["sub"], "PRAZO_PROJETO_ALTERADO",
+                    {"de": atual, "para": dias, "limite_resolucao": str(row["limite_resolucao"])},
+                )
             return dict(row)
 
     async def alterar_categoria(

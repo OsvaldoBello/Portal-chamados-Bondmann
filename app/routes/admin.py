@@ -50,6 +50,7 @@ from app.repositories.chamados import (
     CACHE_SUBCATEGORIAS,
     ChamadosRepo,
     get_chamados_repo,
+    validar_prazo_projeto,
 )
 from app.security.csrf import get_csrf
 from app.security.password_policy import SENHA_MIN_CHARS
@@ -599,7 +600,11 @@ async def editar_plano(
     _: None = Depends(_csrf_guard),
 ):
     """Edita os tempos de SLA (minutos) de um plano. Só TI. Vale para os chamados
-    criados a partir de agora (o trigger `calcular_sla_chamado` recalcula)."""
+    criados a partir de agora (o trigger `calcular_sla_chamado` recalcula).
+
+    `projeto_dias` (0066) vem no mesmo formulário mas em DIAS corridos: é o prazo
+    padrão da coluna "Projetos" para quem não tiver prazo próprio no chamado.
+    Valor inválido ou em branco mantém o que está gravado (a coluna é `NOT NULL`)."""
     _require_ti(ctx)
     form = await request.form()
 
@@ -613,8 +618,15 @@ async def editar_plano(
             return None
         return n if n >= 0 else None
 
+    try:
+        projeto_dias = validar_prazo_projeto(str(form.get("projeto_dias") or ""))
+    except ValueError:
+        projeto_dias = None
+
     campos = {c: _minutos(c) for c in _PLANO_CAMPOS}
-    await repo.atualizar_plano(ctx.user.claims, plano_id, campos=campos)
+    await repo.atualizar_plano(
+        ctx.user.claims, plano_id, campos=campos, projeto_dias=projeto_dias
+    )
     return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
 
 

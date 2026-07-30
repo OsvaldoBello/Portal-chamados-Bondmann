@@ -96,10 +96,11 @@ class FakeAdmin:
         return [{"id": "p1", "nome": "Padrão Interno",
                  "resposta_baixa_min": 480, "resposta_media_min": 240, "resposta_alta_min": 120,
                  "resolucao_baixa_min": 2880, "resolucao_media_min": 1440, "resolucao_alta_min": 1440,
-                 "resposta_default_min": 720, "resolucao_default_min": 1440, "ativo": True}]
+                 "resposta_default_min": 720, "resolucao_default_min": 1440,
+                 "projeto_dias": 30, "ativo": True}]
 
-    async def atualizar_plano(self, claims, plano_id, *, campos):
-        self.acoes.append(("plano", plano_id, campos))
+    async def atualizar_plano(self, claims, plano_id, *, campos, projeto_dias=None):
+        self.acoes.append(("plano", plano_id, campos, projeto_dias))
 
     async def recalcular_prioridade_marketing(self, claims):
         self.acoes.append(("recalcular_prioridade_marketing",))
@@ -547,13 +548,32 @@ def test_gestao_edita_plano_sla():
                       data={"resposta_alta_min": "90", "resolucao_alta_min": "600",
                             "resposta_media_min": "", "resposta_baixa_min": "480",
                             "resolucao_media_min": "1440", "resolucao_baixa_min": "2880",
-                            "resposta_default_min": "720", "resolucao_default_min": "1440"},
+                            "resposta_default_min": "720", "resolucao_default_min": "1440",
+                            "projeto_dias": "60"},
                       headers={"X-CSRF-Token": t}, follow_redirects=False)
     assert resp.status_code == 303
     plano = next(a for a in repo.acoes if a[0] == "plano")
     assert plano[1] == "p1"
     assert plano[2]["resposta_alta_min"] == 90        # int parseado
     assert plano[2]["resposta_media_min"] is None     # vazio → None (usa default)
+    assert plano[3] == 60                             # prazo padrão de Projetos, em DIAS
+
+
+def test_gestao_prazo_padrao_de_projetos_editavel_e_invalido_nao_apaga():
+    """O prazo padrão da coluna "Projetos" (0066) é editado junto do plano, em
+    dias. Valor fora da faixa vira `None` — que o repositório trata como "mantém
+    o que está gravado", já que a coluna é NOT NULL."""
+    repo = FakeAdmin()
+    with admin_client(repo) as c:
+        r = c.get("/admin/gestao")
+        assert 'name="projeto_dias"' in r.text
+        assert "Prazo padrão de" in r.text
+        t = _csrf(c)
+        resp = c.post("/admin/planos/p1",
+                      data={"resposta_alta_min": "90", "projeto_dias": "9000"},
+                      headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert next(a for a in repo.acoes if a[0] == "plano")[3] is None
 
 
 def test_usuarios_lista_e_form_de_criar():

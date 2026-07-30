@@ -32,10 +32,13 @@ from app.db import rls_request_scope
 from app.domain.formularios_quimico import rotular
 from app.domain.sla_visual import estado_sla
 from app.repositories.chamados import (
+    PRAZO_PROJETO_MAX_DIAS,
+    PRAZO_PROJETO_MIN_DIAS,
     PRIORIDADES,
     STATUS_CHAMADO,
     ChamadosRepo,
     get_chamados_repo,
+    validar_prazo_projeto,
 )
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
@@ -502,6 +505,10 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         "dept_bate": perm.dept_bate,
         "prioridades": PRIORIDADES,
         "status_validos": _status_ui(chamado.get("departamento")),
+        # Prazo configurável da coluna "Projetos" (0066) — a faixa aceita vem do
+        # backend para o `min`/`max` do input não divergir da validação.
+        "prazo_projeto_min": PRAZO_PROJETO_MIN_DIAS,
+        "prazo_projeto_max": PRAZO_PROJETO_MAX_DIAS,
         "supabase_url": settings.supabase_url or None,
         "anon_key": settings.supabase_anon_key or None,
         "access_token": _access_token(request),
@@ -664,6 +671,37 @@ async def mudar_prioridade(
 ):
     if nova_prioridade in PRIORIDADES:
         await repo.alterar_prioridade(ctx.user.claims, chamado_id, nova_prioridade)
+    return _voltar(chamado_id, origem)
+
+
+@router.post("/chamados/{chamado_id}/prazo-projeto")
+async def definir_prazo_projeto(
+    request: Request,
+    chamado_id: str,
+    dias: str = Form(""),
+    origem: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Prazo da coluna "Projetos" definido pelo operador (migration 0066).
+
+    Cada projeto tem um escopo diferente — dois meses, 70 dias, quatro meses —,
+    então o mês fixo da `0064` virou um número por chamado. Campo vazio devolve
+    o chamado ao padrão do setor (`planos_sla.projeto_dias`, editável em
+    `/admin/gestao`). Quem recalcula o `limite_resolucao` é o trigger, a partir
+    da data de ENTRADA na coluna: mudar os dias ajusta a data final sem
+    recomeçar a contagem de hoje.
+
+    Erro de faixa volta na própria tela (mesmo padrão do composer), não como
+    422 cru — o valor é digitado à mão."""
+    try:
+        prazo = validar_prazo_projeto(dias)
+    except ValueError as exc:
+        return await _carregar_atendimento(
+            request, chamado_id, ctx, repo, origem=origem, erro_prazo_projeto=str(exc)
+        )
+    await repo.definir_prazo_projeto(ctx.user.claims, chamado_id, prazo)
     return _voltar(chamado_id, origem)
 
 

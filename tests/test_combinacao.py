@@ -1,9 +1,10 @@
 """Unit da digest de combinação de chamados (`app/domain/combinacao.py`, 0065).
 
-Lógica pura — sem banco, sem RLS. O que importa aqui é o contrato com a
-renderização do chat (`app.templating.paragrafos_mensagem`): o texto precisa
-sair em parágrafos separados por linha em branco, senão a digest chega ao
-usuário como um bloco único e ilegível.
+Lógica pura — sem banco, sem RLS. Dois contratos: (1) com a renderização do chat
+(`app.templating.paragrafos_mensagem`) — o texto precisa sair em parágrafos
+separados por linha em branco, senão a digest chega ao usuário como um bloco
+único e ilegível; (2) com a decisão de 2026-07-30 — a digest é o DESCRITIVO do
+duplicado, nunca a conversa dele.
 """
 
 from __future__ import annotations
@@ -30,19 +31,16 @@ def _duplicado(**extra):
     return base
 
 
-def _mensagem(conteudo="continua fora", **extra):
-    base = {
-        "conteudo": conteudo,
-        "created_at": CRIADO,
-        "remetente_nome": "Bruno Souza",
-        "anexos": [],
-    }
+def _mensagem(**extra):
+    # Só `anexos` — é o único campo que o repositório busca das mensagens do
+    # duplicado desde que a digest deixou de copiar a conversa.
+    base = {"anexos": []}
     base.update(extra)
     return base
 
 
 def test_texto_traz_codigo_autor_assunto_e_descricao():
-    texto = texto_combinacao(_duplicado(), [])
+    texto = texto_combinacao(_duplicado())
     assert "BOND-2026-00042" in texto
     assert "Bruno Souza (Comercial)" in texto
     assert "(51) 99999-0000" in texto
@@ -54,25 +52,26 @@ def test_texto_traz_codigo_autor_assunto_e_descricao():
 def test_cada_bloco_vira_um_paragrafo_na_renderizacao():
     """`paragrafos_mensagem` rejunta linhas soltas de um mesmo parágrafo — se a
     digest usasse quebra simples, tudo viraria uma linha só no balão do chat."""
-    texto = texto_combinacao(_duplicado(), [_mensagem()])
-    paragrafos = paragrafos_mensagem(texto)
-    assert len(paragrafos) >= 5
+    paragrafos = paragrafos_mensagem(texto_combinacao(_duplicado()))
+    assert len(paragrafos) == 4  # cabeçalho + abertura + assunto + descrição
     assert paragrafos[0].startswith("🔗 Chamado BOND-2026-00042 combinado")
-    assert any(p.startswith("[30/07 10:05] Bruno Souza: continua fora") for p in paragrafos)
 
 
-def test_mensagem_sem_texto_nao_vira_paragrafo_vazio():
-    """Mensagem que era só anexo (conteúdo vazio) não gera fala fantasma — o
-    arquivo dela entra pelo `anexos_combinacao`."""
-    texto = texto_combinacao(_duplicado(), [_mensagem(conteudo="   ")])
+def test_digest_nao_traz_a_conversa_do_duplicado():
+    """Decisão do gestor 2026-07-30: só o descritivo. Copiar as falas poluía o
+    chat do principal — e o que mais aparecia ali eram as perguntas da triagem
+    por IA (mensagens públicas como quaisquer outras) do chamado repetido."""
+    texto = texto_combinacao(_duplicado())
+    assert "continua fora" not in texto
     assert "Mensagens do chamado combinado" not in texto
+    # A função não recebe mais as mensagens: não há como uma fala vazar por ela.
+    assert texto_combinacao(_duplicado()) == texto
 
 
 def test_duplicado_sem_autor_ou_contato_nao_quebra():
     texto = texto_combinacao(
         _duplicado(cliente_nome=None, cliente_departamento=None,
                    telefone_contato=None, descricao=""),
-        [],
     )
     assert "autor não identificado" in texto
     assert "contato" not in texto
