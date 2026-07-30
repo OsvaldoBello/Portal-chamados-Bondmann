@@ -47,6 +47,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -821,7 +822,7 @@ async def _executar(chamado_id: str) -> None:
 # modelo levando 3,8 s). Encurtar não arrisca duplicar nada: o motor revalida
 # tudo no banco e o UNIQUE `(chamado_id, rodada, passe)` + `ON CONFLICT DO
 # NOTHING` fazem a segunda execução sair sem gravar nem duplicar mensagem.
-_MARGEM_ORFAO = "1 minute"
+_MARGEM_ORFAO = timedelta(minutes=1)
 
 
 async def _chamados_orfaos(conn: Any, settings: Settings) -> list[str]:

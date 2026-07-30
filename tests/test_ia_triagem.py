@@ -14,6 +14,7 @@ import asyncio
 import inspect
 import json
 from contextlib import asynccontextmanager, contextmanager
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -951,7 +952,7 @@ async def test_margem_de_orfao_e_de_um_minuto_e_vale_para_os_dois_casos():
         patch.object(triagem, "admin_connection", _fake_admin_orfaos(conn)),
     ):
         await triagem.reconciliar_triagens_perdidas()
-    assert triagem._MARGEM_ORFAO == "1 minute"
+    assert triagem._MARGEM_ORFAO == timedelta(minutes=1)
     assert conn.sql is not None
     # Nenhum intervalo hardcoded sobrou no SQL: as duas pernas usam o parâmetro.
     assert "interval '3 minutes'" not in conn.sql
