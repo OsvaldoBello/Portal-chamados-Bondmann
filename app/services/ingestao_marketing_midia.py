@@ -118,7 +118,7 @@ def _para_decimal(valor: Any) -> Decimal | None:
     centavos em ponto flutuante binário produz ruído tipo 4057.0149999999996
     que arredonda para baixo do esperado — ``Decimal`` a partir do texto/valor
     original evita isso)."""
-    if isinstance(valor, (int, float)):
+    if isinstance(valor, int | float):
         return Decimal(str(valor))
     if isinstance(valor, str) and valor.strip():
         try:
@@ -154,7 +154,7 @@ def ler_aba(ws) -> tuple[float, int, int, int] | None:
 
     for r in range(linha_cabecalho + 1, ws.max_row + 1):
         id_cell = ws.cell(row=r, column=1)
-        if not isinstance(id_cell.value, (int, float)):
+        if not isinstance(id_cell.value, int | float):
             continue  # pula linha "TOTAL"/em branco/fora do bloco de dados
         if _eh_verde(id_cell):
             regioes_ativas = max(regioes_ativas, int(id_cell.value))
