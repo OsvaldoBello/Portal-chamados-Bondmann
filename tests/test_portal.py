@@ -581,6 +581,63 @@ def test_criar_marketing_sem_prazo_marcado_forca_prioridade_baixa():
     assert repo.criados[0]["data_entrega"] is None
 
 
+# --------------------------------------------------------------------------
+# Origem da demanda (2026-07-31): decidida pelo departamento do AUTOR, não
+# mais sempre "Solicitação" — pedido do usuário ("quando um operador de
+# marketing abre um chamado, precisa contar como marketing").
+# --------------------------------------------------------------------------
+def test_criar_marketing_autor_do_proprio_marketing_conta_como_origem_marketing():
+    from app.services.portal import PortalService
+
+    repo = FakeRepo(departamento_id="d3")  # autor é do próprio Marketing
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(
+            departamento_id="d3", setor="Financeiro",
+            data_entrega=PortalService.data_entrega_min().isoformat(),
+        )
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert repo.criados[0]["origem_demanda"] == "Marketing"
+
+
+def test_criar_marketing_autor_de_outro_setor_conta_como_solicitacao():
+    from app.services.portal import PortalService
+
+    repo = FakeRepo(departamento_id="d2")  # autor é do RH, pedindo pro Marketing
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(
+            departamento_id="d3", setor="Financeiro",
+            data_entrega=PortalService.data_entrega_min().isoformat(),
+        )
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert repo.criados[0]["origem_demanda"] == "Solicitação"
+
+
+def test_criar_fora_do_marketing_origem_demanda_sempre_solicitacao():
+    """O campo só existe pro Marketing — mesmo autor do próprio setor de
+    destino (ex.: alguém da RH abrindo pra RH), fora do Marketing sempre
+    grava "Solicitação" (nunca fica "Marketing" por coincidência de setor)."""
+    repo = FakeRepo(departamento_id="d2")  # autor é do RH, abrindo pra RH
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(departamento_id="d2")
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert repo.criados[0]["origem_demanda"] == "Solicitação"
+
+
 def test_criar_fora_do_marketing_preserva_prioridade_escolhida():
     repo = FakeRepo()
     with portal_client(repo) as client:

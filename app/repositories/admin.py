@@ -579,7 +579,16 @@ class AdminRepo:
         `supabase/migrations/0032_marketing_dinamico_views.sql`) em vez de puxar
         TODOS os chamados do Marketing já abertos para agregar em Python — só a
         lista de atrasos (que precisa de título/causa por chamado) é buscada
-        linha a linha, e só as linhas realmente atrasadas."""
+        linha a linha, e só as linhas realmente atrasadas.
+
+        **Baseline histórico** (`marketing_volume_baseline`, migration `0069`,
+        pedido do usuário 2026-07-31): meses anteriores ao uso real do Portal
+        pelo Marketing (jan-mai/26 — o time controlava fora do sistema) têm
+        pouquíssimos chamados de verdade, o que fazia o gráfico "cair pra zero"
+        nesses meses mesmo tendo movimento real. Quando existe uma linha de
+        baseline pro mês, ela SUBSTITUI os números calculados da view (a
+        contagem por ticket não reflete o histórico pré-sistema); sem baseline,
+        segue vindo 100% da view, como sempre."""
         async with rls_connection(claims) as conn:
             volume_rows = await conn.fetch(
                 """SELECT mes, total, concluidas, abertas, em_andamento, volume,
@@ -606,19 +615,27 @@ class AdminRepo:
                 """SELECT mes, investimento, regioes, descontinuidades, aderencias
                      FROM marketing_midia_regional ORDER BY mes ASC"""
             )
+            baseline_rows = await conn.fetch(
+                """SELECT mes, total, concluidas, em_andamento, abertas, volume,
+                          mkt_orig, sol_orig, tempo_medio, atrasos
+                     FROM marketing_volume_baseline ORDER BY mes ASC"""
+            )
 
         volume_por_mes = {r["mes"]: dict(r) for r in volume_rows}
         midia_list = [dict(r) for r in midia_rows]
+        baseline_por_mes = {r["mes"]: dict(r) for r in baseline_rows}
 
-        # Todo mês com chamado OU com registro de mídia regional entra na série
-        # (mesmo sem chamado nenhum — mês futuro cadastrado com antecedência, etc.).
-        todos_meses = sorted(set(volume_por_mes) | {m["mes"] for m in midia_list})
+        # Todo mês com chamado, registro de mídia regional OU baseline histórico
+        # entra na série (mesmo sem chamado nenhum — mês futuro cadastrado com
+        # antecedência, mês pré-sistema só com baseline, etc.).
+        todos_meses = sorted(set(volume_por_mes) | {m["mes"] for m in midia_list} | set(baseline_por_mes))
 
         monthly_list = []
         dept_by_month: dict[str, dict[str, int]] = {}
         for mes in todos_meses:
             label = self._mes_label(mes)
-            v = volume_por_mes.get(mes)
+            # Baseline tem prioridade sobre a view — ver docstring do método.
+            v = baseline_por_mes.get(mes) or volume_por_mes.get(mes)
             total = v["total"] if v else 0
             concluidas = v["concluidas"] if v else 0
             mkt_orig = v["mkt_orig"] if v else 0
@@ -640,6 +657,8 @@ class AdminRepo:
                 "pct_conc": round(100.0 * concluidas / total, 1) if total else 0.0,
                 "pct_mkt": round(100.0 * mkt_orig / total, 1) if total else 0.0,
             })
+            # Ranking por setor solicitante só existe a partir de chamado real
+            # (0032) — meses cobertos só por baseline ficam sem essa quebra.
             dept_by_month[label] = {
                 r["setor"]: r["total"] for r in setor_rows if r["mes"] == mes
             }
