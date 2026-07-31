@@ -195,9 +195,38 @@
 <section class="bg-white rounded-xl shadow-card border border-line/60 p-5 mt-6">
   <h3 class="font-display font-bold text-navy mb-1">Mídia Regional do Marketing</h3>
   <p class="text-xs text-muted mb-4">
-    Dado bruto usado no gráfico "Mídia Regional" do dashboard de Marketing. Cadastre ou atualize um mês —
-    salvar de novo o mesmo mês sobrescreve os números.
+    Dado bruto usado no gráfico "Mídia Regional" do dashboard de Marketing. Cadastre/atualize um mês manualmente
+    abaixo, ou suba de uma vez a planilha "Investimento por Região" recebida da agência — salvar de novo o
+    mesmo mês (manual ou por upload) sempre sobrescreve os números.
   </p>
+
+  {% if midia_upload_ok %}
+  <p class="mb-3 rounded-lg bg-brandgreen-600/10 px-3.5 py-2.5 text-sm text-brandgreen-700">
+    {{ midia_upload_ok }} mês(es) atualizado(s) a partir da planilha.
+  </p>
+  {% endif %}
+  {% if midia_upload_erro %}
+  <p class="mb-3 rounded-lg bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
+    {{ midia_upload_erro }}
+  </p>
+  {% endif %}
+  <form method="post" action="/admin/marketing-midia/upload" enctype="multipart/form-data"
+        class="flex flex-wrap items-end gap-3 mb-5 pb-5 border-b border-line/60">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="flex flex-col gap-1">
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Planilha "Investimento por Região" (.xlsx, até {{ max_midia_planilha_mb }}MB)</span>
+      <input type="file" name="planilha" accept=".xlsx" required
+             class="text-sm file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-navy-100 file:text-navy file:text-xs file:font-semibold">
+    </label>
+    <button type="submit" class="px-4 py-2 rounded-lg bg-brandgreen-600 text-white text-sm font-semibold hover:bg-brandgreen-700">
+      Enviar planilha
+    </button>
+    <span class="text-[11px] text-muted">
+      Uma aba por mês (ex.: "Março 2026") — investimento, regiões ativas e entradas/saídas são calculados
+      automaticamente. Abas fora desse padrão são ignoradas.
+    </span>
+  </form>
+
   <form method="post" action="/admin/marketing-midia" class="flex flex-wrap items-end gap-3 mb-5">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label class="flex flex-col gap-1">

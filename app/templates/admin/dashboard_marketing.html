@@ -5,31 +5,11 @@
 {% block heading %}Indicadores de Marketing{% endblock %}
 {% block subheading %}Painel de indicadores de Marketing e Mídia Regional{% endblock %}
 
-{% block content %}
-<style>
-  :root {
-    --green: #1D9E75;
-    --blue: #378ADD;
-    --orange: #D85A30;
-    --purple: #534AB7;
-    --amber: #EF9F27;
-  }
-  .tab-panel {
-    display: none;
-  }
-  .tab-panel.active {
-    display: block;
-  }
-  .tab-btn.active {
-    background-color: #83c964;
-    color: #1a3a10;
-  }
-  .filter-pill.active {
-    background-color: #004270;
-    color: white;
-  }
-</style>
+{% block head_scripts %}
+<link rel="stylesheet" href="{{ static_url('/static/css/dashboard_marketing.css') }}">
+{% endblock %}
 
+{% block content %}
 <div class="anim-fade mb-5 flex flex-wrap items-center justify-between gap-4 text-sm">
   {% if is_ti is defined and is_ti and departamentos %}
   <form method="get" action="/admin"
@@ -57,11 +37,16 @@
 <!-- FILTER BAR -->
 <div id="filter-bar" class="flex flex-wrap items-center gap-2 mb-6">
   <span class="text-xs font-bold uppercase tracking-wider text-muted mr-2">Filtrar Período:</span>
-  <button class="filter-pill active px-3.5 py-1.5 rounded-full bg-gray-200 text-navy font-semibold text-xs transition" onclick="setFilter('all',this)">Acumulado</button>
+  <button class="filter-pill active px-3.5 py-1.5 rounded-full bg-gray-200 text-navy font-semibold text-xs transition" data-filter="all">Acumulado</button>
   {% for m in mkt_data.monthly %}
-  <button class="filter-pill px-3.5 py-1.5 rounded-full bg-gray-200 text-navy font-semibold text-xs transition" onclick="setFilter('{{ m.label }}',this)">{{ m.label }}</button>
+  <button class="filter-pill px-3.5 py-1.5 rounded-full bg-gray-200 text-navy font-semibold text-xs transition" data-filter="{{ m.label }}">{{ m.label }}</button>
   {% endfor %}
   <span id="filter-period-label" class="text-xs text-muted italic ml-2"></span>
+  <a id="btn-exportar" href="/admin/marketing/export?periodo=all"
+     class="ml-auto inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-navy-900 text-white font-semibold text-xs hover:bg-navy-800 transition">
+    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+    Exportar (.xlsx)
+  </a>
 </div>
 
 <!-- SUMMARY CARDS -->
@@ -74,12 +59,12 @@
 
 <!-- TABS BAR -->
 <div id="tabs" class="flex flex-wrap gap-2 mb-6">
-  <button class="tab-btn active px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy transition shadow-soft" onclick="switchTab('entrega',this)">1. Taxa de Entrega</button>
-  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" onclick="switchTab('volume',this)">2. Volume Produzido</button>
-  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" onclick="switchTab('origem',this)">3. Origem de Demanda</button>
-  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" onclick="switchTab('dept',this)">4. Solicitantes</button>
-  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" onclick="switchTab('tempo',this)">5. Tempo de Entrega</button>
-  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" onclick="switchTab('midia',this)">6. Mídia Regional</button>
+  <button class="tab-btn active px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy transition shadow-soft" data-tab="entrega">1. Taxa de Entrega</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="volume">2. Volume Produzido</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="origem">3. Origem de Demanda</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="dept">4. Solicitantes</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="tempo">5. Tempo de Entrega</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="midia">6. Mídia Regional</button>
 </div>
 
 <!-- TAB PANELS -->
@@ -87,7 +72,7 @@
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Status das Demandas — Histórico Mensal</h4>
     <p class="text-xs text-muted mb-4">Total de demandas recebidas por mês e status</p>
-    <div style="height:360px"><canvas id="chartEntrega"></canvas></div>
+    <div class="chart-box-md"><canvas id="chartEntrega"></canvas></div>
   </div>
 </div>
 
@@ -95,7 +80,7 @@
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Demandas vs Volume Produzido — Evolução Mensal</h4>
     <p class="text-xs text-muted mb-4">Quantidade de demandas vs total de peças/cards produzidos</p>
-    <div style="height:360px"><canvas id="chartVolume"></canvas></div>
+    <div class="chart-box-md"><canvas id="chartVolume"></canvas></div>
   </div>
 </div>
 
@@ -103,7 +88,7 @@
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Origem da Demanda — Evolução Mensal</h4>
     <p class="text-xs text-muted mb-4">Comparativo de demandas criadas pelo próprio Marketing vs Solicitações de outros setores</p>
-    <div style="height:360px"><canvas id="chartOrigem"></canvas></div>
+    <div class="chart-box-md"><canvas id="chartOrigem"></canvas></div>
   </div>
 </div>
 
@@ -111,7 +96,7 @@
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Demandas por Setor Solicitante — Ranking Acumulado</h4>
     <p class="text-xs text-muted mb-4">Ordenado do maior para o menor setor solicitante</p>
-    <div style="height:420px"><canvas id="chartDept"></canvas></div>
+    <div class="chart-box-lg"><canvas id="chartDept"></canvas></div>
   </div>
 </div>
 
@@ -146,7 +131,7 @@
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Tempo Médio de Entrega (dias) — Evolução Mensal</h4>
     <p class="text-xs text-muted mb-4">Apenas demandas concluídas · Linha tracejada = limite de 5 dias</p>
-    <div style="height:360px"><canvas id="chartTempo"></canvas></div>
+    <div class="chart-box-xl"><canvas id="chartTempo"></canvas></div>
   </div>
   <div class="grid md:grid-cols-2 gap-4">
     <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
@@ -170,12 +155,47 @@
     <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
       <h4 class="font-display font-bold text-navy text-sm">Ranking de Causas de Atraso</h4>
       <p class="text-xs text-muted mb-4">Distribuição de causas para atrasos > 5 dias</p>
-      <div style="height:260px"><canvas id="chartCausas"></canvas></div>
+      <div class="chart-box-sm"><canvas id="chartCausas"></canvas></div>
     </div>
   </div>
 </div>
 
 <div id="tab-midia" class="tab-panel space-y-4">
+  {# Upload da planilha "Investimento por Região" (pedido do usuário 2026-07-31):
+     antes só existia em /admin/gestao, TI-only — quem de fato recebe esse
+     arquivo todo mês é o próprio Marketing, então o botão fica aqui também.
+     Mesma rota de /admin/gestao; `voltar_para=/admin` traz de volta pra cá. #}
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Importar planilha "Investimento por Região"</h4>
+    <p class="text-xs text-muted mb-4">
+      Envie o arquivo recebido da agência (uma aba por mês, ex. "Março 2026") — investimento,
+      regiões ativas e entradas/saídas são calculados automaticamente e sobrescrevem o mês
+      correspondente abaixo.
+    </p>
+    {% if midia_upload_ok %}
+    <p class="mb-3 rounded-lg bg-brandgreen-600/10 px-3.5 py-2.5 text-sm text-brandgreen-700">
+      {{ midia_upload_ok }} mês(es) atualizado(s) a partir da planilha.
+    </p>
+    {% endif %}
+    {% if midia_upload_erro %}
+    <p class="mb-3 rounded-lg bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
+      {{ midia_upload_erro }}
+    </p>
+    {% endif %}
+    <form method="post" action="/admin/marketing-midia/upload" enctype="multipart/form-data"
+          class="flex flex-wrap items-end gap-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="voltar_para" value="/admin">
+      <label class="flex flex-col gap-1">
+        <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Planilha (.xlsx, até {{ max_midia_planilha_mb }}MB)</span>
+        <input type="file" name="planilha" accept=".xlsx" required
+               class="text-sm file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-navy-100 file:text-navy file:text-xs file:font-semibold">
+      </label>
+      <button type="submit" class="px-4 py-2 rounded-lg bg-brandgreen-600 text-white text-sm font-semibold hover:bg-brandgreen-700">
+        Importar
+      </button>
+    </form>
+  </div>
   <div class="insight-row grid grid-cols-2 md:grid-cols-5 gap-3">
     <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
       <div id="midia-investimento-total" class="text-lg font-bold text-brandgreen-700">R$ 0,00</div>
@@ -206,12 +226,12 @@
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Mídia Regional — Indicadores por Mês</h4>
     <p class="text-xs text-muted mb-4">Regiões Ativas · Descontinuidades · Aderências</p>
-    <div style="height:360px"><canvas id="chartMidiaIndicadores"></canvas></div>
+    <div class="chart-box-md"><canvas id="chartMidiaIndicadores"></canvas></div>
   </div>
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Investimento BD (R$) — Evolução Mensal</h4>
     <p class="text-xs text-muted mb-4">Valores mensais de veiculação regional</p>
-    <div style="height:280px"><canvas id="chartMidiaInvest"></canvas></div>
+    <div class="chart-box-md-alt"><canvas id="chartMidiaInvest"></canvas></div>
   </div>
   <script type="application/json" id="mkt-data">{{ mkt_data | tojson }}</script>
 </div>

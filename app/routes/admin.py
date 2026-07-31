@@ -20,6 +20,7 @@ Gráficos com Chart.js (self-hosted, SRI); dados passados como JSON inerte
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 from dataclasses import dataclass
@@ -56,6 +57,8 @@ from app.security.csrf import get_csrf
 from app.security.password_policy import SENHA_MIN_CHARS
 from app.security.uploads import UploadInvalido, validar_anexo
 from app.services.admin import AdminService
+from app.services.export_marketing import gerar_workbook as gerar_workbook_marketing
+from app.services.ingestao_marketing_midia import parse_bytes as parse_midia_bytes
 from app.services.ingestao_quimico import ingerir_conn
 from app.templating import render
 
@@ -188,6 +191,21 @@ def _require_base_quimico(ctx: AdminCtx) -> None:
         )
 
 
+def _require_pode_editar_midia_marketing(ctx: AdminCtx) -> None:
+    """Manter a Mídia Regional do Marketing (manual ou via upload de
+    planilha): TI ou quem vê o Dashboard de Marketing (ADMIN/OPERADOR do
+    próprio setor — migration `0068`, mesmo padrão de `pode_editar_avatares`).
+    Antes disso era `_require_ti` puro: só TI acessava `/admin/gestao`, então
+    a única pessoa que conseguia subir a planilha "Investimento por Região"
+    (recebida pelo próprio Marketing todo mês) era o TI — pedido do usuário
+    2026-07-31 pra abrir isso pra quem realmente lida com esse arquivo."""
+    if not (ctx.is_ti or ctx.escopo == "Marketing"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sem permissão para manter a Mídia Regional do Marketing.",
+        )
+
+
 async def _csrf_guard(request: Request) -> None:
     await get_csrf().validate(request)
 
@@ -238,6 +256,8 @@ def _periodo_vizinho(ano: int, mes: int, *, delta: int) -> str:
 async def dashboard(
     request: Request,
     periodo: str = "",
+    midia_upload_ok: str = "",
+    midia_upload_erro: str = "",
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
 ):
@@ -302,6 +322,9 @@ async def dashboard(
                 "departamentos": [],
                 "departamento_sel": "",
                 "mkt_data": mkt_data,
+                "midia_upload_ok": midia_upload_ok,
+                "midia_upload_erro": midia_upload_erro,
+                "max_midia_planilha_mb": _MAX_PLANILHA_BYTES // (1024 * 1024),
             },
         )
 
@@ -320,6 +343,40 @@ async def dashboard(
             "periodo_anterior": _periodo_vizinho(ano, mes, delta=-1),
             "periodo_seguinte": _periodo_vizinho(ano, mes, delta=1),
         },
+    )
+
+
+@router.get("/marketing/export")
+async def exportar_marketing(
+    request: Request,
+    periodo: str = "all",
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+):
+    """Exportação organizada (1 aba por indicador) e dinâmica (respeita o
+    filtro de período da tela) do Dashboard de Marketing — pedido do usuário
+    2026-07-31, substitui pro Marketing o "Exportar CSV" genérico da barra
+    lateral (que dumpa chamados brutos, sem refletir os indicadores
+    agregados). ``periodo`` = "all" (Acumulado) ou o rótulo de um mês (ex.
+    "JUL/26") — o botão "Exportar" do dashboard manda o filtro ativo na tela
+    (ver `admin_marketing.js`). Mesma fonte de dados da tela
+    (`mkt_dashboard_data`) — a planilha nunca diverge do que está no navegador.
+
+    Só quem enxerga o Dashboard de Marketing (``escopo == "Marketing"``) pode
+    exportá-lo — mesma regra de visibilidade da rota `dashboard`."""
+    if ctx.escopo != "Marketing":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Exportação restrita a quem vê o Dashboard de Marketing.",
+        )
+    mkt_data = await repo.mkt_dashboard_data(ctx.user.claims)
+    buf = gerar_workbook_marketing(mkt_data, periodo)
+    sufixo = "acumulado" if periodo == "all" else periodo.replace("/", "-")
+    nome = f"indicadores_marketing_{sufixo}_{datetime.now(UTC):%Y%m%d}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nome}"'},
     )
 
 
@@ -351,6 +408,8 @@ async def gestao(
     request: Request,
     prioridade_ok: str = "",
     feriados_ok: str = "",
+    midia_upload_ok: str = "",
+    midia_upload_erro: str = "",
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
 ):
@@ -368,9 +427,27 @@ async def gestao(
             "planos": await repo.planos(ctx.user.claims),
             "prioridade_ok": prioridade_ok,
             "feriados_ok": feriados_ok,
+            "midia_upload_ok": midia_upload_ok,
+            "midia_upload_erro": midia_upload_erro,
             "midia_regional": await repo.marketing_midia_regional(ctx.user.claims),
+            "max_midia_planilha_mb": _MAX_PLANILHA_BYTES // (1024 * 1024),
         },
     )
+
+
+# Alvo do redirect pós-POST de mídia regional — a mesma rota agora é chamada
+# de dois lugares (Gestão de catálogos, só TI, e o Dashboard de Marketing, TI
+# ou Marketing — `_require_pode_editar_midia_marketing`); allowlist fechada
+# pra nunca virar open-redirect a partir de um `voltar_para` arbitrário.
+_MIDIA_VOLTAR_PARA = {"/admin/gestao", "/admin"}
+
+
+def _redirect_midia(voltar_para: str, **params: str) -> RedirectResponse:
+    from urllib.parse import urlencode
+
+    destino = voltar_para if voltar_para in _MIDIA_VOLTAR_PARA else "/admin/gestao"
+    qs = f"?{urlencode(params)}" if params else ""
+    return RedirectResponse(f"{destino}{qs}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/marketing-midia")
@@ -381,6 +458,7 @@ async def salvar_marketing_midia(
     regioes: str = Form("0"),
     descontinuidades: str = Form("0"),
     aderencias: str = Form("0"),
+    voltar_para: str = Form("/admin/gestao"),
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
     _: None = Depends(_csrf_guard),
@@ -389,7 +467,7 @@ async def salvar_marketing_midia(
     qualquer mês agora entra por aqui, sem precisar de migration — é o que torna
     `marketing_midia_regional` dinâmica em vez de engessada nos 5 meses do seed
     original."""
-    _require_ti(ctx)
+    _require_pode_editar_midia_marketing(ctx)
     from datetime import date as _date
 
     mes = mes.strip()
@@ -397,7 +475,7 @@ async def salvar_marketing_midia(
         ano_s, mes_s = mes.split("-", 1)
         mes_data = _date(int(ano_s), int(mes_s), 1)
     except (ValueError, TypeError):
-        return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
+        return _redirect_midia(voltar_para)
 
     def _num(bruto: str, cast):
         try:
@@ -413,7 +491,69 @@ async def salvar_marketing_midia(
         descontinuidades=_num(descontinuidades, int),
         aderencias=_num(aderencias, int),
     )
-    return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
+    return _redirect_midia(voltar_para)
+
+
+@router.post("/marketing-midia/upload")
+async def upload_marketing_midia(
+    request: Request,
+    planilha: UploadFile = File(...),
+    voltar_para: str = Form("/admin/gestao"),
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Sobe a planilha "Investimento por Região" (uma aba por mês, recebida
+    mensalmente de uma agência externa) e faz upsert em `marketing_midia_regional`
+    — mesma tabela/CRUD de `salvar_marketing_midia`, só que os 4 números de
+    cada mês (investimento, regiões ativas, descontinuidades, aderências) são
+    calculados a partir da planilha em vez de digitados um a um (regra de
+    extração combinada com o usuário 2026-07-30 — ver
+    `app.services.ingestao_marketing_midia`). Parse determinístico (openpyxl,
+    sem LLM); cada mês reconhecido sobrescreve o que já existia (mesmo
+    comportamento idempotente do formulário manual).
+
+    Chamável tanto da Gestão de catálogos (TI, `voltar_para=/admin/gestao`)
+    quanto do próprio Dashboard de Marketing (TI ou Marketing,
+    `voltar_para=/admin` — é ali que o botão de upload realmente fica
+    visível pra quem não é TI, pedido do usuário 2026-07-31)."""
+    _require_pode_editar_midia_marketing(ctx)
+
+    def _volta(*, erro: str = "", ok: str = ""):
+        return _redirect_midia(voltar_para, midia_upload_erro=erro, midia_upload_ok=ok)
+
+    if not planilha or not planilha.filename:
+        return _volta(erro="Selecione a planilha (.xlsx).")
+
+    try:
+        bruto = await planilha.read(_MAX_PLANILHA_BYTES + 1)
+        planilha_val = validar_anexo(planilha.filename, bruto, max_bytes=_MAX_PLANILHA_BYTES)
+    except UploadInvalido as exc:
+        return _volta(erro=f"Planilha inválida: {exc}")
+    if planilha_val.ext != "xlsx":
+        return _volta(erro="A planilha precisa ser um arquivo .xlsx.")
+
+    try:
+        registros = await asyncio.to_thread(parse_midia_bytes, planilha_val.conteudo)
+    except Exception:  # noqa: BLE001 — parse/formato inesperado: mensagem genérica ao usuário
+        return _volta(erro="Não foi possível interpretar a planilha. Confira o formato e tente novamente.")
+
+    if not registros:
+        return _volta(
+            erro="Nenhuma aba de mês reconhecida na planilha (esperado uma aba por mês, "
+            "ex.: \"Março 2026\")."
+        )
+
+    for r in registros:
+        await repo.upsert_marketing_midia_regional(
+            ctx.user.claims,
+            mes=r.mes,
+            investimento=r.investimento,
+            regioes=r.regioes,
+            descontinuidades=r.descontinuidades,
+            aderencias=r.aderencias,
+        )
+    return _volta(ok=str(len(registros)))
 
 
 @router.post("/jobs/sincronizar-feriados")

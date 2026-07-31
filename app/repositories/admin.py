@@ -631,7 +631,11 @@ class AdminRepo:
                 "volume": v["volume"] if v else 0,
                 "mkt_orig": mkt_orig,
                 "sol_orig": v["sol_orig"] if v else 0,
-                "tempo_medio": float(v["tempo_medio"]) if v and v["tempo_medio"] is not None else 0.0,
+                # None (não 0.0) quando não há concluída nesse mês: "0 dias" é um
+                # dado real diferente de "sem dado" — 0.0 fazia o gráfico de linha
+                # cair pra zero em vez de mostrar a lacuna (o front trata null como
+                # ponto ausente, ver `admin_marketing.js`).
+                "tempo_medio": float(v["tempo_medio"]) if v and v["tempo_medio"] is not None else None,
                 "atrasos": v["atrasos"] if v else 0,
                 "pct_conc": round(100.0 * concluidas / total, 1) if total else 0.0,
                 "pct_mkt": round(100.0 * mkt_orig / total, 1) if total else 0.0,

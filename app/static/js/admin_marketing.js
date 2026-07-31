@@ -26,6 +26,23 @@
     return activeFilter==="all" ? monthly : monthly.filter(m=>m.label===activeFilter);
   }
 
+  // `tempo_medio` vem `null` do backend nos meses sem NENHUMA demanda concluída
+  // (média de zero itens não é "0 dias", é "sem dado" — ver app/repositories/
+  // admin.py::mkt_dashboard_data). Média ponderada por `concluidas`, ignorando
+  // os meses sem dado tanto no numerador quanto no denominador; `null` quando
+  // nenhum mês do período tem tempo médio conhecido.
+  function mediaTempoPonderada(lista){
+    let peso=0, soma=0;
+    lista.forEach(m=>{
+      if(m.tempo_medio!=null){ soma+=m.tempo_medio*m.concluidas; peso+=m.concluidas; }
+    });
+    return peso ? soma/peso : null;
+  }
+
+  function fmtDias(valor){
+    return valor!=null ? valor.toFixed(1).replace(".",",")+" d" : "—";
+  }
+
   function setFilter(val, btn){
     activeFilter=val;
     document.querySelectorAll(".filter-pill").forEach(b=>{
@@ -44,7 +61,14 @@
     
     const titleText = "Dashboard de Marketing — " + (val === "all" ? (filtLabels[0] + " a " + filtLabels[filtLabels.length-1]) : val);
     document.getElementById("header-title").textContent = titleText;
-    
+
+    // Exportação dinâmica: o link sempre exporta o período que está selecionado
+    // na tela agora (ver app/services/export_marketing.py).
+    const btnExportar = document.getElementById("btn-exportar");
+    if (btnExportar) {
+      btnExportar.href = "/admin/marketing/export?periodo=" + encodeURIComponent(val);
+    }
+
     renderSummary();
     renderAllCharts();
   }
@@ -61,7 +85,7 @@
     const pctConc=total?(conc/total*100).toFixed(1):"0";
     const pctMkt=total?(mkt/total*100).toFixed(1):"0";
     const razao=total?(vol/total).toFixed(1):"0";
-    const tempoW=d.reduce((s,x)=>s+x.tempo_medio*x.concluidas,0)/(conc||1);
+    const tempoW=mediaTempoPonderada(d);
     const filtLabels=d.map(x=>x.label);
     const agg={};
     filtLabels.forEach(l=>Object.entries(deptByMonth[l]||{}).forEach(([k,v])=>{agg[k]=(agg[k]||0)+v;}));
@@ -82,7 +106,7 @@
         <div><h3 class="text-2xl font-black text-red-500">${last.abertas}</h3><p class="text-xs text-muted">Abertas</p></div>
         <div><h3 class="text-2xl font-black text-amber-500">${last.volume}</h3><p class="text-xs text-muted">Volume</p></div>
         <div>
-          <h3 class="text-2xl font-black text-brandgreen-600">${last.tempo_medio.toFixed(1).replace(".",",")} d</h3>
+          <h3 class="text-2xl font-black text-brandgreen-600">${fmtDias(last.tempo_medio)}</h3>
           <p class="text-xs text-muted">Tempo médio</p>
         </div>
         <div>
@@ -107,7 +131,7 @@
           <p class="text-xs text-muted">Volume</p>
           <div class="text-[10px] text-muted mt-0.5">x${razao.replace(".",",")} /dem.</div>
         </div>
-        <div><h3 class="text-2xl font-black text-brandgreen-600">${tempoW.toFixed(1).replace(".",",")} d</h3><p class="text-xs text-muted">Tempo médio</p></div>
+        <div><h3 class="text-2xl font-black text-brandgreen-600">${fmtDias(tempoW)}</h3><p class="text-xs text-muted">Tempo médio</p></div>
         <div>
           <h3 class="text-2xl font-black text-red-500">${nAtr}</h3>
           <p class="text-xs text-muted">Atrasos >5d</p>
@@ -165,6 +189,7 @@
       const ds=chart.data.datasets[0];
       meta.data.forEach((el,i)=>{
         const val=ds.data[i];
+        if(val===null||val===undefined) return;  // mês sem tempo médio (sem concluída) — sem pill
         const {x,y}=el.tooltipPosition();
         const lbl=val.toFixed(1).replace(".",",")+" d";
         ctx.save();
@@ -224,6 +249,16 @@
   // Define line labels plugin setup
   function renderTempo(){
     const d=filteredMonthly(),labels=d.map(m=>m.label),vals=d.map(m=>m.tempo_medio);
+    // Teto do eixo DINÂMICO: um mês com tempo médio bem acima do normal (ex.
+    // 184d — chamado antigo/histórico só resolvido meses depois) não pode
+    // ficar preso num teto fixo de 8d. O Chart.js não "recorta" o ponto na
+    // borda do eixo — ele EXTRAPOLA a linha matematicamente bem pra fora da
+    // área visível (y pode virar -9000px), e o pedaço que cruza de volta pro
+    // canvas aparece como um pico/corte quebrado (era o "ainda está cortado").
+    // Teto = sempre cobre o maior valor do período + folga de 15%, com piso
+    // de 8d (mantém a régua "Limite 5d" com folga visual nos meses normais).
+    const maiorValor = vals.reduce((m,v)=> v!=null && v>m ? v : m, 0);
+    const eixoMax = Math.max(8, Math.ceil(maiorValor*1.15));
     if(charts["chartTempo"])charts["chartTempo"].destroy();
     charts["chartTempo"]=new Chart(document.getElementById("chartTempo"),{
       type:"line",plugins:[LINE_LABEL_PLUGIN],
@@ -231,8 +266,13 @@
         {label:"Tempo médio (d)",data:vals,borderColor:"#D85A30",backgroundColor:"rgba(216,90,48,0.15)",fill:true,tension:0.35,pointBackgroundColor:"#D85A30",pointRadius:6,pointHoverRadius:8},
         {label:"Limite 5d",data:labels.map(()=>5),borderColor:"#e05252",borderWidth:2,borderDash:[6,3],pointRadius:0,fill:false,skipPill:true}
       ]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"top"},lineLabel:{}},
-        scales:{y:{beginAtZero:true,max:8,ticks:{callback:v=>v+" d"}},x:{ticks:{font:{size:11}}}}}
+      options:{responsive:true,maintainAspectRatio:false,
+        // `layout.padding` reserva espaço em BRANCO ao redor da área de
+        // plotagem pro pill do `lineLabel` (desenhado ~26px ACIMA de cada
+        // ponto) nunca ficar cortado, mesmo pro ponto mais alto do eixo.
+        layout:{padding:{top:36,right:28,bottom:4}},
+        plugins:{legend:{position:"top"},lineLabel:{}},
+        scales:{y:{beginAtZero:true,max:eixoMax,ticks:{callback:v=>v+" d"}},x:{ticks:{font:{size:11}}}}}
     });
   }
 
@@ -283,9 +323,8 @@
     const d = filteredMonthly();
     if (d.length === 0) return;
     
-    const conc = d.reduce((s,x)=>s+x.concluidas, 0);
-    const tempoW = d.reduce((s,x)=>s+x.tempo_medio*x.concluidas,0)/(conc||1);
-    document.getElementById("tempo-media-acumulado").textContent = tempoW.toFixed(1).replace(".",",") + " d";
+    const tempoW = mediaTempoPonderada(d);
+    document.getElementById("tempo-media-acumulado").textContent = fmtDias(tempoW);
     
     const filtLabels = d.map(x => x.label);
     const total = d.reduce((s,x)=>s+x.total, 0);
@@ -309,12 +348,12 @@
     let melhorMedia = 999.0;
     let melhorMediaMes = "—";
     d.forEach(m => {
-      if (m.concluidas > 0 && m.tempo_medio < melhorMedia) {
+      if (m.concluidas > 0 && m.tempo_medio != null && m.tempo_medio < melhorMedia) {
         melhorMedia = m.tempo_medio;
         melhorMediaMes = m.label;
       }
     });
-    document.getElementById("tempo-melhor-media").textContent = melhorMedia === 999.0 ? "—" : melhorMedia.toFixed(1).replace(".",",") + " d";
+    document.getElementById("tempo-melhor-media").textContent = melhorMedia === 999.0 ? "—" : fmtDias(melhorMedia);
     document.getElementById("tempo-melhor-media-mes").textContent = melhorMediaMes + " — tendência positiva";
     
     const causasCount = {};
@@ -382,7 +421,7 @@
   function renderAllCharts(){
     renderEntrega();
     const activeTabBtn = document.querySelector(".tab-btn.active");
-    const id = activeTabBtn ? activeTabBtn.outerHTML.match(/switchTab\('([^']+)'/)[1] : "entrega";
+    const id = activeTabBtn ? activeTabBtn.dataset.tab : "entrega";
     
     if(id==="volume")renderVolume();
     else if(id==="origem")renderOrigem();
@@ -414,11 +453,28 @@
     else if(name==="midia"){renderMidia();updateMidiaInsights();}
   }
 
-  // Expose callbacks globally so they can be triggered from onclick attributes
-  window.setFilter = setFilter;
-  window.switchTab = switchTab;
+  // ─── EVENTOS ──────────────────────────────────────────────────────────
+  // CSP do painel é `script-src 'self'` sem `unsafe-inline` (app/security/
+  // headers.py) — atributo `onclick="..."` no HTML é bloqueado pelo navegador
+  // (era o motivo dos filtros/abas não responderem a clique). Os botões
+  // carregam `data-filter`/`data-tab`; a escuta é registrada aqui.
+  document.querySelectorAll(".filter-pill").forEach(btn => {
+    btn.addEventListener("click", () => setFilter(btn.dataset.filter, btn));
+  });
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => switchTab(btn.dataset.tab, btn));
+  });
 
   // ─── INIT ─────────────────────────────────────────────────────────────
+  // Só a aba visível (Taxa de Entrega) é renderizada aqui — as outras
+  // (canvas dentro de `.tab-panel{display:none}`) só ganham o Chart.js
+  // quando `switchTab` as torna visíveis. Chart.js mede a caixa do canvas na
+  // hora de criar o chart: um canvas ainda `display:none` tem largura/altura
+  // zero, e "aparecer" depois (display:block) não corrige — o gráfico fica
+  // com posicionamento/labels quebrados mesmo depois de visível (era o motivo
+  // dos gráficos das abas 2-6 saírem com números flutuando fora do lugar).
+  // `switchTab` já chama o render certo no clique, então isso nunca fica
+  // vazio — só espera a aba ficar visível ANTES de desenhar.
   const d = filteredMonthly();
   if (d.length > 0) {
     const filtLabels = d.map(x => x.label);

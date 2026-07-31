@@ -1,0 +1,37 @@
+/* Dashboard de Marketing (admin/dashboard_marketing.html).
+   Extraído do <style> inline original: a CSP do painel é `style-src 'self'`
+   sem `unsafe-inline` (app/security/headers.py) — um <style> inline no
+   template é bloqueado pelo navegador, então `.tab-panel{display:none}`
+   nunca era aplicado e todas as abas ficavam visíveis (vazias) ao mesmo
+   tempo. Arquivo externo = mesma origem = permitido pela CSP. */
+:root {
+  --green: #1D9E75;
+  --blue: #378ADD;
+  --orange: #D85A30;
+  --purple: #534AB7;
+  --amber: #EF9F27;
+}
+.tab-panel {
+  display: none;
+}
+.tab-panel.active {
+  display: block;
+}
+.tab-btn.active {
+  background-color: #83c964;
+  color: #1a3a10;
+}
+.filter-pill.active {
+  background-color: #004270;
+  color: white;
+}
+
+/* Altura dos containers de gráfico (Chart.js precisa de um pai com altura
+   explícita pra `responsive:true` funcionar — a mesma CSP acima bloqueia
+   `style="height:...px"` inline nesses <div>, então isso também vira classe
+   externa, não atributo `style=`). */
+.chart-box-sm { height: 260px; }
+.chart-box-md { height: 360px; }
+.chart-box-md-alt { height: 280px; }
+.chart-box-lg { height: 420px; }
+.chart-box-xl { height: 520px; }
