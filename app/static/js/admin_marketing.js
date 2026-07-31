@@ -166,7 +166,7 @@
           const val=ds.data[i];
           if(val===null||val===undefined||val===0) return;
           const {x,y}=el.tooltipPosition();
-          const lbl=String(val);
+          const lbl=ds.pillFormat ? ds.pillFormat(val) : String(val);
           ctx.save();
           ctx.font="bold 10px Segoe UI,sans-serif";
           const w=ctx.measureText(lbl).width+10,h=16;
@@ -300,8 +300,9 @@
       {label:"Aderências",data:midia.aderencias,backgroundColor:"#1D9E75",borderRadius:5}
     ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"top"},pill:{}},
       scales:{x:{ticks:{font:{size:11}}},y:{beginAtZero:true}}}});
+    const fmtReais=v=>"R$ "+v.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});
     mkChart("chartMidiaInvest",{type:"line",data:{labels:midia.meses,datasets:[
-      {label:"Investimento BD (R$)",data:midia.investimento,borderColor:"#534AB7",backgroundColor:"rgba(83,74,183,0.15)",fill:true,tension:0.35,pointBackgroundColor:"#534AB7",pointRadius:6}
+      {label:"Investimento BD (R$)",data:midia.investimento,borderColor:"#534AB7",backgroundColor:"rgba(83,74,183,0.15)",fill:true,tension:0.35,pointBackgroundColor:"#534AB7",pointRadius:6,pillFormat:fmtReais}
     ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"top"},pill:{}},
       scales:{y:{ticks:{callback:v=>"R$ "+v.toLocaleString("pt-BR")}},x:{ticks:{font:{size:11}}}}}});
   }
