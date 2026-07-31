@@ -445,18 +445,16 @@ async def criar_chamado(
         volume_val = int(volume_str)
     except ValueError:
         volume_val = 1
-    # Origem da demanda (decisão do usuário 2026-07-31): quando quem ABRE o
-    # chamado já é do PRÓPRIO Marketing (ex.: Felipe, operador do setor,
-    # criando uma campanha), a demanda é proativa — conta como "Marketing".
-    # Quando quem abre é de OUTRO setor pedindo algo pro Marketing, é reativa
-    # — conta como "Solicitação". Decidido pelo servidor a partir do
-    # departamento do AUTOR (nunca de um campo enviado pelo cliente — mesma
-    # defesa em profundidade de antes). Fora do Marketing o campo não é
-    # exibido em lugar nenhum, mas mantém "Solicitação" por padrão.
-    autor_dep_id = str(ctx.perfil.get("departamento_id") or "")
+    # Origem da demanda (decisão do usuário 2026-07-31, revista no mesmo dia):
+    # a classificação segue a ETIQUETA "setor" do próprio chamado (a mesma
+    # exibida nos cartões do Kanban — `c.setor`), não o departamento real de
+    # quem abriu. `setor == "Marketing"` é demanda proativa do próprio time;
+    # qualquer outra etiqueta ("RH", "Compras", "SIG", "Representantes"...) é
+    # uma solicitação de outro setor. Fora do Marketing o campo não é exibido
+    # em lugar nenhum, mas mantém "Solicitação" por padrão.
     origem_demanda_val = (
         "Marketing"
-        if marketing.is_marketing and autor_dep_id and autor_dep_id == departamento_id
+        if marketing.is_marketing and setor.strip().lower() == "marketing"
         else "Solicitação"
     )
 

@@ -582,18 +582,20 @@ def test_criar_marketing_sem_prazo_marcado_forca_prioridade_baixa():
 
 
 # --------------------------------------------------------------------------
-# Origem da demanda (2026-07-31): decidida pelo departamento do AUTOR, não
-# mais sempre "Solicitação" — pedido do usuário ("quando um operador de
-# marketing abre um chamado, precisa contar como marketing").
+# Origem da demanda (2026-07-31, regra revista no mesmo dia): decidida pela
+# ETIQUETA "setor" do próprio chamado — a mesma exibida nos cartões do
+# Kanban (`c.setor`) — não pelo departamento real de quem abriu. Pedido do
+# usuário: "para marketing tem que puxar o número de chamados com a etiqueta
+# MARKETing, as demais etiquetas devem contar para solicitações".
 # --------------------------------------------------------------------------
-def test_criar_marketing_autor_do_proprio_marketing_conta_como_origem_marketing():
+def test_criar_marketing_com_etiqueta_setor_marketing_conta_como_origem_marketing():
     from app.services.portal import PortalService
 
-    repo = FakeRepo(departamento_id="d3")  # autor é do próprio Marketing
+    repo = FakeRepo()
     with portal_client(repo) as client:
         token = _csrf_token(client)
         data = _abertura_valida(
-            departamento_id="d3", setor="Financeiro",
+            departamento_id="d3", setor="Marketing",
             data_entrega=PortalService.data_entrega_min().isoformat(),
         )
         resp = client.post(
@@ -604,14 +606,15 @@ def test_criar_marketing_autor_do_proprio_marketing_conta_como_origem_marketing(
     assert repo.criados[0]["origem_demanda"] == "Marketing"
 
 
-def test_criar_marketing_autor_de_outro_setor_conta_como_solicitacao():
+@pytest.mark.parametrize("etiqueta", ["Financeiro", "RH", "TI"])
+def test_criar_marketing_com_outra_etiqueta_de_setor_conta_como_solicitacao(etiqueta):
     from app.services.portal import PortalService
 
-    repo = FakeRepo(departamento_id="d2")  # autor é do RH, pedindo pro Marketing
+    repo = FakeRepo()
     with portal_client(repo) as client:
         token = _csrf_token(client)
         data = _abertura_valida(
-            departamento_id="d3", setor="Financeiro",
+            departamento_id="d3", setor=etiqueta,
             data_entrega=PortalService.data_entrega_min().isoformat(),
         )
         resp = client.post(
@@ -623,13 +626,12 @@ def test_criar_marketing_autor_de_outro_setor_conta_como_solicitacao():
 
 
 def test_criar_fora_do_marketing_origem_demanda_sempre_solicitacao():
-    """O campo só existe pro Marketing — mesmo autor do próprio setor de
-    destino (ex.: alguém da RH abrindo pra RH), fora do Marketing sempre
-    grava "Solicitação" (nunca fica "Marketing" por coincidência de setor)."""
-    repo = FakeRepo(departamento_id="d2")  # autor é do RH, abrindo pra RH
+    """O campo só existe pro Marketing — mesmo com a etiqueta "Marketing" no
+    setor, fora do Marketing sempre grava "Solicitação"."""
+    repo = FakeRepo()
     with portal_client(repo) as client:
         token = _csrf_token(client)
-        data = _abertura_valida(departamento_id="d2")
+        data = _abertura_valida(departamento_id="d2", setor="Marketing")
         resp = client.post(
             "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
             follow_redirects=False,
