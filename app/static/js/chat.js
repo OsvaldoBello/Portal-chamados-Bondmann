@@ -11,6 +11,43 @@
  */
 (function () {
   "use strict";
+
+  // Anexos usam signed URL regenerada a cada render do fragmento (decisão C2
+  // do plano mestre — proibido cachear a URL assinada, então isso não muda).
+  // O que quebrava a imagem era o `hx-swap="innerHTML"` do #chat-mensagens
+  // trocando todo o HTML (inclusive imagens já carregadas) por outras com URL
+  // nova, de uma hora pra outra: o navegador via um <img src> novo e mostrava
+  // o ícone quebrado até a imagem terminar de baixar (ou pior, se a troca de
+  // DOM interrompia o download anterior no meio). Pré-carregando as imagens
+  // do fragmento recebido *antes* de inserir no DOM, a troca só acontece
+  // quando elas já estão prontas — sem flash de ícone quebrado.
+  document.body.addEventListener("htmx:beforeSwap", function (evt) {
+    var alvo = evt.detail && evt.detail.target;
+    if (!alvo || alvo.id !== "chat-mensagens") return;
+    var html = evt.detail.serverResponse;
+    if (!html) return; // 304 ou corpo vazio: nada a trocar/pré-carregar
+
+    var srcs = [];
+    var re = /<img\b[^>]*\bsrc=(["'])(.*?)\1/gi;
+    var m;
+    while ((m = re.exec(html))) srcs.push(m[2]);
+    if (!srcs.length) return; // sem imagens no fragmento: troca imediata (padrão do htmx)
+
+    evt.detail.shouldSwap = false; // assume o swap manualmente, após o pré-carregamento
+    var prontos = srcs.map(function (src) {
+      return new Promise(function (resolve) {
+        var pre = new Image();
+        pre.onload = resolve;
+        pre.onerror = resolve; // falha real de verdade não deve travar a troca
+        pre.src = src;
+      });
+    });
+    var limite = new Promise(function (resolve) { setTimeout(resolve, 2000); });
+    Promise.race([Promise.all(prontos), limite]).then(function () {
+      alvo.innerHTML = html;
+    });
+  });
+
   var root = document.getElementById("chat-root");
   if (!root || !window.supabase) return;
 

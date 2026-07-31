@@ -351,10 +351,15 @@ def montar_pergunta_publica(saida: SaidaTriagem, chamado: dict[str, Any]) -> str
         "",
     ]
     partes += [f"{i}. {p}" for i, p in enumerate(saida.perguntas, start=1)]
+    plural = len(saida.perguntas) > 1
     partes += [
         "",
-        "Basta responder aqui no chamado ou a este e-mail. "
-        "Um atendente dará sequência assim que possível.",
+        (
+            "Por favor, responda "
+            + ("todas as perguntas acima numa única mensagem" if plural else "a pergunta acima")
+            + " (aqui no chamado ou a este e-mail) — assim o atendente já recebe tudo de uma vez. "
+            "Um atendente dará sequência assim que possível."
+        ),
     ]
     return "\n".join(partes)
 

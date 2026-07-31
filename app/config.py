@@ -162,8 +162,11 @@ class Settings(BaseSettings):
     )
     # Timeout por passe (C6: 30 s unificado; ia_resumo herda este valor).
     ia_triagem_timeout_s: float = Field(default=30.0)
-    # Teto de rodadas de perguntas ao usuário (Regra de Ouro #3).
-    ia_triagem_max_rodadas: int = Field(default=2)
+    # Teto de rodadas de perguntas ao usuário (Regra de Ouro #3). 2026-07-31:
+    # 2→3 — o autor que responde só parte das perguntas (ex.: "1. não sei",
+    # ignorando 2 e 3) ganha uma rodada extra em que a IA cobra só o que
+    # ainda falta, em vez de já fechar com nota interna sinalizando lacunas.
+    ia_triagem_max_rodadas: int = Field(default=3)
     # Conexão do role Postgres `ia_worker` (C7) — obrigatória só para o
     # Químico (F4). Vazia = contexto sigiloso indisponível.
     ia_worker_database_url: str = Field(default="")

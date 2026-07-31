@@ -233,16 +233,19 @@ Chamado criado (depto com IA ativa)
         │                              + sugestão de categoria/prioridade se divergente)
         │                              → fim da triagem
         │
-        ├── Insuficiente e N < 2 ────► PERGUNTAS ao usuário (mensagem pública
+        ├── Insuficiente e N < 3 ────► PERGUNTAS ao usuário (mensagem pública
         │                              + e-mail com Reply-To inbound) — SEM nota
         │                              nesta rodada: o ciclo de perguntas vem primeiro
         │                              → aguarda resposta
         │                                   │ autor responde (portal OU e-mail)
         │                                   ▼
         │                              re-triagem com a conversa completa (Rodada N+1)
-        │                              → NOTA INTERNA fecha o ciclo
+        │                              → se ainda faltar algo essencial (ex.: autor só
+        │                                respondeu 1 das 3 perguntas), PERGUNTAS de novo
+        │                                cobrando só o que falta (não repete o já respondido)
+        │                              → NOTA INTERNA fecha o ciclo quando suficiente
         │
-        └── Insuficiente e N = 2 ────► NOTA INTERNA com o que há, sinalizando
+        └── Insuficiente e N = 3 ────► NOTA INTERNA com o que há, sinalizando
                                        explicitamente as lacunas → fim
 ```
 
@@ -250,8 +253,10 @@ Regras duras do fluxo:
 
 - **Ordem nota × perguntas (decisão do usuário, 2026-07-23):** com informação SUFICIENTE a nota
   interna sai DIRETO na rodada 1; com informação INSUFICIENTE o ciclo de perguntas ao autor vem
-  primeiro (até 2 rodadas) e a **nota interna fecha o ciclo** — na rodada seguinte à resposta do
-  autor, ou no teto de rodadas com as lacunas sinalizadas. (Houve no mesmo dia uma variante
+  primeiro (até 3 rodadas — `IA_TRIAGEM_MAX_RODADAS`, 2→3 em 2026-07-31: o autor que só responde
+  parte das perguntas ganha uma rodada extra cobrando o que falta antes da nota fechar o ciclo)
+  e a **nota interna fecha o ciclo** — na rodada seguinte à resposta do autor (se já suficiente),
+  ou no teto de rodadas com as lacunas sinalizadas. (Houve no mesmo dia uma variante
   "nota sempre, junto da pergunta", revertida a pedido do usuário.)
 - **A nota da rodada 1 com atendimento já iniciado continua saindo**: o atendente assumir o
   chamado segundos após a abertura NÃO suprime a pré-análise — com atendimento iniciado

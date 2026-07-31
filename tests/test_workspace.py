@@ -951,14 +951,19 @@ def test_lista_de_combinados_aparece_no_chamado_principal():
 # --------------------------------------------------------------------------
 # Prazo configurável da coluna "Projetos" (migration 0066)
 # --------------------------------------------------------------------------
-def test_campo_de_prazo_do_projeto_so_no_setor_com_a_coluna():
-    """O campo acompanha a coluna: aparece onde `PROJETOS` está entre os status
-    do setor (TI) e não existe onde a coluna não existe (RH)."""
+def test_campo_de_prazo_do_projeto_so_quando_o_chamado_esta_em_projetos():
+    """O campo não é sobre o setor ter a coluna disponível — é sobre o
+    chamado estar *nela agora*. Mesmo no TI, um chamado "Em atendimento" não
+    mostra o campo; só aparece quando o status atual é `PROJETOS`."""
     with ws_client(FakeRepo(status="EM_ATENDIMENTO", operador_id=OP)) as c:  # TI
+        r = c.get("/workspace/chamados/c1")
+    assert "Prazo do projeto (dias)" not in r.text
+
+    with ws_client(FakeRepo(status="PROJETOS", operador_id=OP)) as c:  # TI
         r = c.get("/workspace/chamados/c1")
     assert "Prazo do projeto (dias)" in r.text
 
-    with ws_client(FakeRepo(status="EM_ATENDIMENTO", operador_id=OP,
+    with ws_client(FakeRepo(status="PROJETOS", operador_id=OP,
                             departamento="RH", is_ti=False)) as c:
         r = c.get("/workspace/chamados/c1")
     assert "Prazo do projeto (dias)" not in r.text

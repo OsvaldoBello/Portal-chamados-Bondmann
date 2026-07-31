@@ -96,7 +96,7 @@ def test_ia_triagem_defaults_desligados(monkeypatch: pytest.MonkeyPatch):
     assert s.ia_triagem_base_url == "https://api.openai.com/v1"
     assert s.ia_triagem_api_key == "" and s.ia_resumo_ativo is False
     assert s.ia_triagem_timeout_s == 30.0  # C6
-    assert s.ia_triagem_max_rodadas == 2
+    assert s.ia_triagem_max_rodadas == 3
     assert s.ia_worker_database_url == ""
 
 

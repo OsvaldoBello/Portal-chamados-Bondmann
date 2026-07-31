@@ -561,7 +561,10 @@ def test_decidir_acao_matrix():
     # Fora da sombra + insuficiente + confiança ALTA + rodada disponível.
     assert triagem.decidir_acao(s_alta, 1, _sombra_off()) == "PERGUNTAS"
     # Última rodada (== teto): nota com lacunas, nunca pergunta.
-    assert triagem.decidir_acao(s_alta, 2, _sombra_off()) == "NOTA_INTERNA"
+    assert (
+        triagem.decidir_acao(s_alta, 2, _sombra_off(ia_triagem_max_rodadas=2))
+        == "NOTA_INTERNA"
+    )
     # Limiar de confiança default BAIXA (decisão do usuário 2026-07-24):
     # MEDIA/BAIXA também perguntam; o limiar por env é coberto em
     # `test_decidir_acao_limiar_de_confianca_configuravel`.
@@ -747,22 +750,57 @@ async def test_teto_de_rodadas_terceira_rodada_impossivel():
     """DoD F2: com MAX_RODADAS=2, a rodada 3 não acontece nem com resposta."""
     conn = FakeConn(ultima_rodada=2, ultima_acao="PERGUNTAS", autor_respondeu=True)
     completar = AsyncMock()
-    with _patched(conn, _sombra_off(), completar):
+    with _patched(conn, _sombra_off(ia_triagem_max_rodadas=2), completar):
         await triagem.executar_triagem("cid")
     completar.assert_not_awaited()
     assert conn.triagem_inserts == []
 
 
 async def test_ultima_rodada_insuficiente_gera_nota_com_lacunas():
-    """Rodada 2 (teto) ainda insuficiente → nota interna sinalizando as lacunas."""
+    """Rodada 2 no teto (MAX_RODADAS=2) ainda insuficiente → nota interna
+    sinalizando as lacunas."""
     conn = FakeConn(ultima_rodada=1, ultima_acao="PERGUNTAS", autor_respondeu=True)
     completar = AsyncMock(
         return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_PERGUNTAVEL))
     )
-    with _patched(conn, _sombra_off(), completar) as notificar:
+    with _patched(conn, _sombra_off(ia_triagem_max_rodadas=2), completar) as notificar:
         await triagem.executar_triagem("cid")
     assert conn.triagem_inserts[0][1] == 2
     assert conn.triagem_inserts[0][3] == "NOTA_INTERNA"  # nunca pergunta no teto
+    _, msg_args = next((s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s)
+    assert "Informações faltantes" in msg_args[2]
+    notificar.assert_not_awaited()
+
+
+async def test_resposta_parcial_pergunta_de_novo_antes_da_nota():
+    """2026-07-31 (MAX_RODADAS default 2→3): autor respondeu só 1 das 3
+    perguntas ⇒ rodada 2, ainda fora do teto (3), volta a perguntar (cobrando
+    só o que falta) em vez de já fechar com nota interna sinalizando lacunas."""
+    conn = FakeConn(ultima_rodada=1, ultima_acao="PERGUNTAS", autor_respondeu=True)
+    completar = AsyncMock(
+        return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_PERGUNTAVEL))
+    )
+    with _patched(conn, _sombra_off(), completar) as notificar:  # default: max_rodadas=3
+        await triagem.executar_triagem("cid")
+    assert conn.triagem_inserts[0][1] == 2
+    assert conn.triagem_inserts[0][3] == "PERGUNTAS"
+    msg_sql, msg_args = next((s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s)
+    assert "false" in msg_sql  # mensagem pública, não nota interna
+    notificar.assert_awaited()
+
+
+async def test_teto_de_3_rodadas_ainda_insuficiente_gera_nota_com_lacunas():
+    """Com o novo teto (3), a rodada 3 ainda insuficiente fecha com nota
+    interna sinalizando as lacunas — igual ao comportamento antigo no teto,
+    só que uma rodada depois."""
+    conn = FakeConn(ultima_rodada=2, ultima_acao="PERGUNTAS", autor_respondeu=True)
+    completar = AsyncMock(
+        return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_PERGUNTAVEL))
+    )
+    with _patched(conn, _sombra_off(), completar) as notificar:  # default: max_rodadas=3
+        await triagem.executar_triagem("cid")
+    assert conn.triagem_inserts[0][1] == 3
+    assert conn.triagem_inserts[0][3] == "NOTA_INTERNA"
     _, msg_args = next((s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s)
     assert "Informações faltantes" in msg_args[2]
     notificar.assert_not_awaited()
@@ -799,7 +837,19 @@ def test_montar_pergunta_publica_tem_tom_e_instrucao_de_resposta():
     texto = triagem.montar_pergunta_publica(saida, _CHAMADO)
     assert "assistente virtual" in texto
     assert "1. O monitor acende alguma luz?" in texto
-    assert "responder aqui no chamado ou a este e-mail" in texto
+    # 2026-07-31: pede explicitamente todas as perguntas numa única mensagem
+    # (autor respondendo só parte delas gastava uma rodada extra do teto).
+    assert "responda todas as perguntas acima numa única mensagem" in texto
+    assert "aqui no chamado ou a este e-mail" in texto
+
+
+def test_montar_pergunta_publica_singular_com_uma_so_pergunta():
+    saida = SaidaTriagem.model_validate(
+        {**_SAIDA_PERGUNTAVEL, "perguntas": ["O monitor acende alguma luz?"]}
+    )
+    texto = triagem.montar_pergunta_publica(saida, _CHAMADO)
+    assert "responda a pergunta acima" in texto
+    assert "todas as perguntas" not in texto
 
 
 # ------------------------------------------------------------------
@@ -995,7 +1045,7 @@ async def test_reconciliacao_reexecuta_cada_orfao():
     assert total == 2
     assert [c.args[0] for c in executar.await_args_list] == ["cid-1", "cid-2"]
     # departamentos_lista + teto de rodadas + margem de idade do órfão
-    assert conn.args == (["TI"], 2, triagem._MARGEM_ORFAO)
+    assert conn.args == (["TI"], 3, triagem._MARGEM_ORFAO)
 
 
 async def test_margem_de_orfao_e_de_um_minuto_e_vale_para_os_dois_casos():

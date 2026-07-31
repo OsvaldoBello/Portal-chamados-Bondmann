@@ -320,12 +320,13 @@
         <p class="text-[11px] text-muted">Alterar a prioridade recalcula os prazos de SLA.</p>
       </form>
 
-      {# Prazo do projeto (0066): só faz sentido onde a coluna "Projetos" existe
-         (TI). Cada projeto tem um escopo — 2 meses, 70 dias, 4 meses —, então o
-         prazo é digitado aqui em vez de ser o mês fixo da 0064. Em branco = o
-         padrão do setor (/admin/gestao). Definir antes de arrastar para a
-         coluna também vale: o trigger aplica o número na entrada. #}
-      {% if 'PROJETOS' in status_validos %}
+      {# Prazo do projeto (0066): só faz sentido enquanto o chamado está
+         *nesta* coluna "Projetos" (TI) — não basta o setor ter a coluna
+         disponível (isso mostrava o campo em qualquer status, ex.: "Em
+         atendimento"). Cada projeto tem um escopo — 2 meses, 70 dias, 4
+         meses —, então o prazo é digitado aqui em vez de ser o mês fixo da
+         0064. Em branco = o padrão do setor (/admin/gestao). #}
+      {% if chamado.status == 'PROJETOS' and 'PROJETOS' in status_validos %}
       <form method="post" action="/workspace/chamados/{{ chamado.id }}/prazo-projeto{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-1.5 pt-1 border-t border-line/60">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="block text-[13px] font-semibold text-navy pt-3" for="prazo-projeto">Prazo do projeto (dias)</label>
