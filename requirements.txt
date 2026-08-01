@@ -1,14 +1,14 @@
 # Portal de Chamados Bondmann — runtime (versões fixadas, Seção 0 do plano mestre)
 # Backend (Python 3.12 no Docker)
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-supabase==2.11.0
-jinja2==3.1.5
-pydantic==2.10.4
-pydantic-settings==2.7.1
-asyncpg==0.30.0
-slowapi==0.1.9
-python-multipart==0.0.20
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+supabase==2.31.0
+jinja2==3.1.6
+pydantic==2.13.4
+pydantic-settings==2.14.2
+asyncpg==0.31.0
+slowapi==0.1.10
+python-multipart==0.0.32
 python-magic==0.4.27
 # libmagic real vem do apt (Dockerfile) em prod (Linux); no Windows local não há
 # libmagic no sistema e o python-magic puro pode carregar uma DLL incompatível
@@ -16,26 +16,26 @@ python-magic==0.4.27
 # Python catável). python-magic-bin empacota a DLL certa — só para dev Windows.
 python-magic-bin==0.4.14 ; sys_platform == "win32"
 itsdangerous==2.2.0
-httpx==0.27.2
+httpx==0.28.1
 # Verificação de JWT local (JWKS RS256/ES256 + fallback HS256) — Seção 3.6.
 # [DECISÃO DE ENGENHARIA] adicionado ao stack: a spec exige verificação local
 # de assinatura/exp/aud por request; chamar a API do Supabase a cada request
 # seria gargalo. PyJWT[crypto] cobre JWKS e HS256.
-pyjwt[crypto]==2.10.1
+pyjwt[crypto]==2.13.0
 # Base de fusos IANA para o zoneinfo (America/Sao_Paulo, Seção 5.2). Obrigatório
 # no Windows/imagens slim, onde o SO não traz o tz database — sem isto o import
 # de app.templating quebra (ZoneInfoNotFoundError) e o servidor não sobe.
-tzdata==2024.2
+tzdata==2026.3
 # Feriados nacionais calculados (Fase 5, 2026-07-09) — substitui a tabela
 # `feriados` hardcoded/editada à mão a cada virada de ano (app/domain/feriados.py).
-holidays==0.100
+holidays==0.101
 # Recorte automático da foto de perfil em quadrado (Fase 7 — app/avatar_storage.py):
 # qualquer proporção enviada vira um PNG quadrado centralizado antes do upload.
 Pillow==12.3.0
 # Observabilidade — exceções não tratadas (Sprint 2 / item 2.6). Só ativo se
 # SENTRY_DSN estiver configurada (app/config.py); sem DSN, sentry_sdk.init()
 # nunca é chamado e capture_exception() vira no-op.
-sentry-sdk==2.19.0
+sentry-sdk==2.66.1
 # Ingestão da base do Dpto Químico (F4): parse determinístico de planilha (.xlsx)
 # e PDF de fichas técnicas → tabelas base_quimico_*. Usado pela CLI
 # (scripts/ingestao_base_quimico.py) E pelo painel web /admin/base-quimico
