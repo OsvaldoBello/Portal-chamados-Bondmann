@@ -20,6 +20,12 @@
 
   const causaLabels = ["Sem causa registrada", "Aguardando definição interna", "Dependência de execução"];
 
+  // Balde do histórico pré-Portal no ranking de solicitantes (ver
+  // `AdminRepo.ROTULO_SETOR_PRE_PORTAL` — o texto precisa bater com o do
+  // backend). Aparece como barra, mas não disputa "Maior solicitante": não é
+  // um setor, é a demanda cujo setor de origem o controle antigo não guardou.
+  const SETOR_PRE_PORTAL = "Outros setores (pré-Portal)";
+
   // ─── FILTER ───────────────────────────────────────────────────────────
   let activeFilter = "all";
 
@@ -99,7 +105,9 @@
     const filtLabels=d.map(x=>x.label);
     const agg={};
     filtLabels.forEach(l=>Object.entries(deptByMonth[l]||{}).forEach(([k,v])=>{agg[k]=(agg[k]||0)+v;}));
-    const top=Object.entries(agg).sort((a,b)=>b[1]-a[1])[0]||["—",0];
+    // "Maior solicitante" ignora o balde pré-Portal — ele não é um setor.
+    const top=Object.entries(agg).filter(([k])=>k!==SETOR_PRE_PORTAL)
+      .sort((a,b)=>b[1]-a[1])[0]||["—",0];
     const nAtr=atrasosData.filter(a=>filtLabels.includes(a.mes)).length;
     const pctAtr=total?(nAtr/total*100).toFixed(1):"0";
 
@@ -327,7 +335,21 @@
     filtLabels.forEach(l=>Object.entries(deptByMonth[l]||{}).forEach(([k,v])=>{agg[k]=(agg[k]||0)+v;}));
     const keys=Object.keys(agg).sort((a,b)=>agg[b]-agg[a]);
     const vals=keys.map(k=>agg[k]);
-    const colors=vals.map((_,i)=>i===0?"#1D9E75":i===1?"#378ADD":"rgba(83,74,183,0.65)");
+    // O balde pré-Portal ganha cor neutra (cinza) mesmo se ficar no topo do
+    // ranking — não é um setor competindo com os outros.
+    const colors=keys.map((k,i)=>k===SETOR_PRE_PORTAL?"rgba(136,135,128,0.55)"
+      :i===0?"#1D9E75":i===1?"#378ADD":"rgba(83,74,183,0.65)");
+    const aviso=document.getElementById("dept-aviso");
+    if(aviso){
+      // A barra do Marketing sai de `mkt_orig` (mesma série da aba 3), então
+      // fecha com a Origem da Demanda por construção. Vale dizer isso na tela
+      // — foi exatamente a divergência que o usuário reportou.
+      aviso.textContent=agg[SETOR_PRE_PORTAL]
+        ? "A barra do Marketing é a mesma série da aba \"3. Origem da Demanda\". "
+          + "\"" + SETOR_PRE_PORTAL + "\" reúne a demanda solicitada nos meses anteriores ao Portal, "
+          + "cujo setor de origem o controle da época não registrava."
+        : "A barra do Marketing é a mesma série da aba \"3. Origem da Demanda\".";
+    }
     mkChart("chartDept",{type:"bar",data:{labels:keys,datasets:[{label:"Demandas",data:vals,backgroundColor:colors,borderRadius:5}]},
       options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},pill:{}},
         scales:{x:{beginAtZero:true},y:{ticks:{font:{size:11}}}}}});

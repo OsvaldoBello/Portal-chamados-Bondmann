@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 
@@ -180,6 +181,9 @@ class FakeAdmin:
                     "baseline": False
                 }
             ],
+            # "Marketing" aqui é o mesmo número de `mkt_orig` do mês (2) — é a
+            # invariante que a aba "4. Solicitantes" tem que respeitar contra a
+            # aba "3. Origem da Demanda" (ver AdminRepo.mkt_dashboard_data).
             "deptByMonth": {
                 "JAN/26": {"RH": 3, "Marketing": 2}
             },
@@ -507,6 +511,31 @@ def test_dashboard_marketing_aba_volume_tem_indicadores():
         assert alvo in r.text
     assert "Volume total acumulado" in r.text
     assert "Razão volume/demanda" in r.text
+
+
+def test_dashboard_marketing_solicitantes_bate_com_origem():
+    """Bug reportado pelo usuário (2026-08-03): a barra do Marketing no ranking
+    de solicitantes marcava 52 enquanto a série "Marketing" da aba de Origem da
+    Demanda somava 169 — a primeira lia só `vw_marketing_setor_mensal` (chamado
+    real) e a segunda lia `mkt_orig` (que a baseline preenche).
+
+    A invariante agora é: `deptByMonth[mês]["Marketing"] == monthly[mês].mkt_orig`.
+    Aqui ela é checada sobre o payload que chega ao template — é o que o
+    `admin_marketing.js` soma nos dois gráficos."""
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Marketing")
+    repo = FakeAdmin(is_ti=False)
+    with admin_client(repo, user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert 'id="dept-aviso"' in r.text     # nota explicando a barra pré-Portal
+
+    dados = asyncio.run(repo.mkt_dashboard_data({}))
+    for mes in dados["monthly"]:
+        do_ranking = dados["deptByMonth"].get(mes["label"], {}).get("Marketing", 0)
+        assert do_ranking == mes["mkt_orig"], (
+            f'{mes["label"]}: ranking de solicitantes marca {do_ranking} para o '
+            f'Marketing, mas a origem da demanda marca {mes["mkt_orig"]}'
+        )
 
 
 def test_dashboard_marketing_aba_operadores():

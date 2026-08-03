@@ -586,6 +586,12 @@ class AdminRepo:
     _MESES_MAP = {1: "JAN", 2: "FEV", 3: "MAR", 4: "ABR", 5: "MAI", 6: "JUN",
                   7: "JUL", 8: "AGO", 9: "SET", 10: "OUT", 11: "NOV", 12: "DEZ"}
 
+    #: Balde do ranking de solicitantes para a demanda cujo setor de origem o
+    #: histórico pré-Portal não guardou (a baseline só tem o total `sol_orig`,
+    #: sem quebra por setor). Não é um setor de verdade — o front tira ele da
+    #: disputa de "Maior solicitante" por este mesmo rótulo.
+    ROTULO_SETOR_PRE_PORTAL = "Outros setores (pré-Portal)"
+
     @classmethod
     def _mes_label(cls, d) -> str:
         """"JAN/26" a partir de um `date`/`datetime` (dia 1 do mês)."""
@@ -720,11 +726,39 @@ class AdminRepo:
                 # confiável de mês pré-sistema.
                 "baseline": mes in baseline_por_mes,
             })
-            # Ranking por setor solicitante só existe a partir de chamado real
-            # (0032) — meses cobertos só por baseline ficam sem essa quebra.
-            dept_by_month[label] = {
+            # Ranking por setor solicitante. A quebra por setor vem de
+            # `vw_marketing_setor_mensal`, que só enxerga chamado REAL do
+            # Portal — nos meses de baseline ela não cobre o histórico.
+            #
+            # 🔁 2026-08-03 (pedido do usuário): a barra do **Marketing** tinha
+            # que bater com a soma da série "Marketing" da aba "3. Origem da
+            # Demanda". Não batia (52 contra 169) porque a Origem lê
+            # `mkt_orig` — que a baseline preenche — e o ranking lia só a view.
+            # Nos meses REAIS as duas fontes já são idênticas por construção
+            # (JUN 2=2, JUL 49=49, AGO 1=1, conferido em produção), então usar
+            # `mkt_orig` aqui não muda nada no que já era real: só completa os
+            # meses pré-Portal. Continua 100% derivado dos dados — chamado
+            # novo entra no número sem ninguém tocar em nada.
+            setores_mes = {
                 r["setor"]: r["total"] for r in setor_rows if r["mes"] == mes
             }
+            # `sol_orig` do mês menos o que a view já atribuiu a setores
+            # concretos = demanda solicitada cujo setor de origem o histórico
+            # pré-Portal não guardou. Sem essa barra o gráfico ficaria
+            # desonesto: o Marketing passaria a somar 8 meses enquanto todos os
+            # outros somam só os 2 meses de Portal, sugerindo que o Marketing é
+            # ~83% da demanda quando na verdade é ~48%. Zera sozinha nos meses
+            # reais (JUL: 27 - 27 = 0), então some do gráfico quando o período
+            # não inclui histórico.
+            outros_reais = sum(t for s, t in setores_mes.items() if s != "Marketing")
+            if mkt_orig:
+                setores_mes["Marketing"] = mkt_orig
+            else:
+                setores_mes.pop("Marketing", None)
+            resto_historico = (v["sol_orig"] if v else 0) - outros_reais
+            if resto_historico > 0:
+                setores_mes[self.ROTULO_SETOR_PRE_PORTAL] = resto_historico
+            dept_by_month[label] = setores_mes
             # Mesma limitação do ranking por setor: quem atendeu só existe em
             # chamado real do Portal. Os meses de baseline (jan-jun/26) ficam
             # com o dicionário vazio, e o front avisa na própria aba.
