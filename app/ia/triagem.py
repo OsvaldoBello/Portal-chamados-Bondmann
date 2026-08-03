@@ -18,6 +18,9 @@ o que torna o motor idempotente por construção:
 
 - rodada N+1 só executa se a última triagem foi ``PERGUNTAS`` **e** existe
   mensagem pública do AUTOR posterior a ela (task duplicada não re-tria);
+- rodada N+1 só volta a perguntar o que o autor deixou EM BRANCO na rodada
+  anterior (:func:`pendencias_do_ciclo`) — se ele respondeu tudo (inclusive
+  com "não sei"), o ciclo fecha com a nota interna;
 - rodada > ``IA_TRIAGEM_MAX_RODADAS`` é impossível (teto + UNIQUE do banco);
 - guarda de atendimento (ajuste 2026-07-23): atendimento iniciado NÃO suprime
   a nota interna da rodada 1 (ela existe para quem atende) — força a ação a
@@ -47,7 +50,9 @@ import asyncio
 import json
 import logging
 import time
+import unicodedata
 from datetime import timedelta
+from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -217,12 +222,56 @@ def montar_mensagens_passe_b(
     ]
 
 
+def _normalizar_pergunta(texto: str) -> str:
+    """Forma canônica para comparar perguntas (acentuação, pontuação e caixa
+    fora) — o modelo raramente devolve o texto byte a byte igual."""
+    sem_acento = unicodedata.normalize("NFKD", texto)
+    sem_acento = "".join(c for c in sem_acento if not unicodedata.combining(c))
+    return " ".join("".join(c if c.isalnum() else " " for c in sem_acento).split()).casefold()
+
+
+def pendencias_do_ciclo(
+    saida: SaidaTriagem, perguntas_anteriores: list[str] | None
+) -> list[str]:
+    """Perguntas da rodada anterior que o autor deixou EM BRANCO (função pura).
+
+    Gate estrutural da rodada extra (``IA_TRIAGEM_MAX_RODADAS`` 2→3,
+    2026-07-31): ela existe para cobrar o que o autor não respondeu, não para
+    abrir uma bateria nova de perguntas. Cada item de
+    ``saida.perguntas_nao_respondidas`` só vale se casar com uma pergunta
+    REALMENTE feita na rodada anterior — assim o modelo não consegue inventar
+    pendência nem reciclar o slot com outro assunto (BOND-2026-00653: o autor
+    respondeu as 3 perguntas e recebeu outras 3 no mesmo minuto).
+
+    Devolve o **texto original da rodada anterior**, na ordem original: o autor
+    reconhece a pergunta que ficou faltando em vez de ler uma reformulação.
+    """
+    if not perguntas_anteriores or not saida.perguntas_nao_respondidas:
+        return []
+    alvos = [_normalizar_pergunta(p) for p in saida.perguntas_nao_respondidas]
+    pendentes = []
+    for anterior in perguntas_anteriores:
+        chave = _normalizar_pergunta(anterior)
+        if not chave:
+            continue
+        # Igualdade normalizada ou reformulação leve (o modelo às vezes corta a
+        # pergunta ou troca uma palavra ao copiar); assunto novo não passa.
+        if any(
+            alvo == chave or SequenceMatcher(None, alvo, chave).ratio() >= 0.85
+            for alvo in alvos
+            if alvo
+        ):
+            pendentes.append(anterior)
+    return pendentes
+
+
 def decidir_acao(
     saida: SaidaTriagem,
     rodada: int,
     settings: Settings,
     atendimento_iniciado: bool = False,
     departamento: str | None = None,
+    pendencias: list[str] | None = None,
 ) -> str:
     """Decide entre nota interna e perguntas públicas (Seção 2.3, função pura).
 
@@ -236,12 +285,19 @@ def decidir_acao(
     perguntas; confiança no mínimo `IA_TRIAGEM_PERGUNTAS_CONFIANCA_MINIMA`
     (decisão do usuário 2026-07-24: default BAIXA — todas perguntam; era ALTA
     fixa, mitigação 10.1, e reapertar é só env); e ainda há rodada disponível
-    (na última, a nota interna sai com as lacunas sinalizadas)."""
+    (na última, a nota interna sai com as lacunas sinalizadas).
+
+    ``pendencias`` (:func:`pendencias_do_ciclo`) fecha o ciclo nas rodadas de
+    re-triagem: sem pergunta anterior deixada em branco, a rodada extra vira
+    NOTA_INTERNA — o autor já respondeu o que sabia e insistir só atrasa o
+    atendimento (BOND-2026-00653)."""
     if atendimento_iniciado:
         return "NOTA_INTERNA"
     if settings.ia_triagem_em_sombra(departamento):
         return "NOTA_INTERNA"
     if saida.informacoes_suficientes or not saida.perguntas:
+        return "NOTA_INTERNA"
+    if rodada > 1 and not pendencias:
         return "NOTA_INTERNA"
     minima = settings.ia_triagem_perguntas_confianca_minima.strip().upper()
     # Env com valor desconhecido degrada para o mais conservador (só ALTA).
@@ -341,17 +397,33 @@ def montar_nota_quimico(
     return "\n".join(partes)
 
 
-def montar_pergunta_publica(saida: SaidaTriagem, chamado: dict[str, Any]) -> str:
-    """Mensagem pública ao autor com as perguntas da triagem (função pura)."""
+def montar_pergunta_publica(
+    saida: SaidaTriagem,
+    chamado: dict[str, Any],
+    perguntas: list[str] | None = None,
+    rodada: int = 1,
+) -> str:
+    """Mensagem pública ao autor com as perguntas da triagem (função pura).
+
+    ``perguntas``/``rodada``: na re-triagem o motor passa só as pendências
+    (:func:`pendencias_do_ciclo`) e a abertura muda — o autor acabou de
+    responder, então a mensagem agradece e cobra o que ficou em branco, em vez
+    de repetir a saudação inicial como se fosse o primeiro contato."""
+    itens = perguntas if perguntas is not None else saida.perguntas
     codigo = chamado.get("codigo") or ""
-    partes = [
-        "Olá! Sou o assistente virtual do suporte"
-        + (f" (chamado {codigo})" if codigo else "")
-        + ". Para agilizar seu atendimento, poderia responder:",
-        "",
-    ]
-    partes += [f"{i}. {p}" for i, p in enumerate(saida.perguntas, start=1)]
-    plural = len(saida.perguntas) > 1
+    ref = f" (chamado {codigo})" if codigo else ""
+    if rodada > 1:
+        abertura = (
+            f"Obrigado pela resposta!{ref} Para o atendente seguir, ficou faltando apenas:"
+        )
+    else:
+        abertura = (
+            f"Olá! Sou o assistente virtual do suporte{ref}."
+            " Para agilizar seu atendimento, poderia responder:"
+        )
+    partes = [abertura, ""]
+    partes += [f"{i}. {p}" for i, p in enumerate(itens, start=1)]
+    plural = len(itens) > 1
     partes += [
         "",
         (
@@ -583,7 +655,10 @@ async def _executar(chamado_id: str) -> None:
                    (SELECT t2.acao FROM ia_triagens t2 WHERE t2.chamado_id = $1::uuid
                      ORDER BY t2.rodada DESC, t2.id DESC LIMIT 1) AS ultima_acao,
                    (SELECT t2.created_at FROM ia_triagens t2 WHERE t2.chamado_id = $1::uuid
-                     ORDER BY t2.rodada DESC, t2.id DESC LIMIT 1) AS ultima_em
+                     ORDER BY t2.rodada DESC, t2.id DESC LIMIT 1) AS ultima_em,
+                   (SELECT t2.resultado->'perguntas' FROM ia_triagens t2
+                     WHERE t2.chamado_id = $1::uuid
+                     ORDER BY t2.rodada DESC, t2.id DESC LIMIT 1) AS ultimas_perguntas
               FROM ia_triagens t WHERE t.chamado_id = $1::uuid
             """,
             chamado_id,
@@ -592,6 +667,9 @@ async def _executar(chamado_id: str) -> None:
         if rodada > settings.ia_triagem_max_rodadas:
             return  # teto: a rodada N+1 além do máximo é impossível (Regra #3)
         conversa: list[dict[str, str]] = []
+        # Perguntas efetivamente feitas na rodada anterior — base do gate de
+        # pendências da re-triagem (`pendencias_do_ciclo`).
+        perguntas_anteriores: list[str] = []
         if rodada > 1:
             # Re-triagem só enquanto nenhum atendente atua (Seção 2.3).
             if atendimento_iniciado:
@@ -613,6 +691,10 @@ async def _executar(chamado_id: str) -> None:
             )
             if not respondeu:
                 return
+            bruto_perguntas = info["ultimas_perguntas"]
+            if isinstance(bruto_perguntas, str):  # jsonb chega como str no asyncpg
+                bruto_perguntas = json.loads(bruto_perguntas)
+            perguntas_anteriores = [str(p) for p in (bruto_perguntas or [])]
             conversa = [
                 {
                     "papel": "Autor" if r["remetente_id"] == chamado["cliente_id"] else "Equipe",
@@ -718,8 +800,20 @@ async def _executar(chamado_id: str) -> None:
                 estado["status"] != "NOVO" or estado["operador_id"] is not None
             )
         em_sombra = settings.ia_triagem_em_sombra(chamado["departamento"])
+        # Re-triagem: a rodada extra só cobra o que o autor deixou em branco
+        # (gate estrutural — ver `pendencias_do_ciclo`).
+        pendencias = (
+            pendencias_do_ciclo(saida, perguntas_anteriores) if saida is not None else []
+        )
         acao = (
-            decidir_acao(saida, rodada, settings, atendimento_iniciado, chamado["departamento"])
+            decidir_acao(
+                saida,
+                rodada,
+                settings,
+                atendimento_iniciado,
+                chamado["departamento"],
+                pendencias,
+            )
             if saida is not None
             else "ERRO"
         )
@@ -741,6 +835,10 @@ async def _executar(chamado_id: str) -> None:
                     exc,
                 )
         resultado = saida.model_dump() if saida is not None else {"erro": erro or "desconhecido"}
+        if rodada > 1 and saida is not None:
+            # Auditável: o que a rodada extra cobrou de fato (subconjunto das
+            # perguntas da rodada anterior), separado do que o modelo pediu.
+            resultado["perguntas_cobradas"] = pendencias
         if semelhantes:
             # Auditável em `ia_triagens.resultado`: QUAIS casos foram citados.
             resultado["semelhantes_codigos"] = [s.get("codigo") for s in semelhantes]
@@ -778,7 +876,9 @@ async def _executar(chamado_id: str) -> None:
             # autor) ou teto de rodadas, com as lacunas sinalizadas. O Passe B
             # do Químico nunca roda nesta rodada — a base sigilosa não
             # participa do canal que fala com o autor (Seção 3.1).
-            email_pergunta = montar_pergunta_publica(saida, chamado)
+            email_pergunta = montar_pergunta_publica(
+                saida, chamado, pendencias or None, rodada
+            )
             await _enviar_pergunta_publica(conn, chamado_id, perfil_id, email_pergunta)
             await _registrar_historico(
                 conn, chamado_id, perfil_id, rodada, passe_a_nome, acao, settings,

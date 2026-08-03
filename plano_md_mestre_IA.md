@@ -240,10 +240,11 @@ Chamado criado (depto com IA ativa)
         │                                   │ autor responde (portal OU e-mail)
         │                                   ▼
         │                              re-triagem com a conversa completa (Rodada N+1)
-        │                              → se ainda faltar algo essencial (ex.: autor só
-        │                                respondeu 1 das 3 perguntas), PERGUNTAS de novo
-        │                                cobrando só o que falta (não repete o já respondido)
-        │                              → NOTA INTERNA fecha o ciclo quando suficiente
+        │                              → PERGUNTAS de novo SÓ para cobrar pergunta que o
+        │                                autor deixou EM BRANCO (ex.: respondeu 1 das 3),
+        │                                com o texto original da rodada anterior
+        │                              → autor respondeu tudo (inclusive "não sei") ⇒
+        │                                NOTA INTERNA fecha o ciclo, nunca pergunta nova
         │
         └── Insuficiente e N = 3 ────► NOTA INTERNA com o que há, sinalizando
                                        explicitamente as lacunas → fim
@@ -258,6 +259,15 @@ Regras duras do fluxo:
   e a **nota interna fecha o ciclo** — na rodada seguinte à resposta do autor (se já suficiente),
   ou no teto de rodadas com as lacunas sinalizadas. (Houve no mesmo dia uma variante
   "nota sempre, junto da pergunta", revertida a pedido do usuário.)
+- **A rodada extra só cobra o que ficou em branco (2026-08-03, BOND-2026-00653):** a rodada > 1
+  perguntar de novo exige **pendência válida** — pergunta da rodada anterior que o autor ignorou
+  por completo, declarada pelo modelo em `perguntas_nao_respondidas` e **conferida contra as
+  perguntas realmente feitas** (`ia_triagens.resultado->'perguntas'`) por
+  `triagem.pendencias_do_ciclo`. Sem pendência válida ⇒ `NOTA_INTERNA`. "Não sei" / "não tenho
+  essa informação" **conta como respondida** (o autor não tem o dado). A cobrança usa o **texto
+  original** da rodada anterior — reformulação do modelo não vira pergunta nova. Garantia
+  estrutural, não promessa de prompt: sem isso, bastava o modelo devolver
+  `informacoes_suficientes=false` para a rodada extra virar um segundo questionário.
 - **A nota da rodada 1 com atendimento já iniciado continua saindo**: o atendente assumir o
   chamado segundos após a abertura NÃO suprime a pré-análise — com atendimento iniciado
   (`status ≠ 'NOVO'` ou `operador_id` preenchido), a ação é **forçada a `NOTA_INTERNA`** (nunca
@@ -687,7 +697,10 @@ a qualidade do modelo é avaliada por amostragem humana (modo sombra), não por 
    (fixture semeia valores-sentinela únicos e o teste garante que não aparecem no payload).
 3. **Quantidades inacessíveis:** `SELECT` em `base_quimico_formulacoes` pela conexão `ia_worker`
    levanta erro de permissão (teste de integração, marker `rls`).
-4. **Teto de rodadas:** rodada 3 de perguntas é impossível (motor + UNIQUE do banco).
+4. **Teto de rodadas:** rodada além de `IA_TRIAGEM_MAX_RODADAS` é impossível (motor + UNIQUE do
+   banco). **Rodada > 1 só pergunta com pendência válida** (2026-08-03): sem pergunta anterior
+   deixada em branco, a re-triagem fecha com nota interna — testes cobrem o caso real
+   (BOND-2026-00653) e a pendência inventada pelo modelo.
 5. **Kill switch:** com `IA_TRIAGEM_ATIVA=false`, nenhum efeito colateral (sem chamada HTTP, sem
    linha em `ia_triagens`).
 6. **Autor não vê:** teste RLS — o autor do chamado não lê a nota interna da IA nem `ia_triagens`.
@@ -713,6 +726,7 @@ a qualidade do modelo é avaliada por amostragem humana (modo sombra), não por 
 
 | Data | Modelo | Estrutural | Comportamental | Resultado |
 |---|---|---|---|---|
+| 2026-08-03 | `gpt-5.4-mini` | 26 testes (`test_estrutural.py`) | 11 testes (`test_comportamental.py`, `IA_REDTEAM_LIVE=1`) | **ZERO VAZAMENTOS** — gatilho: item 8 (re-triagem) de `quimico_passe_a.md` reescrito (BOND-2026-00653). Relatório: `tests/red_team/execucoes/2026-08-03.md`. |
 | 2026-07-27 | `gpt-5.4-mini` | 26 testes (`test_estrutural.py`) | 11 testes (`test_comportamental.py`, `IA_REDTEAM_LIVE=1`) | **ZERO VAZAMENTOS** |
 
 Detalhe por categoria (Passe A = canal público; Passe B = canal interno, contexto SINTÉTICO com
@@ -803,6 +817,29 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 > prefixando `doc IA`. Linha mais nova no topo. Decisões arquiteturais grandes viram ADR em
 > `docs/adr/`.
 
+- 2026-08-03 · doc IA · Seções 2.3 (fluxo) e 8.2 (invariante 4) · **A rodada extra de perguntas
+  virava um segundo questionário (BOND-2026-00653).** O autor respondeu as 3 perguntas da rodada
+  1 (uma delas com "não tenho esta informação") e recebeu, 2 minutos depois, outras 3 perguntas
+  com a mesma saudação de abertura — leitura do usuário: "a IA repetiu as perguntas". Confirmado
+  em `ia_triagens` (rodada 2, `informacoes_suficientes=false`, 3 perguntas inéditas; único caso
+  desde o teto 2→3 de 2026-07-31). O aumento do teto tinha um propósito estreito — **cobrar o que
+  o autor deixou em branco** — que só existia na intenção do commit, não no motor. Correção
+  **estrutural** (Seção 3.1: proteção estrutural ≻ promessa de prompt): campo novo
+  `SaidaTriagem.perguntas_nao_respondidas` + `triagem.pendencias_do_ciclo()`, que só aceita
+  pendência casada (texto normalizado, tolerante a reformulação leve) com pergunta REALMENTE feita
+  na rodada anterior — lida de `ia_triagens.resultado->'perguntas'`, não da palavra do modelo;
+  `decidir_acao` força `NOTA_INTERNA` na rodada > 1 sem pendência válida; a mensagem pública cobra
+  o **texto original** e ganha abertura própria de re-triagem ("Obrigado pela resposta! … ficou
+  faltando apenas:"), já que repetir a saudação inicial era metade da percepção de repetição.
+  Prompts (`ti.md`, `quimico_passe_a.md`): "não sei"/"não tenho essa informação" é resposta
+  VÁLIDA — não se repergunta nem reformulada; hipóteses novas surgidas das respostas vão para a
+  pré-análise do atendente, nunca para nova pergunta ao autor. Auditoria:
+  `ia_triagens.resultado.perguntas_cobradas` registra o que a rodada extra cobrou de fato. Sem
+  migration. Testes: 5 novos/atualizados em `test_ia_triagem.py`; suíte completa verde (732
+  testes, 53 skips de `rls`/`redteam`). **Gatilho da Seção 8.3 cumprido:** `quimico_passe_a.md`
+  mudou ⇒ bateria comportamental reexecutada ao vivo no mesmo dia (37 testes, `gpt-5.4-mini` real),
+  **zero vazamentos** — relatório em `tests/red_team/execucoes/2026-08-03.md`, linha nova na
+  tabela da Seção 8.3.
 - 2026-07-29 · doc IA · Seção 9 (latência) / 10.2 (KPI p95) · **Fechada a segunda metade do gap
   de latência: recuperação de triagem perdida cai de ~8 min para ~2 min.** Investigação do
   BOND-2026-00629 (nota interna 280 s após a abertura, `duracao_ms` de 3,8 s) com a série real:
@@ -975,7 +1012,7 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 | Flags/env de triagem (`app/config.py`) | ✅ Implementado (2026-07-22) | F0 | Seção 2.4 — todas de uma vez, defaults desligados (`IA_TRIAGEM_ATIVA=false`, sombra `true`). Rename `groq_*`→`ia_triagem_*` com fallback de alias `GROQ_*`. Coberto em `tests/test_config.py`. |
 | `app/ia/cliente.py` (extração de `ia_resumo.py`) | ✅ Implementado (2026-07-22) | F0 | Refactor sem mudança de comportamento (`test_ia_resumo` verde); timeout herdado 30 s (C6). Cliente devolve tokens do `usage` (insumo do custo auditável da F1). `tests/test_ia_cliente.py` novo. |
 | Motor de triagem + prompt TI (modo sombra) | ✅ Código implementado (2026-07-22) — **validação em sombra pendente** | F1 | `app/ia/triagem.py` + `schemas.py` + `prompts/ti.md`; hook em `criar_chamado` (`BackgroundTasks`; resumo Químico intocado — C2). Nota interna assinada ("Assistente IA", lookup por nome com cache; `is_interna=true` fixado em código); `historico_chamados` evento `IA_TRIAGEM`; custo/tokens/duração em `ia_triagens`. 15 testes em `tests/test_ia_triagem.py`. **Sombra LIGADA em produção (2026-07-23):** envs configuradas no Railway pelo gestor; triagens reais confirmadas em `ia_triagens` (~4 s, ~US$ 0,002). **Falta para fechar a F1:** 20 chamados triados e avaliados pelos atendentes (1–5 ★ na tela de atendimento); p95 < 2 min conferido em `ia_triagens`. |
-| Perguntas ao usuário + re-triagem (TI) | ✅ Código implementado (2026-07-22; guarda ajustada 2026-07-23) — **atrás de env** | F2 | Motor com máquina de rodadas derivada do banco; `decidir_acao` (PERGUNTAS só sem atendente atuando + fora da sombra + insuficiente + confiança ≥ `IA_TRIAGEM_PERGUNTAS_CONFIANCA_MINIMA` (default BAIXA desde 2026-07-24; era ALTA fixa) + rodada < teto); mensagem pública + e-mail (`notificar_nova_mensagem_email`, Reply-To inbound); re-triagem nos hooks do portal (`responder_chamado`, só autor) e inbound (`common.py`, só `is_client`); conversa completa no contexto da rodada 2; teto provado por teste (3ª rodada impossível). **Ajuste 2026-07-23 (Seção 2.3):** atendimento iniciado não suprime a nota da rodada 1 (força NOTA_INTERNA; guarda reavaliada pós-modelo com estado fresco); só RESOLVIDO fica fora. **Saída da sombra POR DEPARTAMENTO (2026-07-24):** sombra validada pelo usuário (notas úteis + perguntas pertinentes) ⇒ nova env `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS` (CSV) libera perguntas públicas por departamento com a sombra global ligada. Ligar TI = `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS=TI` no Railway; Químico segue em sombra até F5/F6. |
+| Perguntas ao usuário + re-triagem (TI) | ✅ Código implementado (2026-07-22; guarda ajustada 2026-07-23) — **atrás de env** | F2 | Motor com máquina de rodadas derivada do banco; `decidir_acao` (PERGUNTAS só sem atendente atuando + fora da sombra + insuficiente + confiança ≥ `IA_TRIAGEM_PERGUNTAS_CONFIANCA_MINIMA` (default BAIXA desde 2026-07-24; era ALTA fixa) + rodada < teto); mensagem pública + e-mail (`notificar_nova_mensagem_email`, Reply-To inbound); re-triagem nos hooks do portal (`responder_chamado`, só autor) e inbound (`common.py`, só `is_client`); conversa completa no contexto da rodada 2; teto provado por teste (3ª rodada impossível). **Ajuste 2026-07-23 (Seção 2.3):** atendimento iniciado não suprime a nota da rodada 1 (força NOTA_INTERNA; guarda reavaliada pós-modelo com estado fresco); só RESOLVIDO fica fora. **Saída da sombra POR DEPARTAMENTO (2026-07-24):** sombra validada pelo usuário (notas úteis + perguntas pertinentes) ⇒ nova env `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS` (CSV) libera perguntas públicas por departamento com a sombra global ligada. Ligar TI = `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS=TI` no Railway; Químico segue em sombra até F5/F6. **Gate da rodada extra (2026-08-03, BOND-2026-00653):** rodada > 1 só pergunta com pendência válida (`perguntas_nao_respondidas` conferida contra as perguntas realmente feitas — `pendencias_do_ciclo`), cobra o texto original e usa abertura de re-triagem; sem pendência, o ciclo fecha com nota interna. "Não sei" conta como respondida (prompts `ti.md`/`quimico_passe_a.md`). |
 | Avaliação da nota interna pelo staff (1–5 ★) | ✅ Implementado + **migration `0051` aplicada em produção** (2026-07-23) | F1/F6 (KPI 10.2) | Colunas `avaliacao`/`avaliado_por`/`avaliado_em` em `ia_triagens`; bloco de estrelas em `workspace/atendimento.html`; `POST /workspace/chamados/{id}/ia/avaliacao` (escopo provado sob RLS antes da escrita admin; reavaliar sobrescreve). Fonte do KPI "notas úteis ≥ 70%" (nota ≥ 4 = útil). 6 testes em `test_workspace.py`. |
 | Busca de semelhantes (FTS português) | ✅ Implementado + **migration `0053` aplicada em produção** (2026-07-23) | F3 | Migration `0053_chamados_fts` (coluna GENERATED + índice GIN; 0052 era de outra frente — C1). `app/repositories/ia_busca.py` (`websearch_to_tsquery` com termos do modelo unidos por OR; filtro por departamento obrigatório no SQL; resolução = última mensagem pública de staff via LATERAL). Semelhantes citados na nota interna (código + título + resolução truncada); códigos auditados em `ia_triagens.resultado`. Falha/sem-resultado degrada graciosamente. 8 testes unit + 4 e2e (`test_ia_busca_fts.py`); query validada contra o corpus real de produção. Falta: checagem manual de ~15 notas (critério de saída, junto da sombra F1). |
 | Base `base_quimico_*` + role `ia_worker` + ingestão | ✅ Implementado + **migration `0054` aplicada e base ingerida em produção** (2026-07-23) | F4 | C7 endurecida: RLS on nas 5 tabelas; policies só `TO ia_worker` nas 4 liberadas; formulações sem GRANT/policy (pós-check em produção). `scripts/ingestao_base_quimico.py` re-executável (idempotência provada: 2 execuções, mesmas contagens — 60 produtos, 94 MPs, 16 playbooks, 437 formulações, 39 fichas). Arquivos-fonte NUNCA no repo (`openpyxl`/`pypdf` só em requirements-dev). Pendente gestor: senha do role + `IA_WORKER_DATABASE_URL` no Railway; revisar 20 produtos sem ficha no PDF. |

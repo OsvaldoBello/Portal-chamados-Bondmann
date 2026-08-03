@@ -83,6 +83,7 @@ class FakeConn:
         chamado: dict | None = _CHAMADO,
         ultima_rodada: int = 0,
         ultima_acao: str | None = None,
+        ultimas_perguntas: tuple[str, ...] = (),
         autor_respondeu: bool = False,
         conversa: tuple[dict, ...] = (),
         categorias: tuple[str, ...] = ("Hardware", "Redes", "Sistemas"),
@@ -95,6 +96,9 @@ class FakeConn:
         self._chamado = chamado
         self._ultima_rodada = ultima_rodada
         self._ultima_acao = ultima_acao
+        # Perguntas da rodada anterior (`ia_triagens.resultado->'perguntas'`,
+        # jsonb — asyncpg devolve como str), base do gate de pendências.
+        self._ultimas_perguntas = ultimas_perguntas
         self._autor_respondeu = autor_respondeu
         self._conversa = conversa
         self._categorias = categorias
@@ -117,6 +121,7 @@ class FakeConn:
                 "ultima_rodada": self._ultima_rodada,
                 "ultima_acao": self._ultima_acao,
                 "ultima_em": "2026-07-22T10:00:00Z",
+                "ultimas_perguntas": json.dumps(list(self._ultimas_perguntas)),
             }
         raise AssertionError(f"fetchrow inesperado: {sql}")
 
@@ -575,6 +580,13 @@ def test_decidir_acao_matrix():
         {**_SAIDA_PERGUNTAVEL, "informacoes_suficientes": True, "perguntas": []}
     )
     assert triagem.decidir_acao(s_ok, 1, _sombra_off()) == "NOTA_INTERNA"
+    # Re-triagem (2026-08-03): rodada > 1 sem pendência do ciclo fecha com a
+    # nota — a rodada extra só existe para cobrar o que ficou em branco.
+    assert triagem.decidir_acao(s_alta, 2, _sombra_off()) == "NOTA_INTERNA"
+    assert (
+        triagem.decidir_acao(s_alta, 2, _sombra_off(), pendencias=["ficou em branco?"])
+        == "PERGUNTAS"
+    )
 
 
 def test_decidir_acao_limiar_de_confianca_configuravel():
@@ -773,20 +785,113 @@ async def test_ultima_rodada_insuficiente_gera_nota_com_lacunas():
 
 
 async def test_resposta_parcial_pergunta_de_novo_antes_da_nota():
-    """2026-07-31 (MAX_RODADAS default 2→3): autor respondeu só 1 das 3
-    perguntas ⇒ rodada 2, ainda fora do teto (3), volta a perguntar (cobrando
-    só o que falta) em vez de já fechar com nota interna sinalizando lacunas."""
-    conn = FakeConn(ultima_rodada=1, ultima_acao="PERGUNTAS", autor_respondeu=True)
-    completar = AsyncMock(
-        return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_PERGUNTAVEL))
+    """2026-07-31 (MAX_RODADAS default 2→3): autor respondeu só 1 das 2
+    perguntas ⇒ rodada 2, ainda fora do teto (3), volta a perguntar — mas
+    SÓ a que ficou em branco, com o texto original (2026-08-03)."""
+    conn = FakeConn(
+        ultima_rodada=1,
+        ultima_acao="PERGUNTAS",
+        ultimas_perguntas=tuple(_SAIDA_OK["perguntas"]),
+        autor_respondeu=True,
     )
+    saida = {
+        **_SAIDA_PERGUNTAVEL,
+        # O modelo reformula ao pedir de novo; o motor cobra o texto original.
+        "perguntas": ["Há barulho de ventoinha quando você aperta o botão?"],
+        "perguntas_nao_respondidas": ["Há barulho de ventoinha ao ligar?"],
+    }
+    completar = AsyncMock(return_value=RespostaModelo(conteudo=json.dumps(saida)))
     with _patched(conn, _sombra_off(), completar) as notificar:  # default: max_rodadas=3
         await triagem.executar_triagem("cid")
     assert conn.triagem_inserts[0][1] == 2
     assert conn.triagem_inserts[0][3] == "PERGUNTAS"
     msg_sql, msg_args = next((s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s)
     assert "false" in msg_sql  # mensagem pública, não nota interna
+    # Só a pendência, no texto da rodada 1 — e a abertura reconhece a resposta
+    # do autor em vez de repetir a saudação inicial.
+    assert "1. Há barulho de ventoinha ao ligar?" in msg_args[2]
+    assert "O monitor acende alguma luz?" not in msg_args[2]
+    assert "Obrigado pela resposta!" in msg_args[2]
+    # Auditoria: o que a rodada extra cobrou de fato.
+    assert json.loads(conn.triagem_inserts[0][4])["perguntas_cobradas"] == [
+        "Há barulho de ventoinha ao ligar?"
+    ]
     notificar.assert_awaited()
+
+
+async def test_autor_respondeu_tudo_fecha_o_ciclo_sem_bateria_nova():
+    """Regressão BOND-2026-00653 (2026-08-03): o autor respondeu as 3 perguntas
+    (uma delas com "não tenho esta informação") e a IA devolveu OUTRAS 3 no
+    mesmo minuto — para o usuário, "a IA repetiu as perguntas". Sem pendência
+    real (``perguntas_nao_respondidas`` vazia), a rodada extra fecha o ciclo
+    com a nota interna; as perguntas novas viram lacunas para o atendente."""
+    conn = FakeConn(
+        ultima_rodada=1,
+        ultima_acao="PERGUNTAS",
+        ultimas_perguntas=tuple(_SAIDA_OK["perguntas"]),
+        autor_respondeu=True,
+    )
+    saida = {
+        **_SAIDA_PERGUNTAVEL,
+        "perguntas": ["Já testou com outro cabo?", "A entrada certa está selecionada?"],
+        "perguntas_nao_respondidas": [],
+    }
+    completar = AsyncMock(return_value=RespostaModelo(conteudo=json.dumps(saida)))
+    with _patched(conn, _sombra_off(), completar) as notificar:  # fora da sombra
+        await triagem.executar_triagem("cid")
+    assert conn.triagem_inserts[0][1] == 2
+    assert conn.triagem_inserts[0][3] == "NOTA_INTERNA"
+    inserts = [(s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s]
+    assert len(inserts) == 1 and "true" in inserts[0][0]  # só nota interna
+    assert "Informações faltantes" in inserts[0][1][2]
+    notificar.assert_not_awaited()  # nenhuma mensagem nova ao autor
+
+
+async def test_pendencia_inventada_pelo_modelo_nao_reabre_o_ciclo():
+    """Gate estrutural: `perguntas_nao_respondidas` que não casa com nenhuma
+    pergunta REALMENTE feita na rodada anterior é descartada — o modelo não
+    consegue reciclar o slot da rodada extra com um assunto novo."""
+    conn = FakeConn(
+        ultima_rodada=1,
+        ultima_acao="PERGUNTAS",
+        ultimas_perguntas=tuple(_SAIDA_OK["perguntas"]),
+        autor_respondeu=True,
+    )
+    saida = {
+        **_SAIDA_PERGUNTAVEL,
+        "perguntas": ["Qual o modelo do notebook?"],
+        "perguntas_nao_respondidas": ["Qual o modelo do notebook?"],  # nunca perguntado
+    }
+    completar = AsyncMock(return_value=RespostaModelo(conteudo=json.dumps(saida)))
+    with _patched(conn, _sombra_off(), completar) as notificar:
+        await triagem.executar_triagem("cid")
+    assert conn.triagem_inserts[0][3] == "NOTA_INTERNA"
+    notificar.assert_not_awaited()
+
+
+def test_pendencias_do_ciclo():
+    """Função pura do gate: casa por texto normalizado (acento/pontuação/caixa
+    e reformulação leve), devolve o texto ORIGINAL na ordem original e ignora
+    o que não foi perguntado antes."""
+    anteriores = ["O monitor acende alguma luz?", "Há barulho de ventoinha ao ligar?"]
+
+    def _saida(nao_respondidas: list[str]) -> SaidaTriagem:
+        return SaidaTriagem.model_validate(
+            {**_SAIDA_OK, "perguntas_nao_respondidas": nao_respondidas}
+        )
+
+    # Cópia literal.
+    assert triagem.pendencias_do_ciclo(_saida([anteriores[1]]), anteriores) == [anteriores[1]]
+    # Acento/caixa/pontuação fora do lugar ainda casam.
+    assert triagem.pendencias_do_ciclo(
+        _saida(["ha barulho de ventoinha ao ligar"]), anteriores
+    ) == [anteriores[1]]
+    # Assunto novo não vira pendência.
+    assert triagem.pendencias_do_ciclo(_saida(["Qual o modelo do notebook?"]), anteriores) == []
+    # Sem rodada anterior (rodada 1) não há pendência possível.
+    assert triagem.pendencias_do_ciclo(_saida([anteriores[0]]), []) == []
+    # Ordem original preservada mesmo com a lista do modelo invertida.
+    assert triagem.pendencias_do_ciclo(_saida(anteriores[::-1]), anteriores) == anteriores
 
 
 async def test_teto_de_3_rodadas_ainda_insuficiente_gera_nota_com_lacunas():
@@ -841,6 +946,21 @@ def test_montar_pergunta_publica_tem_tom_e_instrucao_de_resposta():
     # (autor respondendo só parte delas gastava uma rodada extra do teto).
     assert "responda todas as perguntas acima numa única mensagem" in texto
     assert "aqui no chamado ou a este e-mail" in texto
+
+
+def test_montar_pergunta_publica_da_re_triagem_reconhece_a_resposta():
+    """Rodada > 1 (2026-08-03): abertura diferente da rodada 1 — o autor acabou
+    de responder, repetir a saudação inicial é o que fazia a mensagem parecer
+    uma repetição pura (BOND-2026-00653). Cobra só as pendências recebidas."""
+    saida = SaidaTriagem.model_validate(_SAIDA_PERGUNTAVEL)
+    texto = triagem.montar_pergunta_publica(
+        saida, _CHAMADO, ["Há barulho de ventoinha ao ligar?"], rodada=2
+    )
+    assert texto.startswith("Obrigado pela resposta!")
+    assert "BOND-2026-00500" in texto
+    assert "1. Há barulho de ventoinha ao ligar?" in texto
+    assert "O monitor acende alguma luz?" not in texto  # já respondida
+    assert "assistente virtual" not in texto
 
 
 def test_montar_pergunta_publica_singular_com_uma_so_pergunta():

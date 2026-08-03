@@ -34,6 +34,13 @@ class SaidaTriagem(BaseModel):
     # Perguntas que fariam a triagem avançar (máx. 3). Em modo sombra ficam
     # registradas na nota interna; na F2 viram mensagem pública.
     perguntas: list[str] = Field(default_factory=list, max_length=3)
+    # Re-triagem (rodada > 1): perguntas da rodada ANTERIOR que o autor deixou
+    # sem resposta alguma, copiadas literalmente. "Não sei"/"não tenho essa
+    # informação" conta como RESPONDIDA — o autor não tem o dado. Lista vazia
+    # fecha o ciclo de perguntas (`triagem.decidir_acao`): a rodada extra
+    # existe só para cobrar o que ficou em branco, nunca para abrir uma
+    # bateria nova de perguntas (BOND-2026-00653).
+    perguntas_nao_respondidas: list[str] = Field(default_factory=list, max_length=3)
     # Termos para a busca de chamados semelhantes (F3 — FTS português).
     termos_busca: list[str] = Field(default_factory=list, max_length=8)
 

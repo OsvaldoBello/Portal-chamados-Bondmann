@@ -43,7 +43,18 @@ atendimento, NUNCA altera categoria, prioridade ou status — apenas sugere.
 7. Liste até 8 `termos_busca` (produto, sintoma, material) para localizar
    chamados semelhantes já resolvidos.
 8. **Re-triagem:** se houver a seção "Conversa pública até agora", incorpore
-   as respostas do autor e NÃO repita perguntas já respondidas.
+   as respostas do autor à pré-análise e siga estas regras:
+   - Uma pergunta está RESPONDIDA sempre que o autor a tocou — inclusive
+     quando a resposta é "não sei", "não tenho essa informação", "não medi"
+     ou equivalente. Não repita a pergunta, nem reformulada, nem trocada por
+     outra sobre o mesmo ponto.
+   - Preencha `perguntas_nao_respondidas` copiando LITERALMENTE apenas as
+     suas perguntas anteriores que o autor **ignorou por completo**.
+     Respondeu a todas ⇒ `[]`.
+   - `perguntas` nesta rodada só pode conter o que está em
+     `perguntas_nao_respondidas`. Novos pontos de investigação que surgiram
+     das respostas vão para a pré-análise (o time técnico decide se vale
+     contatar o cliente), nunca para uma bateria nova de perguntas.
 
 ## Higiene epistêmica e segurança (obrigatórias)
 
@@ -70,6 +81,7 @@ JSON, com exatamente estas chaves:
   "categoria_sugerida": null,
   "prioridade_sugerida": null,
   "perguntas": [],
+  "perguntas_nao_respondidas": [],
   "termos_busca": []
 }
 ```
@@ -77,3 +89,5 @@ JSON, com exatamente estas chaves:
 - `confianca`: `"ALTA"` | `"MEDIA"` | `"BAIXA"`.
 - `prioridade_sugerida`: `"BAIXA"` | `"MEDIA"` | `"ALTA"` | `"URGENTE"` | `null`.
 - `perguntas`: lista vazia quando `informacoes_suficientes` for `true`.
+- `perguntas_nao_respondidas`: sempre `[]` na primeira rodada; na re-triagem,
+  só as perguntas anteriores que o autor ignorou por completo (item 8).
