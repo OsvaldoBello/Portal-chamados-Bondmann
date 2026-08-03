@@ -331,17 +331,17 @@
     const colors=vals.map((_,i)=>i===0?"#1D9E75":i===1?"#378ADD":"rgba(83,74,183,0.65)");
     const aviso=document.getElementById("dept-aviso");
     if(aviso){
-      // A barra do Marketing sai de `mkt_orig` (mesma série da aba 3), então
-      // fecha com a Origem da Demanda por construção — foi exatamente a
-      // divergência que o usuário reportou. Os demais setores só têm quebra a
-      // partir de chamado do Portal; dizer isso evita a leitura de que o
-      // Marketing "explodiu" em relação aos outros.
-      const preSistema=filteredMonthly().filter(m=>m.baseline).map(m=>m.label);
-      aviso.textContent="A barra do Marketing é a mesma série da aba \"3. Origem da Demanda\"."
-        +(preSistema.length
-          ? " Os demais setores só aparecem a partir dos chamados do Portal — em "
-            +preSistema.join(" · ")+" o controle da época registrava só o total solicitado,"
-            +" sem o setor de origem."
+      // Marketing aparece com DOIS números no dashboard e isso confunde — foi
+      // o que gerou o report de "não bate". Aqui os dois ficam lado a lado
+      // (decisão do usuário 2026-08-03): esta aba conta o setor PARA QUEM a
+      // demanda foi feita; a aba 3 conta de quem partiu a INICIATIVA. São
+      // colunas diferentes do controle do Marketing e divergem de verdade.
+      const destino=agg["Marketing"]||0;
+      const iniciativa=filteredMonthly().reduce((s,m)=>s+m.mkt_orig,0);
+      aviso.textContent="Marketing: "+destino+" como setor de destino da demanda (este gráfico)"
+        +" · "+iniciativa+" como origem da iniciativa (aba \"3. Origem da Demanda\")."
+        +(destino!==iniciativa
+          ? " A diferença são peças feitas para outros setores por iniciativa do próprio Marketing."
           : "");
     }
     mkChart("chartDept",{type:"bar",data:{labels:keys,datasets:[{label:"Demandas",data:vals,backgroundColor:colors,borderRadius:5}]},

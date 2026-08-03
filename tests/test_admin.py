@@ -181,9 +181,9 @@ class FakeAdmin:
                     "baseline": False
                 }
             ],
-            # "Marketing" aqui é o mesmo número de `mkt_orig` do mês (2) — é a
-            # invariante que a aba "4. Solicitantes" tem que respeitar contra a
-            # aba "3. Origem da Demanda" (ver AdminRepo.mkt_dashboard_data).
+            # Setor solicitante (para quem a demanda foi feita). NÃO precisa
+            # bater com `mkt_orig` do mês: são medidas diferentes — ver
+            # AdminRepo.mkt_dashboard_data e a migration 0075.
             "deptByMonth": {
                 "JAN/26": {"RH": 3, "Marketing": 2}
             },
@@ -518,29 +518,24 @@ def test_dashboard_marketing_aba_volume_tem_indicadores():
     assert "Razão volume/demanda" in r.text
 
 
-def test_dashboard_marketing_solicitantes_bate_com_origem():
-    """Bug reportado pelo usuário (2026-08-03): a barra do Marketing no ranking
-    de solicitantes marcava 52 enquanto a série "Marketing" da aba de Origem da
-    Demanda somava 169 — a primeira lia só `vw_marketing_setor_mensal` (chamado
-    real) e a segunda lia `mkt_orig` (que a baseline preenche).
+def test_dashboard_marketing_solicitantes_expoe_os_dois_numeros_do_marketing():
+    """O Marketing tem DOIS números legítimos e diferentes no dashboard, e foi
+    isso que gerou o report de "não bate" (2026-08-03):
 
-    A invariante agora é: `deptByMonth[mês]["Marketing"] == monthly[mês].mkt_orig`.
-    Aqui ela é checada sobre o payload que chega ao template — é o que o
-    `admin_marketing.js` soma nos dois gráficos."""
+    - aba "4. Solicitantes" conta o setor **para quem** a demanda foi feita
+      (coluna `Departamento` do controle do time / etiqueta de setor no Portal);
+    - aba "3. Origem da Demanda" conta **de quem partiu a iniciativa**
+      (`mkt_orig`).
+
+    Divergem em 4 dos 6 meses históricos (jan/26: 8 × 15) porque o Marketing faz
+    peça para outro setor por iniciativa própria. A decisão do usuário foi
+    manter os dois e mostrá-los lado a lado — este teste garante que o alvo da
+    nota comparativa existe e que o ranking NÃO foi forçado a copiar a origem."""
     perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Marketing")
-    repo = FakeAdmin(is_ti=False)
-    with admin_client(repo, user=_user(role="ADMIN"), perfil=perfil) as c:
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
         r = c.get("/admin")
     assert r.status_code == 200
-    assert 'id="dept-aviso"' in r.text     # nota explicando a barra pré-Portal
-
-    dados = asyncio.run(repo.mkt_dashboard_data({}))
-    for mes in dados["monthly"]:
-        do_ranking = dados["deptByMonth"].get(mes["label"], {}).get("Marketing", 0)
-        assert do_ranking == mes["mkt_orig"], (
-            f'{mes["label"]}: ranking de solicitantes marca {do_ranking} para o '
-            f'Marketing, mas a origem da demanda marca {mes["mkt_orig"]}'
-        )
+    assert 'id="dept-aviso"' in r.text
 
 
 def test_dashboard_marketing_aba_operadores():

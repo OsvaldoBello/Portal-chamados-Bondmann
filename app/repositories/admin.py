@@ -609,7 +609,10 @@ class AdminRepo:
         mesmo tendo movimento real. Quando existe uma linha de baseline pro mês,
         ela SUBSTITUI os números calculados da view (a contagem por ticket não
         reflete o histórico pré-sistema); sem baseline, segue vindo 100% da
-        view, como sempre.
+        view, como sempre. O mesmo vale para a quebra por setor solicitante
+        (`marketing_setor_baseline`, migration `0075`, 2026-08-03): jan-jun/26
+        têm setor atribuído no controle do time, e a linha de baseline
+        substitui a da view.
 
         **`operadorByMonth`** (pedido do usuário 2026-08-03): chamados atendidos
         por operador do Marketing, por mês, com ``atendidos`` ancorado em
@@ -649,6 +652,9 @@ class AdminRepo:
                 """SELECT mes, total, concluidas, em_andamento, abertas, volume,
                           mkt_orig, sol_orig, tempo_medio, atrasos
                      FROM marketing_volume_baseline ORDER BY mes ASC"""
+            )
+            setor_baseline_rows = await conn.fetch(
+                "SELECT mes, setor, total FROM marketing_setor_baseline ORDER BY mes, setor"
             )
             # Chamados atendidos por operador (pedido do usuário 2026-08-03).
             # `JOIN perfis` (não LEFT): chamado sem operador não vira barra
@@ -773,31 +779,29 @@ class AdminRepo:
                 # confiável de mês pré-sistema.
                 "baseline": mes in baseline_por_mes,
             })
-            # Ranking por setor solicitante. A quebra por setor vem de
-            # `vw_marketing_setor_mensal`, que só enxerga chamado REAL do
-            # Portal — nos meses de baseline ela não cobre o histórico.
+            # Ranking por setor solicitante. Mesma regra de substituição do
+            # volume: quando existe linha de baseline pro mês
+            # (`marketing_setor_baseline`, migration `0075`), ela SUBSTITUI a
+            # quebra da view — o histórico pré-Portal tem setor atribuído de
+            # verdade (planilha do time), e a view só enxergaria os poucos
+            # chamados soltos do período. Sem baseline, 100% da view, como
+            # sempre; mês novo entra sozinho a cada chamado.
             #
-            # 🔁 2026-08-03 (pedido do usuário): a barra do **Marketing** tinha
-            # que bater com a soma da série "Marketing" da aba "3. Origem da
-            # Demanda". Não batia (52 contra 169) porque a Origem lê
-            # `mkt_orig` — que a baseline preenche — e o ranking lia só a view.
-            # Nos meses REAIS as duas fontes já são idênticas por construção
-            # (JUN 2=2, JUL 49=49, AGO 1=1, conferido em produção), então usar
-            # `mkt_orig` aqui não muda nada no que já era real: só completa os
-            # meses pré-Portal. Continua 100% derivado dos dados — chamado
-            # novo entra no número sem ninguém tocar em nada.
-            #
-            # Os DEMAIS setores continuam vindo só da view: a baseline guarda
-            # `sol_orig` como total, sem quebra por setor, e não há como
-            # distribuir isso entre RH/SIG/Químico sem inventar número.
-            setores_mes = {
+            # 🔁 2026-08-03: a versão anterior forçava `Marketing = mkt_orig`
+            # aqui, para o ranking bater com a aba "3. Origem da Demanda".
+            # Isso caiu: as duas colunas da planilha medem coisas diferentes
+            # (**Departamento** = setor para quem a peça foi feita ×
+            # **Origem** = de quem partiu a iniciativa) e divergem em 4 dos 6
+            # meses históricos — em jan/26, 8 contra 15. Coincidem nos meses de
+            # Portal porque lá a origem é derivada da etiqueta de setor. O
+            # ranking volta a usar o setor de verdade, que é o que o título
+            # promete, e a aba mostra os dois números lado a lado.
+            setores_baseline = {
+                r["setor"]: r["total"] for r in setor_baseline_rows if r["mes"] == mes
+            }
+            dept_by_month[label] = setores_baseline or {
                 r["setor"]: r["total"] for r in setor_rows if r["mes"] == mes
             }
-            if mkt_orig:
-                setores_mes["Marketing"] = mkt_orig
-            else:
-                setores_mes.pop("Marketing", None)
-            dept_by_month[label] = setores_mes
             # Mesma limitação do ranking por setor: quem atendeu só existe em
             # chamado real do Portal. Os meses de baseline (jan-jun/26) ficam
             # com o dicionário vazio, e o front avisa na própria aba.
