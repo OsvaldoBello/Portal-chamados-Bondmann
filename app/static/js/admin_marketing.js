@@ -14,6 +14,7 @@
 
   const monthly = mktData.monthly || [];
   const deptByMonth = mktData.deptByMonth || {};
+  const operadorByMonth = mktData.operadorByMonth || {};
   const atrasosData = mktData.atrasosData || [];
   const midia = mktData.midia || { meses: [], investimento: [], regioes: [], descontinuidades: [], aderencias: [] };
 
@@ -225,6 +226,65 @@
       scales:{x:{ticks:{font:{size:11}}},y:{beginAtZero:true}}}});
   }
 
+  // Indicadores da aba "Volume Produzido" (pedido do usuário 2026-08-03).
+  // Tudo derivado de `monthly` — nada hardcoded — e respeitando o filtro de
+  // período. O crescimento é a única métrica que olha FORA do filtro: com um
+  // mês só selecionado, o mês anterior não está em `filteredMonthly()`, então
+  // o comparativo sai da série completa (`monthly`) — selecionar MAR continua
+  // mostrando "MAR vs FEV", e não "sem comparativo".
+  function updateVolumeInsights(){
+    const d=filteredMonthly();
+    const setTexto=(id,txt)=>{const el=document.getElementById(id);if(el)el.textContent=txt;};
+    if(d.length===0){
+      ["volume-total","volume-razao","volume-crescimento","volume-razao-mes"].forEach(id=>setTexto(id,"—"));
+      ["volume-total-nota","volume-crescimento-nota","volume-razao-mes-nota"].forEach(id=>setTexto(id,"—"));
+      return;
+    }
+    const ultimo=d[d.length-1];
+    const vol=d.reduce((s,x)=>s+x.volume,0);
+    const total=d.reduce((s,x)=>s+x.total,0);
+
+    setTexto("volume-total",vol);
+    // Quebra por mês. Períodos longos estouram a largura do card: a lista fica
+    // com `truncate` no HTML e o texto completo vai no `title` (tooltip).
+    const quebra=d.map(m=>m.label+": "+m.volume).join(" · ");
+    setTexto("volume-total-nota",quebra);
+    const notaEl=document.getElementById("volume-total-nota");
+    if(notaEl) notaEl.title=quebra;
+
+    setTexto("volume-razao",total?"×"+(vol/total).toFixed(1).replace(".",","):"—");
+    setTexto("volume-razao-nota",d.length===1?"Média do mês":"Média acumulada");
+
+    // Crescimento do último mês do período vs o mês imediatamente anterior da
+    // série. `null` de volume não existe aqui (a view/baseline sempre devolve
+    // número), mas mês anterior com volume 0 daria divisão por zero.
+    const idxUltimo=monthly.findIndex(m=>m.label===ultimo.label);
+    const anterior=idxUltimo>0?monthly[idxUltimo-1]:null;
+    const cresEl=document.getElementById("volume-crescimento");
+    if(anterior&&anterior.volume>0){
+      const pct=(ultimo.volume-anterior.volume)/anterior.volume*100;
+      setTexto("volume-crescimento",(pct>0?"+":"")+pct.toFixed(1).replace(".",",")+"%");
+      setTexto("volume-crescimento-rotulo","Crescimento "+ultimo.label+" vs "+anterior.label);
+      setTexto("volume-crescimento-nota",anterior.volume+" → "+ultimo.volume);
+      if(cresEl){
+        cresEl.classList.toggle("text-red-600",pct<0);
+        cresEl.classList.toggle("text-brandgreen-700",pct>=0);
+      }
+    }else{
+      setTexto("volume-crescimento","—");
+      setTexto("volume-crescimento-rotulo","Crescimento mês a mês");
+      setTexto("volume-crescimento-nota",anterior?anterior.label+" sem volume":"Sem mês anterior na série");
+      if(cresEl){
+        cresEl.classList.remove("text-red-600");
+        cresEl.classList.add("text-brandgreen-700");
+      }
+    }
+
+    setTexto("volume-razao-mes",ultimo.total?"×"+(ultimo.volume/ultimo.total).toFixed(1).replace(".",","):"—");
+    setTexto("volume-razao-mes-rotulo","Razão "+ultimo.label);
+    setTexto("volume-razao-mes-nota",ultimo.volume+" vol · "+ultimo.total+" demandas");
+  }
+
   function renderOrigem(){
     const d=filteredMonthly(),labels=d.map(m=>m.label);
     mkChart("chartOrigem",{type:"bar",data:{labels,datasets:[
@@ -305,6 +365,70 @@
       {label:"Investimento BD (R$)",data:midia.investimento,borderColor:"#534AB7",backgroundColor:"rgba(83,74,183,0.15)",fill:true,tension:0.35,pointBackgroundColor:"#534AB7",pointRadius:6,pillFormat:fmtReais}
     ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:"top"},pill:{}},
       scales:{y:{ticks:{callback:v=>"R$ "+v.toLocaleString("pt-BR")}},x:{ticks:{font:{size:11}}}}}});
+  }
+
+  // Aba 7 — chamados atendidos por operador (pedido do usuário 2026-08-03).
+  // `operadorByMonth` só tem mês com chamado REAL do Portal: os meses de
+  // baseline (jan-jun/26, controle fora do sistema) vêm vazios porque o
+  // agregado histórico não guarda quem atendeu. Em vez de desenhar um gráfico
+  // vazio sem explicação, a aba diz quais meses do período ficaram de fora.
+  function agregarOperadores(labels){
+    const agg={};
+    labels.forEach(l=>{
+      Object.entries(operadorByMonth[l]||{}).forEach(([nome,v])=>{
+        if(!agg[nome]) agg[nome]={total:0,resolvidos:0};
+        agg[nome].total+=v.total;
+        agg[nome].resolvidos+=v.resolvidos;
+      });
+    });
+    return agg;
+  }
+
+  function renderOperador(){
+    const labels=filteredMonthly().map(m=>m.label);
+    const agg=agregarOperadores(labels);
+    const nomes=Object.keys(agg).sort((a,b)=>agg[b].total-agg[a].total);
+    mkChart("chartOperador",{type:"bar",data:{labels:nomes,datasets:[
+      {label:"Atendidos",data:nomes.map(n=>agg[n].total),backgroundColor:"#534AB7",borderRadius:5},
+      {label:"Resolvidos",data:nomes.map(n=>agg[n].resolvidos),backgroundColor:"#1D9E75",borderRadius:5}
+    ]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{position:"top"},pill:{}},
+      scales:{x:{beginAtZero:true,ticks:{precision:0}},y:{ticks:{font:{size:11}}}}}});
+  }
+
+  function updateOperadorInsights(){
+    const labels=filteredMonthly().map(m=>m.label);
+    const agg=agregarOperadores(labels);
+    const nomes=Object.keys(agg).sort((a,b)=>agg[b].total-agg[a].total);
+    const atendidos=nomes.reduce((s,n)=>s+agg[n].total,0);
+    const resolvidos=nomes.reduce((s,n)=>s+agg[n].resolvidos,0);
+    const setTexto=(id,txt)=>{const el=document.getElementById(id);if(el)el.textContent=txt;};
+
+    setTexto("operador-atendidos",atendidos);
+    setTexto("operador-atendidos-nota",labels.length===1?labels[0]:"Período selecionado");
+    setTexto("operador-resolvidos",resolvidos);
+    setTexto("operador-resolvidos-nota",
+      atendidos?(resolvidos/atendidos*100).toFixed(1).replace(".",",")+"% dos atendidos":"—");
+    setTexto("operador-qtd",nomes.length);
+    if(nomes.length){
+      setTexto("operador-top",nomes[0]);
+      setTexto("operador-top-nota",agg[nomes[0]].total+" atendidos · "+agg[nomes[0]].resolvidos+" resolvidos");
+    }else{
+      setTexto("operador-top","—");
+      setTexto("operador-top-nota","Nenhum chamado com operador no período");
+    }
+
+    // Aviso dos meses pré-Portal. NÃO dá pra inferir isso de "não tem
+    // operador": jan-jun/26 têm alguns chamados reais soltos no meio do
+    // período de baseline, então o gráfico mostraria 2 atendidos num mês cujo
+    // total é 43 — sem o aviso, parece que o time parou de trabalhar.
+    // `m.baseline` vem do backend (ver AdminRepo.mkt_dashboard_data).
+    const preSistema=filteredMonthly().filter(m=>m.baseline).map(m=>m.label);
+    setTexto("operador-aviso", preSistema.length
+      ? "Atenção: "+preSistema.join(" · ")+(preSistema.length===1?" é anterior":" são anteriores")
+        + " ao uso do Portal pelo Marketing — o total do mês veio do controle externo, que não registra quem atendeu."
+        + " O que aparece aqui desses meses são só os poucos chamados abertos no Portal na época."
+      : "");
   }
 
   function buildAtrasosTable(){
@@ -424,11 +548,12 @@
     const activeTabBtn = document.querySelector(".tab-btn.active");
     const id = activeTabBtn ? activeTabBtn.dataset.tab : "entrega";
     
-    if(id==="volume")renderVolume();
+    if(id==="volume"){renderVolume();updateVolumeInsights();}
     else if(id==="origem")renderOrigem();
     else if(id==="dept")renderDept();
     else if(id==="tempo"){renderTempo();buildAtrasosTable();renderCausas();updateTempoInsights();}
     else if(id==="midia"){renderMidia();updateMidiaInsights();}
+    else if(id==="operador"){renderOperador();updateOperadorInsights();}
   }
 
   // ─── TABS ─────────────────────────────────────────────────────────────
@@ -447,11 +572,12 @@
     btn.classList.remove("bg-gray-200", "text-navy");
     
     if(name==="entrega")renderEntrega();
-    else if(name==="volume")renderVolume();
+    else if(name==="volume"){renderVolume();updateVolumeInsights();}
     else if(name==="origem")renderOrigem();
     else if(name==="dept")renderDept();
     else if(name==="tempo"){renderTempo();buildAtrasosTable();renderCausas();updateTempoInsights();}
     else if(name==="midia"){renderMidia();updateMidiaInsights();}
+    else if(name==="operador"){renderOperador();updateOperadorInsights();}
   }
 
   // ─── EVENTOS ──────────────────────────────────────────────────────────

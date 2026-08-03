@@ -74,8 +74,13 @@
   {{ kpi("Abertos", kpis.abertos) }}
   {{ kpi("Conformidade de SLA", (kpis.conformidade_sla ~ "%") if kpis.conformidade_sla is not none else "—",
          "resolvidos dentro do prazo") }}
+  {# Sublegenda diz "de N resolvidos": desde 2026-08-03 a base do CSAT são os
+     chamados RESOLVIDOS no mês (AdminRepo.kpis), então o par avaliadas/resolvidos
+     é a taxa de resposta do mês — e deixa explícito que o número não é mais
+     "avaliações feitas no mês". #}
   {{ kpi("CSAT médio", kpis.csat_media if kpis.csat_media is not none else "—",
-         (kpis.csat_respostas ~ " avaliações") if kpis.csat_respostas else "sem avaliações") }}
+         (kpis.csat_respostas ~ " de " ~ kpis.resolvidos ~ " resolvidos avaliados")
+         if kpis.csat_respostas else "sem avaliações") }}
   {{ kpi("TMA (resolução)", (kpis.tma_horas ~ "h") if kpis.tma_horas is not none else "—", "tempo médio") }}
   {{ kpi("Resolvidos", kpis.resolvidos) }}
   {% if escopo == "TI" %}

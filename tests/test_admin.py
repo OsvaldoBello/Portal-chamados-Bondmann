@@ -176,11 +176,17 @@ class FakeAdmin:
                     "tempo_medio": 1.5,
                     "atrasos": 1,
                     "pct_conc": 80.0,
-                    "pct_mkt": 40.0
+                    "pct_mkt": 40.0,
+                    "baseline": False
                 }
             ],
             "deptByMonth": {
                 "JAN/26": {"RH": 3, "Marketing": 2}
+            },
+            # Só chamado real do Portal tem operador — mês de baseline vem
+            # vazio de propósito (ver AdminRepo.mkt_dashboard_data).
+            "operadorByMonth": {
+                "JAN/26": {"Gabriela Pohlmann": {"total": 3, "resolvidos": 2}}
             },
             "atrasosData": [
                 {"nome": "Demanda A", "mes": "JAN/26", "dias": 6, "causa": "Sem causa registrada"}
@@ -257,6 +263,18 @@ def test_dashboard_mostra_kpis_e_dados_grafico():
     assert "4.5" in r.text                    # CSAT médio
     assert 'id="chart-data"' in r.text        # JSON inerte p/ Chart.js
     assert "/static/vendor/chart.umd.js" in r.text
+
+
+def test_csat_do_mes_e_lido_sobre_os_resolvidos_do_mes():
+    """Desde 2026-08-03 (pedido do usuário) o CSAT do mês é a nota dos chamados
+    RESOLVIDOS no mês, não das avaliações feitas no mês (`AdminRepo.kpis` ancora
+    em `resolvido_em`). O card explicita a base para não sobrar dúvida de qual
+    denominador está em jogo: `csat_respostas` de `resolvidos`."""
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert "4 de 6 resolvidos avaliados" in r.text   # csat_respostas=4, resolvidos=6
+    assert "4 avaliações" not in r.text              # legenda antiga (base = avaliados no mês)
 
 
 def test_dashboard_ti_mostra_tma_projetos_separado():
@@ -472,6 +490,41 @@ def test_dashboard_marketing_renderiza_mkt_data():
     assert r.status_code == 200
     assert 'id="mkt-data"' in r.text
     assert "JAN/26" in r.text
+
+
+def test_dashboard_marketing_aba_volume_tem_indicadores():
+    """Aba "2. Volume Produzido" ganhou os 4 cards do relatório estático
+    (pedido do usuário 2026-08-03). Os valores são calculados no
+    `admin_marketing.js` a partir de `mkt_data.monthly`; aqui só garantimos que
+    os alvos existem no HTML — sem eles o JS escreve no vazio e a aba volta a
+    ficar só com o gráfico."""
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Marketing")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    for alvo in ('id="volume-total"', 'id="volume-razao"',
+                 'id="volume-crescimento"', 'id="volume-razao-mes"'):
+        assert alvo in r.text
+    assert "Volume total acumulado" in r.text
+    assert "Razão volume/demanda" in r.text
+
+
+def test_dashboard_marketing_aba_operadores():
+    """Aba "7. Operadores" — chamados atendidos por operador (pedido do usuário
+    2026-08-03). Os valores são calculados no `admin_marketing.js` a partir de
+    `mkt_data.operadorByMonth`; aqui garantimos que a aba, os alvos e a série
+    chegam ao HTML."""
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Marketing")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert 'data-tab="operador"' in r.text
+    assert 'id="tab-operador"' in r.text
+    for alvo in ('id="operador-atendidos"', 'id="operador-resolvidos"',
+                 'id="operador-top"', 'id="chartOperador"'):
+        assert alvo in r.text
+    assert "operadorByMonth" in r.text          # série serializada no #mkt-data
+    assert "Gabriela Pohlmann" in r.text
 
 
 def test_gestao_mostra_crud_de_midia_regional():

@@ -54,11 +54,23 @@ class AdminRepo:
         um chamado aberto em maio e fechado em junho deve contar para JUNHO nos
         indicadores de fechamento — ``total``/``abertos`` (volume de entrada) usam
         ``created_at``, mas ``resolvidos``/``resolvidos_no_prazo``/``tma`` usam
-        ``resolvido_em`` e o CSAT usa ``avaliacao_em`` (quando a nota foi dada).
-        Antes, um único ``WHERE created_at BETWEEN ...`` filtrava a linha inteira
-        pela data de ABERTURA, então um chamado fechado no mês corrente mas aberto
-        num mês anterior simplesmente desaparecia dos resolvidos/CSAT/TMA do mês —
+        ``resolvido_em`` — e o CSAT também (ver abaixo). Antes, um único
+        ``WHERE created_at BETWEEN ...`` filtrava a linha inteira pela data de
+        ABERTURA, então um chamado fechado no mês corrente mas aberto num mês
+        anterior simplesmente desaparecia dos resolvidos/CSAT/TMA do mês —
         números de "resolvidos este mês" ficavam sistematicamente baixos.
+
+        **CSAT ancorado em `resolvido_em`, não em `avaliacao_em` (2026-08-03,
+        pedido do usuário):** o CSAT do mês é a nota do ATENDIMENTO entregue
+        naquele mês, então a base é o conjunto de chamados **resolvidos no mês**
+        (os que têm nota entram na média; os sem nota simplesmente não entram,
+        porque ``avg``/``count`` de uma coluna ignoram NULL). Com a âncora
+        anterior (``avaliacao_em``), a nota migrava para o mês em que o autor
+        clicou nas estrelas: um chamado resolvido em 30/jun e avaliado em 02/jul
+        puxava o CSAT de JULHO, e o CSAT de junho ficava incompleto e ainda
+        mudava dias depois do mês fechado. ``csat_respostas`` passa a significar
+        "quantos dos resolvidos do mês foram avaliados" — comparável direto com
+        ``resolvidos`` (taxa de resposta), o que antes não era possível.
 
         **TMA de "Projetos" separado do TMA geral (2026-07-24, pedido do usuário):**
         chamados finalizados a partir da coluna "Projetos" do Kanban do TI
@@ -116,14 +128,14 @@ class AdminRepo:
                       AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))
                                                                         AS resolvidos_no_prazo,
                   avg(avaliacao_nota) FILTER (
-                    WHERE avaliacao_em IS NOT NULL
-                      AND ($2::timestamptz IS NULL OR avaliacao_em >= $2::timestamptz)
-                      AND ($3::timestamptz IS NULL OR avaliacao_em < $3::timestamptz))::numeric(10,2)
+                    WHERE resolvido_em IS NOT NULL
+                      AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))::numeric(10,2)
                                                                         AS csat_media,
                   count(avaliacao_nota) FILTER (
-                    WHERE avaliacao_em IS NOT NULL
-                      AND ($2::timestamptz IS NULL OR avaliacao_em >= $2::timestamptz)
-                      AND ($3::timestamptz IS NULL OR avaliacao_em < $3::timestamptz))
+                    WHERE resolvido_em IS NOT NULL
+                      AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))
                                                                         AS csat_respostas,
                   avg(EXTRACT(EPOCH FROM (resolvido_em - created_at))) FILTER (
                     WHERE resolvido_em IS NOT NULL
@@ -192,17 +204,20 @@ class AdminRepo:
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
     ) -> dict[int, int]:
-        """Distribuição de notas CSAT do mês, ancorada em ``avaliacao_em`` (quando
-        o autor avaliou) — não em ``created_at`` do chamado, que podia ser de um
-        mês anterior ao da avaliação."""
+        """Distribuição de notas CSAT do mês, ancorada em ``resolvido_em`` — as
+        barras somam exatamente as ``csat_respostas`` do KPI "CSAT médio"
+        (:meth:`kpis`), que desde 2026-08-03 é a nota dos chamados RESOLVIDOS no
+        mês. Ancorar aqui em ``avaliacao_em`` faria o gráfico contar um conjunto
+        diferente do card logo acima dele."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """SELECT avaliacao_nota n, count(*) c FROM chamados
                     WHERE avaliacao_nota IS NOT NULL
                       AND chamado_principal_id IS NULL
                       AND ($1::uuid IS NULL OR departamento_id = $1::uuid)
-                      AND ($2::timestamptz IS NULL OR avaliacao_em >= $2::timestamptz)
-                      AND ($3::timestamptz IS NULL OR avaliacao_em < $3::timestamptz)
+                      AND resolvido_em IS NOT NULL
+                      AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz)
                     GROUP BY 1""",
                 departamento_id,
                 periodo_inicio,
@@ -253,9 +268,12 @@ class AdminRepo:
         o feedback qualitativo — não só a média. Nota sempre; comentário opcional.
         Inclui ``id`` do chamado para linkar direto ao detalhe (Workspace).
 
-        Período ancorado em ``avaliacao_em`` (quando o autor avaliou), não em
-        ``created_at`` do chamado — uma avaliação dada em junho sobre um chamado
-        aberto em maio deve aparecer no recorte de junho."""
+        Período ancorado em ``resolvido_em`` (mesmo critério do KPI e do gráfico
+        desde 2026-08-03): a lista é o feedback qualitativo POR TRÁS da média do
+        mês, então precisa listar os mesmos chamados que a média considera — uma
+        nota dada em julho sobre um chamado resolvido em junho é feedback do
+        atendimento de junho. A ordenação continua por ``avaliacao_em`` (mais
+        recentes primeiro), que é o que faz dela uma lista de "últimas"."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
@@ -267,8 +285,9 @@ class AdminRepo:
                  WHERE c.avaliacao_nota IS NOT NULL
                    AND c.chamado_principal_id IS NULL
                    AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
-                   AND ($3::timestamptz IS NULL OR c.avaliacao_em >= $3::timestamptz)
-                   AND ($4::timestamptz IS NULL OR c.avaliacao_em < $4::timestamptz)
+                   AND c.resolvido_em IS NOT NULL
+                   AND ($3::timestamptz IS NULL OR c.resolvido_em >= $3::timestamptz)
+                   AND ($4::timestamptz IS NULL OR c.resolvido_em < $4::timestamptz)
                  ORDER BY c.avaliacao_em DESC NULLS LAST
                  LIMIT $1
                 """,
@@ -288,7 +307,7 @@ class AdminRepo:
         """Chamados com uma nota de CSAT específica (1-5) — alimenta o modal que
         abre ao clicar numa barra do gráfico "Distribuição do CSAT".
 
-        Período ancorado em ``avaliacao_em`` — mesmo critério de
+        Período ancorado em ``resolvido_em`` — mesmo critério de
         :meth:`avaliacoes_recentes`/:meth:`csat_distribuicao`, para o modal bater
         com a barra que o usuário clicou."""
         busca_norm = f"%{busca.strip()}%" if busca and busca.strip() else None
@@ -303,8 +322,9 @@ class AdminRepo:
                  WHERE c.avaliacao_nota = $1
                    AND c.chamado_principal_id IS NULL
                    AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
-                   AND ($3::timestamptz IS NULL OR c.avaliacao_em >= $3::timestamptz)
-                   AND ($4::timestamptz IS NULL OR c.avaliacao_em < $4::timestamptz)
+                   AND c.resolvido_em IS NOT NULL
+                   AND ($3::timestamptz IS NULL OR c.resolvido_em >= $3::timestamptz)
+                   AND ($4::timestamptz IS NULL OR c.resolvido_em < $4::timestamptz)
                    AND ($5::text IS NULL OR c.codigo ILIKE $5 OR c.titulo ILIKE $5
                         OR autor.nome ILIKE $5)
                  ORDER BY c.avaliacao_em DESC NULLS LAST
@@ -582,13 +602,19 @@ class AdminRepo:
         linha a linha, e só as linhas realmente atrasadas.
 
         **Baseline histórico** (`marketing_volume_baseline`, migration `0069`,
-        pedido do usuário 2026-07-31): meses anteriores ao uso real do Portal
-        pelo Marketing (jan-mai/26 — o time controlava fora do sistema) têm
-        pouquíssimos chamados de verdade, o que fazia o gráfico "cair pra zero"
-        nesses meses mesmo tendo movimento real. Quando existe uma linha de
-        baseline pro mês, ela SUBSTITUI os números calculados da view (a
-        contagem por ticket não reflete o histórico pré-sistema); sem baseline,
-        segue vindo 100% da view, como sempre."""
+        pedido do usuário 2026-07-31; **junho/26 acrescentado pela `0073`**,
+        2026-08-03): meses anteriores ao uso real do Portal pelo Marketing
+        (jan-jun/26 — o time controlava fora do sistema) têm pouquíssimos
+        chamados de verdade, o que fazia o gráfico "cair pra zero" nesses meses
+        mesmo tendo movimento real. Quando existe uma linha de baseline pro mês,
+        ela SUBSTITUI os números calculados da view (a contagem por ticket não
+        reflete o histórico pré-sistema); sem baseline, segue vindo 100% da
+        view, como sempre.
+
+        **`operadorByMonth`** (pedido do usuário 2026-08-03): chamados atendidos
+        por operador do Marketing, por mês. Só sai de chamado REAL do Portal —
+        os meses de baseline não têm essa informação (o agregado pré-sistema não
+        guarda quem atendeu), então vêm vazios de propósito e a aba avisa isso."""
         async with rls_connection(claims) as conn:
             volume_rows = await conn.fetch(
                 """SELECT mes, total, concluidas, abertas, em_andamento, volume,
@@ -620,6 +646,35 @@ class AdminRepo:
                           mkt_orig, sol_orig, tempo_medio, atrasos
                      FROM marketing_volume_baseline ORDER BY mes ASC"""
             )
+            # Chamados atendidos por operador (pedido do usuário 2026-08-03).
+            # `JOIN perfis` (não LEFT): chamado sem operador não vira barra
+            # "Sem operador" — a aba é sobre quem atendeu, e no Marketing a
+            # maior parte da fila entra sem dono até alguém pegar.
+            # `Admin Marketing` fora por nome: é a conta ADMIN genérica do
+            # setor, não uma pessoa que atende (mesmo padrão de lookup por
+            # nome do perfil de serviço "Assistente IA", ver
+            # `supabase/registro_usuarios.sql`) — filtrar por `role` não
+            # serviria, porque Felipe também é ADMIN.
+            # Mês ancorado em `created_at` (quando a demanda entrou), com os
+            # resolvidos contados DENTRO desse mesmo grupo: "das demandas que
+            # chegaram em julho, fulano pegou 46 e resolveu 37". Ancorar os
+            # dois lados em datas diferentes não caberia numa linha só.
+            operador_rows = await conn.fetch(
+                """
+                SELECT date_trunc('month', c.created_at AT TIME ZONE 'America/Sao_Paulo')::date AS mes,
+                       op.nome AS operador,
+                       count(*)                                          AS total,
+                       count(*) FILTER (WHERE c.status = 'RESOLVIDO')    AS resolvidos
+                  FROM chamados c
+                  JOIN departamentos d ON d.id = c.departamento_id
+                  JOIN perfis op ON op.id = c.operador_id
+                 WHERE d.nome = 'Marketing'
+                   AND c.chamado_principal_id IS NULL
+                   AND op.nome <> 'Admin Marketing'
+                 GROUP BY 1, 2
+                 ORDER BY 1, 2
+                """
+            )
 
         volume_por_mes = {r["mes"]: dict(r) for r in volume_rows}
         midia_list = [dict(r) for r in midia_rows]
@@ -632,6 +687,7 @@ class AdminRepo:
 
         monthly_list = []
         dept_by_month: dict[str, dict[str, int]] = {}
+        operador_by_month: dict[str, dict[str, dict[str, int]]] = {}
         for mes in todos_meses:
             label = self._mes_label(mes)
             # Baseline tem prioridade sobre a view — ver docstring do método.
@@ -656,11 +712,26 @@ class AdminRepo:
                 "atrasos": v["atrasos"] if v else 0,
                 "pct_conc": round(100.0 * concluidas / total, 1) if total else 0.0,
                 "pct_mkt": round(100.0 * mkt_orig / total, 1) if total else 0.0,
+                # Mês cujos números vêm do histórico pré-sistema, não de
+                # chamado do Portal. O front usa isso pra avisar onde as
+                # quebras que dependem de ticket (quem atendeu, setor
+                # solicitante) não têm como existir — jan-jun/26 TEM alguns
+                # chamados reais soltos, então "operador vazio" não é sinal
+                # confiável de mês pré-sistema.
+                "baseline": mes in baseline_por_mes,
             })
             # Ranking por setor solicitante só existe a partir de chamado real
             # (0032) — meses cobertos só por baseline ficam sem essa quebra.
             dept_by_month[label] = {
                 r["setor"]: r["total"] for r in setor_rows if r["mes"] == mes
+            }
+            # Mesma limitação do ranking por setor: quem atendeu só existe em
+            # chamado real do Portal. Os meses de baseline (jan-jun/26) ficam
+            # com o dicionário vazio, e o front avisa na própria aba.
+            operador_by_month[label] = {
+                r["operador"]: {"total": r["total"], "resolvidos": r["resolvidos"]}
+                for r in operador_rows
+                if r["mes"] == mes
             }
 
         atrasos_data = [
@@ -684,6 +755,7 @@ class AdminRepo:
         return {
             "monthly": monthly_list,
             "deptByMonth": dept_by_month,
+            "operadorByMonth": operador_by_month,
             "atrasosData": atrasos_data,
             "midia": midia_final,
         }

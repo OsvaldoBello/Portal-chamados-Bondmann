@@ -273,9 +273,13 @@ async def dashboard(
     # nunca escreve/apaga nada, é sempre um recorte por período em cima dos
     # chamados já existentes. Mês ausente/errado cai no atual. **2026-07-22:**
     # cada métrica ancora no seu próprio campo de data (AdminRepo.kpis) — volume
-    # aberto por `created_at`, resolvidos/TMA por `resolvido_em`, CSAT por
-    # `avaliacao_em` — não um único `created_at` pra tudo (um chamado aberto em
-    # maio e fechado em junho conta pra junho nos indicadores de fechamento).
+    # aberto por `created_at`, resolvidos/TMA/CSAT por `resolvido_em` — não um
+    # único `created_at` pra tudo (um chamado aberto em maio e fechado em junho
+    # conta pra junho nos indicadores de fechamento). **2026-08-03:** o CSAT
+    # saiu de `avaliacao_em` pra `resolvido_em` (pedido do usuário) — a nota é
+    # do atendimento entregue no mês, não do dia em que o autor clicou nas
+    # estrelas; vale pro KPI, pro gráfico de distribuição, pro modal de cada
+    # nota e pra lista "Últimas avaliações", todos sobre a mesma base.
     ano, mes = _parse_periodo(periodo)
     periodo_inicio, periodo_fim = _limites_periodo(ano, mes)
     periodo_str = f"{ano:04d}-{mes:02d}"
