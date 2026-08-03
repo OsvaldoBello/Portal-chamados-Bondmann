@@ -44,6 +44,15 @@
     return valor!=null ? valor.toFixed(1).replace(".",",")+" d" : "—";
   }
 
+  // Rótulo do mês corrente no MESMO formato do backend ("AGO/26" — ver
+  // `AdminRepo._mes_label`). Serve pra reconhecer o mês ainda em andamento na
+  // série e não compará-lo com meses fechados.
+  const MESES_LABEL=["JAN","FEV","MAR","ABR","MAI","JUN","JUL","AGO","SET","OUT","NOV","DEZ"];
+  function labelMesCorrente(){
+    const hoje=new Date();
+    return MESES_LABEL[hoje.getMonth()]+"/"+String(hoje.getFullYear()%100).padStart(2,"0");
+  }
+
   function setFilter(val, btn){
     activeFilter=val;
     document.querySelectorAll(".filter-pill").forEach(b=>{
@@ -240,7 +249,21 @@
       ["volume-total-nota","volume-crescimento-nota","volume-razao-mes-nota"].forEach(id=>setTexto(id,"—"));
       return;
     }
-    const ultimo=d[d.length-1];
+    // Mês de referência dos cards "Crescimento" e "Razão do mês".
+    //
+    // No acumulado NÃO pode ser o último mês da série quando ele é o mês
+    // CORRENTE: comparar 3 dias de agosto contra julho inteiro dava
+    // "-99,0% (314 → 3)" — aritmeticamente certo, mas lido como colapso do
+    // time. Nesse caso a referência recua pro último mês FECHADO (pedido do
+    // usuário 2026-08-03). Quando o filtro aponta um mês específico, a
+    // escolha do usuário manda — inclusive se for o mês em curso.
+    const emCurso=labelMesCorrente();
+    let ref=d[d.length-1];
+    let correnteIgnorado=false;
+    if(activeFilter==="all" && d.length>1 && ref.label===emCurso){
+      ref=d[d.length-2];
+      correnteIgnorado=true;
+    }
     const vol=d.reduce((s,x)=>s+x.volume,0);
     const total=d.reduce((s,x)=>s+x.total,0);
 
@@ -255,17 +278,18 @@
     setTexto("volume-razao",total?"×"+(vol/total).toFixed(1).replace(".",","):"—");
     setTexto("volume-razao-nota",d.length===1?"Média do mês":"Média acumulada");
 
-    // Crescimento do último mês do período vs o mês imediatamente anterior da
+    // Crescimento do mês de referência vs o mês imediatamente anterior da
     // série. `null` de volume não existe aqui (a view/baseline sempre devolve
     // número), mas mês anterior com volume 0 daria divisão por zero.
-    const idxUltimo=monthly.findIndex(m=>m.label===ultimo.label);
-    const anterior=idxUltimo>0?monthly[idxUltimo-1]:null;
+    const idxRef=monthly.findIndex(m=>m.label===ref.label);
+    const anterior=idxRef>0?monthly[idxRef-1]:null;
     const cresEl=document.getElementById("volume-crescimento");
     if(anterior&&anterior.volume>0){
-      const pct=(ultimo.volume-anterior.volume)/anterior.volume*100;
+      const pct=(ref.volume-anterior.volume)/anterior.volume*100;
       setTexto("volume-crescimento",(pct>0?"+":"")+pct.toFixed(1).replace(".",",")+"%");
-      setTexto("volume-crescimento-rotulo","Crescimento "+ultimo.label+" vs "+anterior.label);
-      setTexto("volume-crescimento-nota",anterior.volume+" → "+ultimo.volume);
+      setTexto("volume-crescimento-rotulo","Crescimento "+ref.label+" vs "+anterior.label);
+      setTexto("volume-crescimento-nota",anterior.volume+" → "+ref.volume
+        +(correnteIgnorado?" · "+emCurso+" em curso":""));
       if(cresEl){
         cresEl.classList.toggle("text-red-600",pct<0);
         cresEl.classList.toggle("text-brandgreen-700",pct>=0);
@@ -280,9 +304,12 @@
       }
     }
 
-    setTexto("volume-razao-mes",ultimo.total?"×"+(ultimo.volume/ultimo.total).toFixed(1).replace(".",","):"—");
-    setTexto("volume-razao-mes-rotulo","Razão "+ultimo.label);
-    setTexto("volume-razao-mes-nota",ultimo.volume+" vol · "+ultimo.total+" demandas");
+    // Mesma referência do crescimento: os dois cards falam do "último mês", e
+    // apontar para meses diferentes lado a lado seria pior que o problema
+    // original. O rótulo sempre nomeia o mês, então não há ambiguidade.
+    setTexto("volume-razao-mes",ref.total?"×"+(ref.volume/ref.total).toFixed(1).replace(".",","):"—");
+    setTexto("volume-razao-mes-rotulo","Razão "+ref.label);
+    setTexto("volume-razao-mes-nota",ref.volume+" vol · "+ref.total+" demandas");
   }
 
   function renderOrigem(){
