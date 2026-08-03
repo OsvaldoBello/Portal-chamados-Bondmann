@@ -15,16 +15,11 @@
   const monthly = mktData.monthly || [];
   const deptByMonth = mktData.deptByMonth || {};
   const operadorByMonth = mktData.operadorByMonth || {};
+  const resolvidosSemOperador = mktData.resolvidosSemOperadorByMonth || {};
   const atrasosData = mktData.atrasosData || [];
   const midia = mktData.midia || { meses: [], investimento: [], regioes: [], descontinuidades: [], aderencias: [] };
 
   const causaLabels = ["Sem causa registrada", "Aguardando definição interna", "Dependência de execução"];
-
-  // Balde do histórico pré-Portal no ranking de solicitantes (ver
-  // `AdminRepo.ROTULO_SETOR_PRE_PORTAL` — o texto precisa bater com o do
-  // backend). Aparece como barra, mas não disputa "Maior solicitante": não é
-  // um setor, é a demanda cujo setor de origem o controle antigo não guardou.
-  const SETOR_PRE_PORTAL = "Outros setores (pré-Portal)";
 
   // ─── FILTER ───────────────────────────────────────────────────────────
   let activeFilter = "all";
@@ -105,9 +100,7 @@
     const filtLabels=d.map(x=>x.label);
     const agg={};
     filtLabels.forEach(l=>Object.entries(deptByMonth[l]||{}).forEach(([k,v])=>{agg[k]=(agg[k]||0)+v;}));
-    // "Maior solicitante" ignora o balde pré-Portal — ele não é um setor.
-    const top=Object.entries(agg).filter(([k])=>k!==SETOR_PRE_PORTAL)
-      .sort((a,b)=>b[1]-a[1])[0]||["—",0];
+    const top=Object.entries(agg).sort((a,b)=>b[1]-a[1])[0]||["—",0];
     const nAtr=atrasosData.filter(a=>filtLabels.includes(a.mes)).length;
     const pctAtr=total?(nAtr/total*100).toFixed(1):"0";
 
@@ -335,20 +328,21 @@
     filtLabels.forEach(l=>Object.entries(deptByMonth[l]||{}).forEach(([k,v])=>{agg[k]=(agg[k]||0)+v;}));
     const keys=Object.keys(agg).sort((a,b)=>agg[b]-agg[a]);
     const vals=keys.map(k=>agg[k]);
-    // O balde pré-Portal ganha cor neutra (cinza) mesmo se ficar no topo do
-    // ranking — não é um setor competindo com os outros.
-    const colors=keys.map((k,i)=>k===SETOR_PRE_PORTAL?"rgba(136,135,128,0.55)"
-      :i===0?"#1D9E75":i===1?"#378ADD":"rgba(83,74,183,0.65)");
+    const colors=vals.map((_,i)=>i===0?"#1D9E75":i===1?"#378ADD":"rgba(83,74,183,0.65)");
     const aviso=document.getElementById("dept-aviso");
     if(aviso){
       // A barra do Marketing sai de `mkt_orig` (mesma série da aba 3), então
-      // fecha com a Origem da Demanda por construção. Vale dizer isso na tela
-      // — foi exatamente a divergência que o usuário reportou.
-      aviso.textContent=agg[SETOR_PRE_PORTAL]
-        ? "A barra do Marketing é a mesma série da aba \"3. Origem da Demanda\". "
-          + "\"" + SETOR_PRE_PORTAL + "\" reúne a demanda solicitada nos meses anteriores ao Portal, "
-          + "cujo setor de origem o controle da época não registrava."
-        : "A barra do Marketing é a mesma série da aba \"3. Origem da Demanda\".";
+      // fecha com a Origem da Demanda por construção — foi exatamente a
+      // divergência que o usuário reportou. Os demais setores só têm quebra a
+      // partir de chamado do Portal; dizer isso evita a leitura de que o
+      // Marketing "explodiu" em relação aos outros.
+      const preSistema=filteredMonthly().filter(m=>m.baseline).map(m=>m.label);
+      aviso.textContent="A barra do Marketing é a mesma série da aba \"3. Origem da Demanda\"."
+        +(preSistema.length
+          ? " Os demais setores só aparecem a partir dos chamados do Portal — em "
+            +preSistema.join(" · ")+" o controle da época registrava só o total solicitado,"
+            +" sem o setor de origem."
+          : "");
     }
     mkChart("chartDept",{type:"bar",data:{labels:keys,datasets:[{label:"Demandas",data:vals,backgroundColor:colors,borderRadius:5}]},
       options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},pill:{}},
@@ -425,8 +419,8 @@
     const agg={};
     labels.forEach(l=>{
       Object.entries(operadorByMonth[l]||{}).forEach(([nome,v])=>{
-        if(!agg[nome]) agg[nome]={total:0,resolvidos:0};
-        agg[nome].total+=v.total;
+        if(!agg[nome]) agg[nome]={atendidos:0,resolvidos:0};
+        agg[nome].atendidos+=v.atendidos;
         agg[nome].resolvidos+=v.resolvidos;
       });
     });
@@ -436,10 +430,12 @@
   function renderOperador(){
     const labels=filteredMonthly().map(m=>m.label);
     const agg=agregarOperadores(labels);
-    const nomes=Object.keys(agg).sort((a,b)=>agg[b].total-agg[a].total);
+    const nomes=Object.keys(agg).sort((a,b)=>agg[b].atendidos-agg[a].atendidos);
     mkChart("chartOperador",{type:"bar",data:{labels:nomes,datasets:[
-      {label:"Atendidos",data:nomes.map(n=>agg[n].total),backgroundColor:"#534AB7",borderRadius:5},
-      {label:"Resolvidos",data:nomes.map(n=>agg[n].resolvidos),backgroundColor:"#1D9E75",borderRadius:5}
+      {label:"Atendidos (abertos no período)",data:nomes.map(n=>agg[n].atendidos),
+       backgroundColor:"#534AB7",borderRadius:5},
+      {label:"Resolvidos (fechados no período)",data:nomes.map(n=>agg[n].resolvidos),
+       backgroundColor:"#1D9E75",borderRadius:5}
     ]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,
       plugins:{legend:{position:"top"},pill:{}},
       scales:{x:{beginAtZero:true,ticks:{precision:0}},y:{ticks:{font:{size:11}}}}}});
@@ -449,19 +445,25 @@
     const labels=filteredMonthly().map(m=>m.label);
     const agg=agregarOperadores(labels);
     const nomes=Object.keys(agg).sort((a,b)=>agg[b].total-agg[a].total);
-    const atendidos=nomes.reduce((s,n)=>s+agg[n].total,0);
+    const atendidos=nomes.reduce((s,n)=>s+agg[n].atendidos,0);
     const resolvidos=nomes.reduce((s,n)=>s+agg[n].resolvidos,0);
+    const orfaos=labels.reduce((s,l)=>s+(resolvidosSemOperador[l]||0),0);
     const setTexto=(id,txt)=>{const el=document.getElementById(id);if(el)el.textContent=txt;};
 
     setTexto("operador-atendidos",atendidos);
     setTexto("operador-atendidos-nota",labels.length===1?labels[0]:"Período selecionado");
     setTexto("operador-resolvidos",resolvidos);
-    setTexto("operador-resolvidos-nota",
-      atendidos?(resolvidos/atendidos*100).toFixed(1).replace(".",",")+"% dos atendidos":"—");
+    // A nota fecha a conta com as "Concluídas" do período em vez de mostrar um
+    // percentual sobre "atendidos" — desde a correção de âncora os dois números
+    // respondem perguntas diferentes (entrou no mês × foi fechado no mês) e a
+    // razão entre eles não significava nada.
+    setTexto("operador-resolvidos-nota", orfaos
+      ? "+ "+orfaos+" sem operador = "+(resolvidos+orfaos)+" concluídas no período"
+      : "Total de concluídas no período");
     setTexto("operador-qtd",nomes.length);
     if(nomes.length){
       setTexto("operador-top",nomes[0]);
-      setTexto("operador-top-nota",agg[nomes[0]].total+" atendidos · "+agg[nomes[0]].resolvidos+" resolvidos");
+      setTexto("operador-top-nota",agg[nomes[0]].atendidos+" atendidos · "+agg[nomes[0]].resolvidos+" resolvidos");
     }else{
       setTexto("operador-top","—");
       setTexto("operador-top-nota","Nenhum chamado com operador no período");

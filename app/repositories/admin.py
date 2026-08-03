@@ -586,12 +586,6 @@ class AdminRepo:
     _MESES_MAP = {1: "JAN", 2: "FEV", 3: "MAR", 4: "ABR", 5: "MAI", 6: "JUN",
                   7: "JUL", 8: "AGO", 9: "SET", 10: "OUT", 11: "NOV", 12: "DEZ"}
 
-    #: Balde do ranking de solicitantes para a demanda cujo setor de origem o
-    #: histórico pré-Portal não guardou (a baseline só tem o total `sol_orig`,
-    #: sem quebra por setor). Não é um setor de verdade — o front tira ele da
-    #: disputa de "Maior solicitante" por este mesmo rótulo.
-    ROTULO_SETOR_PRE_PORTAL = "Outros setores (pré-Portal)"
-
     @classmethod
     def _mes_label(cls, d) -> str:
         """"JAN/26" a partir de um `date`/`datetime` (dia 1 do mês)."""
@@ -618,9 +612,13 @@ class AdminRepo:
         view, como sempre.
 
         **`operadorByMonth`** (pedido do usuário 2026-08-03): chamados atendidos
-        por operador do Marketing, por mês. Só sai de chamado REAL do Portal —
-        os meses de baseline não têm essa informação (o agregado pré-sistema não
-        guarda quem atendeu), então vêm vazios de propósito e a aba avisa isso."""
+        por operador do Marketing, por mês, com ``atendidos`` ancorado em
+        ``created_at`` e ``resolvidos`` em ``resolvido_em`` (ver o comentário na
+        query). Só sai de chamado REAL do Portal — os meses de baseline não têm
+        essa informação (o agregado pré-sistema não guarda quem atendeu), então
+        vêm vazios de propósito e a aba avisa isso.
+        ``resolvidosSemOperadorByMonth`` acompanha, para a soma das barras mais
+        os órfãos fechar com as "Concluídas" do mês."""
         async with rls_connection(claims) as conn:
             volume_rows = await conn.fetch(
                 """SELECT mes, total, concluidas, abertas, em_andamento, volume,
@@ -661,24 +659,72 @@ class AdminRepo:
             # nome do perfil de serviço "Assistente IA", ver
             # `supabase/registro_usuarios.sql`) — filtrar por `role` não
             # serviria, porque Felipe também é ADMIN.
-            # Mês ancorado em `created_at` (quando a demanda entrou), com os
-            # resolvidos contados DENTRO desse mesmo grupo: "das demandas que
-            # chegaram em julho, fulano pegou 46 e resolveu 37". Ancorar os
-            # dois lados em datas diferentes não caberia numa linha só.
+            #
+            # 🔁 2026-08-03 — **cada métrica no seu próprio mês** (bug real
+            # reportado pelo usuário: "não está batendo"). A primeira versão
+            # ancorava as DUAS em `created_at` e contava `status='RESOLVIDO'`
+            # dentro do mês de abertura. Resultado: a aba dizia "JAN: 2
+            # resolvidos" enquanto o dashboard dizia "0 concluídas em janeiro"
+            # (os 2 foram abertos em janeiro mas só resolvidos em julho), e
+            # dizia 42 resolvidos em julho contra 51 concluídas — os 6 de
+            # julho abertos em meses anteriores caíam no mês errado.
+            #
+            #   atendidos  → `created_at`   (demanda que ENTROU no mês e é dele)
+            #   resolvidos → `resolvido_em` (demanda que ELE FECHOU no mês)
+            #
+            # É a mesma separação de âncora que `kpis`/`produtividade` já fazem
+            # (Seção "Ancoragem por métrica"), e é o que faz os resolvidos
+            # baterem com as "Concluídas" do mesmo mês. Consequência esperada:
+            # num mês os resolvidos podem passar os atendidos (fechou coisa que
+            # entrou antes) — os rótulos do gráfico dizem isso.
             operador_rows = await conn.fetch(
                 """
-                SELECT date_trunc('month', c.created_at AT TIME ZONE 'America/Sao_Paulo')::date AS mes,
-                       op.nome AS operador,
-                       count(*)                                          AS total,
-                       count(*) FILTER (WHERE c.status = 'RESOLVIDO')    AS resolvidos
-                  FROM chamados c
-                  JOIN departamentos d ON d.id = c.departamento_id
-                  JOIN perfis op ON op.id = c.operador_id
-                 WHERE d.nome = 'Marketing'
-                   AND c.chamado_principal_id IS NULL
-                   AND op.nome <> 'Admin Marketing'
+                SELECT mes, operador,
+                       sum(atendidos)::int  AS atendidos,
+                       sum(resolvidos)::int AS resolvidos
+                  FROM (
+                    SELECT date_trunc('month', c.created_at AT TIME ZONE 'America/Sao_Paulo')::date AS mes,
+                           op.nome AS operador, count(*) AS atendidos, 0 AS resolvidos
+                      FROM chamados c
+                      JOIN departamentos d ON d.id = c.departamento_id
+                      JOIN perfis op ON op.id = c.operador_id
+                     WHERE d.nome = 'Marketing'
+                       AND c.chamado_principal_id IS NULL
+                       AND op.nome <> 'Admin Marketing'
+                     GROUP BY 1, 2
+                    UNION ALL
+                    SELECT date_trunc('month', c.resolvido_em AT TIME ZONE 'America/Sao_Paulo')::date,
+                           op.nome, 0, count(*)
+                      FROM chamados c
+                      JOIN departamentos d ON d.id = c.departamento_id
+                      JOIN perfis op ON op.id = c.operador_id
+                     WHERE d.nome = 'Marketing'
+                       AND c.chamado_principal_id IS NULL
+                       AND op.nome <> 'Admin Marketing'
+                       AND c.resolvido_em IS NOT NULL
+                     GROUP BY 1, 2
+                  ) t
                  GROUP BY 1, 2
                  ORDER BY 1, 2
+                """
+            )
+            # Resolvidos do mês que NÃO aparecem em barra nenhuma: sem operador
+            # atribuído ou fechados pela conta genérica. Existem de verdade (3
+            # em julho/26) e são exatamente a diferença entre a soma das barras
+            # e as "Concluídas" do mês — o card mostra isso pra conta fechar na
+            # tela, em vez de deixar o usuário procurando o furo.
+            resolvidos_orfaos_rows = await conn.fetch(
+                """
+                SELECT date_trunc('month', c.resolvido_em AT TIME ZONE 'America/Sao_Paulo')::date AS mes,
+                       count(*) AS n
+                  FROM chamados c
+                  JOIN departamentos d ON d.id = c.departamento_id
+                  LEFT JOIN perfis op ON op.id = c.operador_id
+                 WHERE d.nome = 'Marketing'
+                   AND c.chamado_principal_id IS NULL
+                   AND c.resolvido_em IS NOT NULL
+                   AND (op.nome IS NULL OR op.nome = 'Admin Marketing')
+                 GROUP BY 1
                 """
             )
 
@@ -694,6 +740,7 @@ class AdminRepo:
         monthly_list = []
         dept_by_month: dict[str, dict[str, int]] = {}
         operador_by_month: dict[str, dict[str, dict[str, int]]] = {}
+        resolvidos_orfaos_by_month: dict[str, int] = {}
         for mes in todos_meses:
             label = self._mes_label(mes)
             # Baseline tem prioridade sobre a view — ver docstring do método.
@@ -739,34 +786,29 @@ class AdminRepo:
             # `mkt_orig` aqui não muda nada no que já era real: só completa os
             # meses pré-Portal. Continua 100% derivado dos dados — chamado
             # novo entra no número sem ninguém tocar em nada.
+            #
+            # Os DEMAIS setores continuam vindo só da view: a baseline guarda
+            # `sol_orig` como total, sem quebra por setor, e não há como
+            # distribuir isso entre RH/SIG/Químico sem inventar número.
             setores_mes = {
                 r["setor"]: r["total"] for r in setor_rows if r["mes"] == mes
             }
-            # `sol_orig` do mês menos o que a view já atribuiu a setores
-            # concretos = demanda solicitada cujo setor de origem o histórico
-            # pré-Portal não guardou. Sem essa barra o gráfico ficaria
-            # desonesto: o Marketing passaria a somar 8 meses enquanto todos os
-            # outros somam só os 2 meses de Portal, sugerindo que o Marketing é
-            # ~83% da demanda quando na verdade é ~48%. Zera sozinha nos meses
-            # reais (JUL: 27 - 27 = 0), então some do gráfico quando o período
-            # não inclui histórico.
-            outros_reais = sum(t for s, t in setores_mes.items() if s != "Marketing")
             if mkt_orig:
                 setores_mes["Marketing"] = mkt_orig
             else:
                 setores_mes.pop("Marketing", None)
-            resto_historico = (v["sol_orig"] if v else 0) - outros_reais
-            if resto_historico > 0:
-                setores_mes[self.ROTULO_SETOR_PRE_PORTAL] = resto_historico
             dept_by_month[label] = setores_mes
             # Mesma limitação do ranking por setor: quem atendeu só existe em
             # chamado real do Portal. Os meses de baseline (jan-jun/26) ficam
             # com o dicionário vazio, e o front avisa na própria aba.
             operador_by_month[label] = {
-                r["operador"]: {"total": r["total"], "resolvidos": r["resolvidos"]}
+                r["operador"]: {"atendidos": r["atendidos"], "resolvidos": r["resolvidos"]}
                 for r in operador_rows
                 if r["mes"] == mes
             }
+            resolvidos_orfaos_by_month[label] = next(
+                (r["n"] for r in resolvidos_orfaos_rows if r["mes"] == mes), 0
+            )
 
         atrasos_data = [
             {
@@ -790,6 +832,7 @@ class AdminRepo:
             "monthly": monthly_list,
             "deptByMonth": dept_by_month,
             "operadorByMonth": operador_by_month,
+            "resolvidosSemOperadorByMonth": resolvidos_orfaos_by_month,
             "atrasosData": atrasos_data,
             "midia": midia_final,
         }

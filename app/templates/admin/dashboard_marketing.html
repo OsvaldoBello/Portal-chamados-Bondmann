@@ -292,7 +292,9 @@
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Chamados Atendidos por Operador</h4>
     <p class="text-xs text-muted mb-4">
-      Demandas com operador responsável · atendidas vs resolvidas
+      <strong>Atendidos</strong> = demandas abertas no período e atribuídas ao operador ·
+      <strong>Resolvidos</strong> = demandas que ele fechou no período (mesmo critério de "Concluídas").
+      Num mês os resolvidos podem passar os atendidos, quando fecha demanda que entrou antes.
     </p>
     <div class="chart-box-md"><canvas id="chartOperador"></canvas></div>
     <p id="operador-aviso" class="text-[11px] text-muted mt-3"></p>

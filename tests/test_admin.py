@@ -189,9 +189,14 @@ class FakeAdmin:
             },
             # Só chamado real do Portal tem operador — mês de baseline vem
             # vazio de propósito (ver AdminRepo.mkt_dashboard_data).
+            # `atendidos` ancora em created_at e `resolvidos` em resolvido_em,
+            # por isso os dois não precisam fechar entre si no mesmo mês.
             "operadorByMonth": {
-                "JAN/26": {"Gabriela Pohlmann": {"total": 3, "resolvidos": 2}}
+                "JAN/26": {"Gabriela Pohlmann": {"atendidos": 3, "resolvidos": 2}}
             },
+            # Concluídas do mês sem operador atribuído: somadas aos resolvidos
+            # das barras, fecham com as "Concluídas" do período.
+            "resolvidosSemOperadorByMonth": {"JAN/26": 1},
             "atrasosData": [
                 {"nome": "Demanda A", "mes": "JAN/26", "dias": 6, "causa": "Sem causa registrada"}
             ],
@@ -554,6 +559,17 @@ def test_dashboard_marketing_aba_operadores():
         assert alvo in r.text
     assert "operadorByMonth" in r.text          # série serializada no #mkt-data
     assert "Gabriela Pohlmann" in r.text
+    # Bug reportado pelo usuário (2026-08-03): os resolvidos por operador
+    # estavam ancorados em `created_at` e contradiziam as "Concluídas" do mês
+    # (a aba dizia 2 resolvidos em JAN/26, o dashboard dizia 0). As duas
+    # métricas passam a ter âncoras próprias, então a série carrega as duas
+    # chaves separadas — `total` (nome antigo, uma métrica só) não volta.
+    dados = asyncio.run(FakeAdmin(is_ti=False).mkt_dashboard_data({}))
+    for _mes, ops in dados["operadorByMonth"].items():
+        for _nome, v in ops.items():
+            assert "atendidos" in v and "resolvidos" in v
+            assert "total" not in v
+    assert "resolvidosSemOperadorByMonth" in dados
 
 
 def test_gestao_mostra_crud_de_midia_regional():
