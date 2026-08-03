@@ -374,7 +374,16 @@ async def kanban(
         # entrega): aqui o que importa é destacar quem terminou por último, não
         # o prazo (já cumprido). Mais recente concluído primeiro.
         colunas["RESOLVIDO"].sort(key=lambda c: c["resolvido_em"] or c["created_at"], reverse=True)
-    stats = await repo.fila_stats(ctx.user.claims, departamento_id=dep_id)
+    # Contador do cabeçalho = nº de cartões REALMENTE na coluna, não um total
+    # solto do setor (bug reportado pelo usuário 2026-08-03: "filtro de data no
+    # kanban não está funcionando"). Os cartões filtravam, mas o badge vinha de
+    # `fila_stats`, que não recebe filtro nenhum — o quadro mudava e os números
+    # ficavam parados, então parecia que o filtro não tinha efeito. Contar a
+    # partir de `colunas` acerta para TODOS os filtros de uma vez, inclusive o
+    # de SLA, que é aplicado em Python (`_aplicar_sla`) e nunca poderia entrar
+    # numa contagem feita no banco.
+    stats = {s: len(colunas[s]) for s in status_list}
+    stats["total"] = sum(stats.values())
     categorias, operadores = await _opcoes_filtro(ctx, repo)
     setores = await repo.setores_ativos(ctx.user.claims, dep_id)
     tem_filtro = any([

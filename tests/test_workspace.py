@@ -313,6 +313,42 @@ def test_kanban_repassa_filtros_para_o_repo():
     assert "limpar filtros" in r.text
 
 
+def _badge_da_coluna(html: str, status: str) -> int:
+    """Número no cabeçalho da coluna `status` do Kanban."""
+    import re
+
+    col = html.index(f'data-status="{status}"')
+    header = html.rindex("<header", 0, col)
+    achados = re.findall(r">(\d+)</span>", html[header:col])
+    assert achados, f"badge da coluna {status} não encontrado"
+    return int(achados[-1])
+
+
+def test_kanban_contador_da_coluna_segue_os_filtros():
+    """Bug reportado pelo usuário (2026-08-03): "filtro de data no kanban não
+    está funcionando". Os cartões filtravam de verdade, mas o número no
+    cabeçalho de cada coluna vinha de `fila_stats`, que não recebe filtro
+    nenhum — o quadro mudava e os contadores ficavam parados, então na tela
+    parecia que o filtro não tinha efeito.
+
+    O contador passa a ser o nº de cartões da coluna. Aqui o repo devolve só um
+    chamado NOVO (como se o filtro de data tivesse cortado o resto), enquanto
+    `fila_stats` continua dizendo que há 1 EM_ATENDIMENTO — se o badge voltar a
+    ler `fila_stats`, EM_ATENDIMENTO volta a marcar 1 e este teste quebra."""
+
+    class FakeRepoUmChamado(FakeRepo):
+        async def fila(self, claims, **kw):
+            self.fila_filtros = kw
+            return [_chamado(id="c1", codigo="BOND-2026-00001", status="NOVO")]
+
+    with ws_client(FakeRepoUmChamado()) as c:
+        r = c.get("/workspace/kanban", params={"data_de": "2026-07-01", "data_ate": "2026-07-31"})
+    assert r.status_code == 200
+    assert _badge_da_coluna(r.text, "NOVO") == 1
+    assert _badge_da_coluna(r.text, "EM_ATENDIMENTO") == 0
+    assert _badge_da_coluna(r.text, "RESOLVIDO") == 0
+
+
 def test_kanban_sem_filtro_nao_mostra_link_de_limpar():
     with ws_client(FakeRepo()) as c:
         r = c.get("/workspace/kanban")
