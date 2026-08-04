@@ -356,6 +356,134 @@ def test_kanban_sem_filtro_nao_mostra_link_de_limpar():
     assert "limpar filtros" not in r.text
 
 
+# ---------------------------------------------------------------------------
+# Filtros do Kanban — revisão completa (2026-08-04)
+# ---------------------------------------------------------------------------
+def _form_de_filtros(html: str) -> str:
+    """Trecho do `<form>` de filtros do Kanban/Fila (o primeiro da página)."""
+    ini = html.index("<form method=\"get\"")
+    return html[ini:html.index("</form>", ini)]
+
+
+def test_kanban_form_de_filtros_tem_botao_de_enviar():
+    """Regressão do bug reportado 2026-08-04 ("o filtro de data do Kanban não é
+    funcional"): o form só tinha `data-autosubmit`, que depende do evento
+    `change`. Num `<input type="date">` o `change` só dispara com a data
+    completa e válida, e a submissão implícita do Enter não funciona num form
+    sem botão que tenha mais de um campo de texto/data — eram três (busca +
+    duas datas). Sem o botão, o período simplesmente não era aplicado, enquanto
+    os selects (que sempre disparam `change`) funcionavam."""
+    with ws_client(FakeRepo()) as c:
+        r = c.get("/workspace/kanban")
+    form = _form_de_filtros(r.text)
+    assert 'type="submit"' in form
+    assert "Filtrar" in form
+    assert 'name="data_de"' in form and 'name="data_ate"' in form
+
+
+def test_fila_lista_form_de_filtros_tem_botao_de_enviar():
+    with ws_client(FakeRepo()) as c:
+        r = c.get("/workspace")
+    form = _form_de_filtros(r.text)
+    assert 'type="submit"' in form
+    assert "Filtrar" in form
+
+
+def test_kanban_repassa_busca_para_o_repo():
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        r = c.get("/workspace/kanban", params={"busca": "  impressora  "})
+    assert r.status_code == 200
+    assert repo.fila_filtros["busca"] == "impressora"  # normalizada (strip)
+    assert "limpar filtros" in r.text
+
+
+def test_kanban_filtro_de_sla_e_aplicado_em_python():
+    """O SLA não vai ao SQL (depende de `estado_sla`, calculado no domínio): a
+    rota filtra a lista devolvida pelo repo. O FakeRepo devolve 3 chamados com
+    ~1h de folga numa janela de 21h (<10% → "atrasado"/danger), então só o
+    recorte `atrasado` mantém cartões."""
+    with ws_client(FakeRepo()) as c:
+        atrasado = c.get("/workspace/kanban", params={"sla": "atrasado"})
+        no_prazo = c.get("/workspace/kanban", params={"sla": "no_prazo"})
+    assert "BOND-2026-00001" in atrasado.text
+    assert "BOND-2026-00001" not in no_prazo.text
+    assert _badge_da_coluna(no_prazo.text, "NOVO") == 0
+
+
+def test_kanban_valores_invalidos_de_filtro_sao_ignorados_sem_erro():
+    """Querystring é editável pelo usuário: prioridade/SLA fora do domínio não
+    podem virar 422 nem chegar ao SQL — viram "sem filtro"."""
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        r = c.get("/workspace/kanban", params={"prioridade": "URGENTÍSSIMA", "sla": "qualquer"})
+    assert r.status_code == 200
+    assert repo.fila_filtros["prioridade"] is None
+    assert "BOND-2026-00001" in r.text  # SLA inválido não filtrou nada
+
+
+def test_kanban_data_invalida_e_ignorada_com_aviso():
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        r = c.get("/workspace/kanban", params={"data_de": "2026-13-40"})
+    assert r.status_code == 200
+    assert repo.fila_filtros["data_de"] is None
+    assert "Data inválida" in r.text
+    assert "BOND-2026-00001" in r.text  # quadro segue completo
+
+
+def test_kanban_periodo_invertido_avisa_em_vez_de_quadro_vazio_mudo():
+    with ws_client(FakeRepo()) as c:
+        r = c.get("/workspace/kanban", params={"data_de": "2026-08-10", "data_ate": "2026-08-01"})
+    assert r.status_code == 200
+    assert "é posterior à final" in r.text
+
+
+def test_kanban_periodo_de_um_dia_so_chega_completo_ao_repo():
+    """De = Até (o caso "só hoje"): as duas pontas viajam; quem transforma isso
+    na janela de Brasília é `FilaRepo.fila` (ver tests/test_periodo.py)."""
+    from datetime import date
+
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        r = c.get("/workspace/kanban", params={"data_de": "2026-08-04", "data_ate": "2026-08-04"})
+    assert r.status_code == 200
+    assert repo.fila_filtros["data_de"] == date(2026, 8, 4)
+    assert repo.fila_filtros["data_ate"] == date(2026, 8, 4)
+
+
+def test_fila_lista_repassa_filtros_e_mostra_limpar():
+    """A Lista tem os mesmos filtros do Kanban menos período/setor. `tem_filtro`
+    nunca era passado à Lista — no Jinja o nome indefinido é falso em silêncio,
+    então o atalho "limpar filtros" não aparecia nunca."""
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        limpo = c.get("/workspace")
+        r = c.get("/workspace", params={
+            "categoria": "cat1", "prioridade": "baixa", "operador": "op1", "busca": "vpn",
+        })
+    assert r.status_code == 200
+    assert repo.fila_filtros["categoria_id"] == "cat1"
+    assert repo.fila_filtros["prioridade"] == "BAIXA"
+    assert repo.fila_filtros["operador_id"] == "op1"
+    assert repo.fila_filtros["busca"] == "vpn"
+    assert "limpar filtros" in r.text
+    assert "limpar filtros" not in limpo.text
+
+
+def test_fila_fragmento_preserva_os_filtros_no_etag_e_na_url():
+    """O polling do fragmento (15s) precisa carregar os mesmos filtros da tela,
+    senão a lista "volta" ao conjunto sem filtro no primeiro tick."""
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        pagina = c.get("/workspace", params={"categoria": "cat1", "busca": "vpn"})
+        frag = c.get("/workspace/fila/fragmento", params={"categoria": "cat1", "busca": "vpn"})
+    assert "categoria=cat1" in pagina.text and "busca=vpn" in pagina.text
+    assert frag.status_code == 200
+    assert repo.fila_filtros["categoria_id"] == "cat1"
+    assert repo.fila_filtros["busca"] == "vpn"
+
+
 def test_kanban_cartao_fora_do_setor_sem_drag_e_sem_excluir():
     """Sprint 1 / item 1.4 (M11): mesmo gate de permissão da tela de
     atendimento (dept_bate) aplicado à UI do Kanban — um cartão de outro

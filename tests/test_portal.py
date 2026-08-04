@@ -856,6 +856,17 @@ def test_dashboard_filtro_invalido_e_ignorado_em_vez_de_422():
     assert "Notebook novo" in resp.text
 
 
+def test_dashboard_periodo_invertido_avisa_em_vez_de_lista_vazia_muda():
+    """Início depois do fim devolve lista vazia legitimamente — sem aviso é
+    indistinguível de "não tenho chamado nesse período" (mesmo tratamento do
+    Kanban)."""
+    repo = _repo_com_historico()
+    with portal_client(repo) as client:
+        resp = client.get("/portal?data_de=2026-07-20&data_ate=2026-07-05")
+    assert resp.status_code == 200
+    assert "é posterior à final" in resp.text
+
+
 def test_dashboard_status_oferece_so_os_que_o_usuario_tem():
     repo = FakeRepo(chamados_meus=[_meus(1, "Vazamento na linha 3", "NOVO", 2)])
     with portal_client(repo) as client:

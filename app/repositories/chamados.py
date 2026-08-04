@@ -27,6 +27,7 @@ from datetime import date
 from typing import Any
 
 from app.db import rls_connection
+from app.domain.periodo import janela_utc
 from app.repositories.atendimento import STATUS_CHAMADO, AtendimentoRepo
 from app.repositories.catalogo import (
     CACHE_CATEGORIAS,
@@ -151,10 +152,13 @@ class ChamadosRepo:
         case-insensitive — o código entra porque é a coluna que o usuário tem à
         mão para procurar um chamado específico) e o período
         ``data_de``/``data_ate`` sobre `created_at`, inclusive nas duas pontas,
-        igual ao Kanban. O filtro de **status** não é feito aqui: ele é aplicado
-        na rota, depois dos contadores, para que os cartões continuem mostrando
-        quantos chamados existem em cada status dentro do período/busca."""
+        igual ao Kanban — e, como lá, ancorado no **dia em Brasília** que a tela
+        exibe (``app.domain.periodo.janela_utc``). O filtro de **status** não é
+        feito aqui: ele é aplicado na rota, depois dos contadores, para que os
+        cartões continuem mostrando quantos chamados existem em cada status
+        dentro do período/busca."""
         busca_norm = f"%{busca.strip()}%" if busca and busca.strip() else None
+        inicio, fim = janela_utc(data_de, data_ate)
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
@@ -167,8 +171,8 @@ class ChamadosRepo:
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                   LEFT JOIN chamados princ ON princ.id = c.chamado_principal_id
                  WHERE c.cliente_id = $1::uuid
-                   AND ($3::date IS NULL OR c.created_at >= $3::date)
-                   AND ($4::date IS NULL OR c.created_at < ($4::date + 1))
+                   AND ($3::timestamptz IS NULL OR c.created_at >= $3::timestamptz)
+                   AND ($4::timestamptz IS NULL OR c.created_at < $4::timestamptz)
                    AND ($5::text IS NULL
                         OR c.codigo ILIKE $5 OR c.titulo ILIKE $5 OR c.descricao ILIKE $5)
                  ORDER BY c.created_at DESC
@@ -176,8 +180,8 @@ class ChamadosRepo:
                 """,
                 claims["sub"],
                 limite,
-                data_de,
-                data_ate,
+                inicio,
+                fim,
                 busca_norm,
             )
             return [dict(r) for r in rows]

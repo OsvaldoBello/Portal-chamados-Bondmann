@@ -95,6 +95,13 @@
   {% endif %}
 </form>
 
+{% if periodo_invertido is defined and periodo_invertido %}
+<p class="mb-4 rounded-lg bg-st_aguard/10 ring-1 ring-st_aguard/20 px-3.5 py-2.5 text-sm text-navy-700">
+  A data inicial ({{ data_de_sel }}) é posterior à final ({{ data_ate_sel }}) — nenhum chamado pode
+  cair nesse período. Ajuste as datas.
+</p>
+{% endif %}
+
 <div class="bg-white rounded-xl shadow-card border border-line/60 overflow-hidden">
   {% if chamados %}
   <div class="overflow-x-auto">

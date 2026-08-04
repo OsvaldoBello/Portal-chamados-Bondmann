@@ -13,7 +13,18 @@
 </div>
 
 {# Filtros: período (data de abertura), setor, categoria, prioridade, operador e
-   SLA. Um único form GET autosubmit — mesmo padrão de app/templates/workspace/fila.html. #}
+   SLA. Um único form GET — mesmo padrão de app/templates/workspace/fila.html.
+
+   O botão "Filtrar" NÃO é decorativo (bug reportado 2026-08-04, "o filtro de
+   data do Kanban não é funcional"): `data-autosubmit` (shell.js) só envia no
+   evento `change`, que num `<input type="date">` só dispara quando a data fica
+   completa e válida — quem digita "04/08/20" e clica fora, ou usa um leitor de
+   tela/teclado, não dispara nada. E a submissão implícita do Enter não salva:
+   pela spec do HTML ela só acontece num form SEM submit quando existe **um
+   único** campo que a bloqueia, e aqui são três (busca + as duas datas). Sem
+   botão, o quadro simplesmente não reagia — enquanto os selects (que sempre
+   disparam `change`) funcionavam, que é exatamente o recorte do que foi
+   reportado. Mesmo botão já existente em portal/dashboard.html. #}
 {% set sla_labels = {"atrasado": "Atrasado / vencido", "risco": "Em risco", "no_prazo": "No prazo"} %}
 <form method="get" action="/workspace/kanban" class="mb-4 flex flex-wrap items-end gap-3">
   <label class="flex flex-col gap-1 flex-1 min-w-[220px]">
@@ -82,10 +93,27 @@
       {% endfor %}
     </select>
   </label>
+  <button type="submit"
+          class="px-3.5 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+    Filtrar
+  </button>
   {% if tem_filtro %}
   <a href="/workspace/kanban" class="text-sm text-muted hover:text-navy pb-2">limpar filtros</a>
   {% endif %}
 </form>
+
+{% if periodo_invertido %}
+{# Sem este aviso o quadro só fica vazio, o que é indistinguível de "não há
+   chamados no período" — a data inicial depois da final é erro de digitação. #}
+<p class="mb-4 rounded-lg bg-st_aguard/10 ring-1 ring-st_aguard/20 px-3.5 py-2.5 text-sm text-navy-700">
+  A data inicial ({{ data_de_sel }}) é posterior à final ({{ data_ate_sel }}) — nenhum chamado pode
+  cair nesse período. Ajuste as datas.
+</p>
+{% elif periodo_ignorado %}
+<p class="mb-4 rounded-lg bg-st_aguard/10 ring-1 ring-st_aguard/20 px-3.5 py-2.5 text-sm text-navy-700">
+  Data inválida no filtro de período — o quadro está sendo mostrado sem esse recorte.
+</p>
+{% endif %}
 
 <div id="kanban" class="flex flex-row gap-3 pb-4 items-stretch h-[calc(100vh-16rem)] min-h-[420px]">
   {% for s in status_validos %}

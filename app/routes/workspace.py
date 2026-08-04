@@ -30,6 +30,7 @@ from app.auth.dependencies import CurrentUser, require_role
 from app.config import get_settings
 from app.db import rls_request_scope
 from app.domain.formularios_quimico import rotular
+from app.domain.periodo import periodo_invertido
 from app.domain.sla_visual import estado_sla
 from app.repositories.chamados import (
     PRAZO_PROJETO_MAX_DIAS,
@@ -173,31 +174,43 @@ def _parse_filtros_kanban(
 
     Sem filtro de ``status``: no Kanban o status é escolhido implicitamente pela
     coluna, não por um seletor.
+
+    Data inválida (ex.: ``2026-13-40``, digitada direto na URL) é **ignorada**,
+    mas sinalizada em ``periodo_ignorado`` — antes o valor sumia em silêncio e a
+    tela ficava com um campo preenchido que não correspondia ao que estava sendo
+    mostrado. ``periodo_invertido`` marca início > fim, que devolve um quadro
+    legitimamente vazio e por isso precisa de aviso próprio.
     """
     from datetime import date
 
     prio = (prioridade or "").strip().upper()
     sla_v = (sla or "").strip()
+    ignorado = False
 
     def _data(v: str):
+        nonlocal ignorado
         v = (v or "").strip()
         if not v:
             return None
         try:
             return date.fromisoformat(v)
         except ValueError:
+            ignorado = True
             return None
 
+    de, ate = _data(data_de), _data(data_ate)
     return {
         "categoria_id": (categoria or "").strip() or None,
         "prioridade": prio if prio in PRIORIDADES else None,
         "operador_id": (operador or "").strip() or None,
         "sla": sla_v if sla_v in _SLA_FILTROS else "",
         "setor": (setor or "").strip() or None,
-        "data_de": _data(data_de),
-        "data_ate": _data(data_ate),
+        "data_de": de,
+        "data_ate": ate,
         "data_de_raw": (data_de or "").strip(),
         "data_ate_raw": (data_ate or "").strip(),
+        "periodo_ignorado": ignorado,
+        "periodo_invertido": periodo_invertido(de, ate),
         "busca": (busca or "").strip() or None,
     }
 
@@ -294,6 +307,15 @@ async def fila_lista(
             "busca_sel": f.get("busca") or "",
             "filtros_qs": _filtros_qs(f),
             "status_cards": status_cards,
+            # `tem_filtro` nunca era passado aqui: no Jinja o nome indefinido é
+            # falso silenciosamente, então o atalho "limpar filtros" da Lista
+            # não aparecia nunca (no Kanban, que passa a variável, aparecia).
+            # O status fica de fora de propósito — ele é escolhido pelos
+            # cartões de contagem, que têm seu próprio "Total" para limpar.
+            "tem_filtro": bool(
+                f["categoria_id"] or f["prioridade"] or f["operador_id"]
+                or f["sla"] or f.get("busca")
+            ),
         },
     )
 
@@ -412,6 +434,8 @@ async def kanban(
             "data_ate_sel": f["data_ate_raw"],
             "busca_sel": f["busca"] or "",
             "tem_filtro": tem_filtro,
+            "periodo_invertido": f["periodo_invertido"],
+            "periodo_ignorado": f["periodo_ignorado"],
         },
     )
 

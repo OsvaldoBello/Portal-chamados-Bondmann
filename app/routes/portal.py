@@ -45,6 +45,7 @@ from app.domain.formularios_quimico import (
     validar_payload,
     valores_para_template,
 )
+from app.domain.periodo import periodo_invertido
 from app.ia import triagem
 from app.ratelimit import limiter
 from app.repositories.chamados import (
@@ -133,13 +134,18 @@ def _parse_filtros_meus(status_: str, busca: str, data_de: str, data_ate: str) -
             return None
 
     st = (status_ or "").strip().upper()
+    de, ate = _data(data_de), _data(data_ate)
     return {
         "status": st if st in STATUS_CHAMADO else None,
         "busca": (busca or "").strip() or None,
-        "data_de": _data(data_de),
-        "data_ate": _data(data_ate),
+        "data_de": de,
+        "data_ate": ate,
         "data_de_raw": (data_de or "").strip(),
         "data_ate_raw": (data_ate or "").strip(),
+        # Início depois do fim devolve lista vazia legitimamente — sem aviso, é
+        # indistinguível de "não tenho chamado nenhum nesse período" (mesmo
+        # tratamento do Kanban).
+        "periodo_invertido": periodo_invertido(de, ate),
     }
 
 
@@ -215,6 +221,7 @@ async def dashboard(
             "tem_filtro": bool(
                 f["status"] or f["busca"] or f["data_de_raw"] or f["data_ate_raw"]
             ),
+            "periodo_invertido": f["periodo_invertido"],
             "qs_sem_status": _qs_meus(f, com_status=False),
         },
     )

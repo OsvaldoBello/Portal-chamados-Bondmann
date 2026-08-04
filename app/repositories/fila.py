@@ -11,6 +11,7 @@ from datetime import date
 from typing import Any
 
 from app.db import rls_connection
+from app.domain.periodo import janela_utc
 
 
 class FilaRepo:
@@ -88,11 +89,15 @@ class FilaRepo:
         (texto livre casado contra **assunto/título e descrição**, case-insensitive)
         e o período ``data_de``/``data_ate`` (sobre `created_at`, inclusive nas duas
         pontas — o filtro de SLA é aplicado na camada de rota, pois depende do
-        cálculo de estado do domínio). **Ordenação padrão: data de entrega (mais
-        próxima primeiro); sem data de entrega fica por último, por data de
-        abertura (mais recentes primeiro).**
+        cálculo de estado do domínio). O período é convertido para a janela UTC
+        correspondente ao **dia em Brasília** (``app.domain.periodo.janela_utc``),
+        que é o dia mostrado no cartão — comparar `timestamptz` com `::date` cru
+        usava o fuso da sessão do Postgres (UTC) e deslocava as bordas em 3h.
+        **Ordenação padrão: data de entrega (mais próxima primeiro); sem data de
+        entrega fica por último, por data de abertura (mais recentes primeiro).**
         """
         busca_norm = f"%{busca.strip()}%" if busca and busca.strip() else None
+        inicio, fim = janela_utc(data_de, data_ate)
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 self._FILA_COLUNAS
@@ -108,8 +113,8 @@ class FilaRepo:
                    AND ($4::prioridade_chamado IS NULL OR c.prioridade = $4::prioridade_chamado)
                    AND ($5::uuid IS NULL OR c.operador_id = $5::uuid)
                    AND ($7::text IS NULL OR c.setor = $7::text)
-                   AND ($8::date IS NULL OR c.created_at >= $8::date)
-                   AND ($9::date IS NULL OR c.created_at < ($9::date + 1))
+                   AND ($8::timestamptz IS NULL OR c.created_at >= $8::timestamptz)
+                   AND ($9::timestamptz IS NULL OR c.created_at < $9::timestamptz)
                    AND ($10::text IS NULL OR c.titulo ILIKE $10 OR c.descricao ILIKE $10)
                  ORDER BY c.data_entrega ASC NULLS LAST, c.created_at DESC
                  LIMIT $2
@@ -121,8 +126,8 @@ class FilaRepo:
                 operador_id,
                 departamento_id,
                 setor,
-                data_de,
-                data_ate,
+                inicio,
+                fim,
                 busca_norm,
             )
             return [dict(r) for r in rows]

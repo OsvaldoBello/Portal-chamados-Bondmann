@@ -78,6 +78,13 @@
       {% endfor %}
     </select>
   </label>
+  {# Botão explícito: os selects autosubmetem no `change`, mas a busca não —
+     digitar não dispara `change` a cada tecla (mesmo padrão do Kanban e de
+     "Meus chamados"). #}
+  <button type="submit"
+          class="px-3.5 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+    Filtrar
+  </button>
   {% if tem_filtro %}
   <a href="/workspace{% if filtro %}?status={{ filtro }}{% endif %}" class="text-sm text-muted hover:text-navy pb-2">limpar filtros</a>
   {% endif %}
