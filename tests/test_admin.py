@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 
@@ -1077,6 +1078,61 @@ def test_excluir_usuario_sucesso(monkeypatch):
                    follow_redirects=False)
     assert r.status_code == 303
     assert ("delete", "u1") in fake.admin_api.calls
+
+
+def test_export_html_do_painel_geral():
+    """Relatório visual (.html autocontido) do mês/setor da tela — pedido do
+    usuário 2026-08-04. Ver app/services/export_html.py e tests/test_export_html.py
+    (conteúdo/escapes); aqui é o contrato da rota."""
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin/export/html?periodo=2026-07")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert "attachment" in r.headers["content-disposition"]
+    assert ".html" in r.headers["content-disposition"]
+    assert "Julho de 2026" in r.text
+    assert "83.3%" in r.text                  # mesmos KPIs do painel
+    assert 'id="dados-graficos"' in r.text    # gráficos embutidos
+    assert not re.search(r"<script[^>]+\bsrc=", r.text)  # nada de /static
+
+
+def test_export_html_aparece_como_botao_no_painel():
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin?periodo=2026-07")
+    assert "/admin/export/html?periodo=2026-07" in r.text
+
+
+def test_export_html_do_marketing_respeita_o_periodo_da_tela():
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Marketing")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        acumulado = c.get("/admin/marketing/export/html?periodo=all")
+        mes = c.get("/admin/marketing/export/html?periodo=JAN/26")
+    assert acumulado.status_code == 200 and mes.status_code == 200
+    assert "Indicadores de Marketing" in acumulado.text
+    assert "Acumulado" in acumulado.text
+    assert "JAN/26" in mes.text
+
+
+def test_export_html_do_marketing_e_restrito_a_quem_ve_o_painel_dele():
+    with admin_client(FakeAdmin()) as c:  # TI
+        assert c.get("/admin/marketing/export/html").status_code == 403
+
+
+def test_export_html_do_marketing_sai_pela_rota_geral_tambem():
+    """Quem está no Marketing clica no mesmo botão do painel geral (`/admin`
+    redireciona pro dashboard de Marketing) — a exportação precisa acompanhar,
+    senão ele baixa um relatório de indicadores que não são os da sua tela."""
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Marketing")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin/export/html")
+    assert r.status_code == 200
+    assert "Indicadores de Marketing" in r.text
+
+
+def test_export_html_barra_quem_nao_acessa_o_painel():
+    perfil = FakePerfilRepo(is_ti=False, role="OPERADOR", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="OPERADOR"), perfil=perfil) as c:
+        assert c.get("/admin/export/html").status_code == 403
 
 
 def test_export_csv():

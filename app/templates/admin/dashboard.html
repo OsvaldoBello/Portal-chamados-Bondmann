@@ -57,6 +57,17 @@
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
     </a>
   </div>
+
+  {# Relatório visual do mês/setor que está na tela: KPIs, gráficos e as últimas
+     avaliações num .html autocontido (abre sem internet, imprime em PDF) — o
+     "Exportar CSV" da barra lateral leva chamados brutos, não os indicadores.
+     Ver app/services/export_html.py. #}
+  <a href="/admin/export/html?periodo={{ periodo }}"
+     class="ml-auto inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-navy-900 text-white font-semibold text-xs hover:bg-navy-800 transition"
+     title="Baixa os indicadores deste mês com os gráficos, para abrir no navegador ou salvar em PDF">
+    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
+    Relatório visual (.html)
+  </a>
 </div>
 
 {# KPIs — um único grid de 4 colunas: com o TI (8 métricas) fecham exatamente

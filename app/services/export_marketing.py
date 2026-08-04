@@ -35,13 +35,16 @@ _HEADER_FONT = Font(color="FFFFFFFF", bold=True)
 _TITLE_FONT = Font(bold=True, size=13, color="FF1A3A6B")
 
 
-def _filtrar_por_periodo(mkt_data: dict[str, Any], periodo: str) -> dict[str, Any]:
+def filtrar_por_periodo(mkt_data: dict[str, Any], periodo: str) -> dict[str, Any]:
     """``periodo`` = "all" (acumulado) ou o rótulo de um mês (ex. "JUL/26").
 
     Filtra `monthly`/`atrasosData`/`deptByMonth` pelo mesmo rótulo usado nos
     "pills" do dashboard. `midia` é indexado só por nome de mês, sem ano
     (mesma limitação de `admin_marketing.js::updateMidiaInsights` — casamento
-    pelo prefixo do rótulo, ex. "JUL/26" → "Jul")."""
+    pelo prefixo do rótulo, ex. "JUL/26" → "Jul").
+
+    Público (e não `_privado`) porque a exportação `.html` reaproveita este mesmo
+    recorte — os dois formatos precisam responder igual ao filtro da tela."""
     monthly = mkt_data.get("monthly", [])
     if periodo and periodo != "all":
         monthly = [m for m in monthly if m["label"] == periodo]
@@ -196,7 +199,7 @@ def gerar_workbook(mkt_data: dict[str, Any], periodo: str = "all") -> BytesIO:
     """``mkt_data`` = retorno de `AdminRepo.mkt_dashboard_data`; ``periodo`` =
     "all" ou o rótulo de um mês (mesmo valor do filtro da tela). Devolve os
     bytes do `.xlsx` prontos para a resposta HTTP."""
-    dados = _filtrar_por_periodo(mkt_data, periodo)
+    dados = filtrar_por_periodo(mkt_data, periodo)
     wb = Workbook()
     wb.remove(wb.active)  # aba padrão vazia — cada indicador ganha a sua
     _aba_resumo(wb, dados, periodo)

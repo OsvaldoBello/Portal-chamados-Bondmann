@@ -1,0 +1,172 @@
+{#
+  Relatório exportado (.html autocontido) — ver app/services/export_html.py.
+
+  NÃO estende o shell do app de propósito: este arquivo é baixado e aberto fora
+  do Portal (anexo de e-mail, pendrive, sem rede e sem sessão), então não pode
+  depender de /static, de cookie nem de CDN. CSS inline escrito à mão (única
+  exceção deliberada à regra "só utilitários Tailwind" — o CSS compilado é
+  purgado contra os templates do shell e não acompanha o arquivo) e Chart.js
+  colado inline a partir do mesmo bundle que o painel serve.
+#}<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ titulo }} — {{ escopo }} — {{ periodo }}</title>
+<style>
+  :root {
+    --navy: #2E466F; --navy-900: #1A3A6B; --verde: #7FA53D;
+    --ink: #1F2937; --muted: #6B7280; --faint: #9CA3AF;
+    --line: #E5E7EB; --surface: #F7F8FA; --surface2: #EEF1F5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 24px 64px;
+    background: var(--surface); color: var(--ink);
+    font-family: "Segoe UI", Inter, system-ui, -apple-system, Arial, sans-serif;
+    font-size: 14px; line-height: 1.5;
+  }
+  .folha { max-width: 1120px; margin: 0 auto; }
+  header.capa {
+    background: var(--navy-900); color: #fff; border-radius: 14px;
+    padding: 28px 32px; margin-bottom: 24px;
+  }
+  .marca { font-weight: 800; letter-spacing: .04em; font-size: 13px; color: #A9C46C; }
+  h1 { font-size: 26px; margin: 6px 0 10px; font-weight: 800; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.18);
+    border-radius: 999px; padding: 5px 13px; font-size: 12px; font-weight: 600;
+  }
+  h2.secao {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .09em;
+    color: var(--muted); font-weight: 800; margin: 32px 0 12px;
+  }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .kpi {
+    background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 18px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.05);
+  }
+  .kpi .valor { font-size: 27px; font-weight: 800; line-height: 1.15; }
+  .kpi .rotulo { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .kpi .nota { font-size: 11px; color: var(--faint); margin-top: 2px; }
+  .graficos { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .card {
+    background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 18px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.05); min-width: 0;
+  }
+  .card.largo { grid-column: 1 / -1; }
+  .card h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--navy); }
+  .card p.sub { margin: 3px 0 14px; font-size: 12px; color: var(--muted); }
+  .caixa-grafico { position: relative; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; background: var(--surface2); color: var(--muted);
+    font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+    padding: 9px 10px; border-bottom: 1px solid var(--line);
+  }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .rolagem { overflow-x: auto; }
+  footer {
+    margin-top: 36px; padding-top: 16px; border-top: 1px solid var(--line);
+    font-size: 12px; color: var(--faint); display: flex; flex-wrap: wrap;
+    gap: 8px; justify-content: space-between;
+  }
+  .vazio { color: var(--muted); font-size: 13px; }
+  @media (max-width: 900px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .graficos { grid-template-columns: 1fr; }
+  }
+  /* Ctrl+P → "Salvar como PDF" é como este relatório costuma ser arquivado. */
+  @media print {
+    body { background: #fff; padding: 0; font-size: 12px; }
+    .card, .kpi { box-shadow: none; break-inside: avoid; }
+    .card.largo, .card { page-break-inside: avoid; }
+    header.capa { border-radius: 0; }
+    h2.secao { break-after: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="folha">
+
+  <header class="capa">
+    <div class="marca">BONDMANN QUÍMICA · PORTAL DE CHAMADOS</div>
+    <h1>{{ titulo }}</h1>
+    <div class="chips">
+      <span class="chip">Setor: {{ escopo }}</span>
+      <span class="chip">Período: {{ periodo }}</span>
+      <span class="chip">Emitido em {{ gerado_em }}</span>
+    </div>
+  </header>
+
+  <h2 class="secao">Resumo</h2>
+  <div class="kpis">
+    {% for k in kpis %}
+    <div class="kpi">
+      <div class="valor" style="color: {{ k.cor }}">{{ k.valor }}</div>
+      <div class="rotulo">{{ k.rotulo }}</div>
+      {% if k.nota %}<div class="nota">{{ k.nota }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <h2 class="secao">Indicadores</h2>
+  <div class="graficos">
+    {% for g in charts %}
+    <div class="card{% if g.largura_total %} largo{% endif %}">
+      <h3>{{ g.titulo }}</h3>
+      {% if g.subtitulo %}<p class="sub">{{ g.subtitulo }}</p>{% else %}<div style="height:14px"></div>{% endif %}
+      <div class="caixa-grafico" style="height: {{ g.altura }}px">
+        <canvas id="grafico-{{ g.id }}"></canvas>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% for t in tabelas %}
+  <h2 class="secao">{{ t.titulo }}</h2>
+  <div class="card">
+    {% if t.subtitulo %}<p class="sub">{{ t.subtitulo }}</p>{% endif %}
+    {% if t.linhas %}
+    <div class="rolagem">
+      <table>
+        <thead><tr>{% for c in t.colunas %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for linha in t.linhas %}
+          <tr>{% for celula in linha %}<td>{{ celula }}</td>{% endfor %}</tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="vazio">Sem registros no período.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <footer>
+    <span>Gerado pelo Portal de Chamados — Bondmann Química.</span>
+    <span>Arquivo autocontido: abre sem internet; use Ctrl+P para salvar em PDF.</span>
+  </footer>
+</div>
+
+{# Dados inertes: `|tojson` escapa `<`, `>` e `&` como \uXXXX, então texto vindo
+   do banco (assunto de chamado, causa de atraso) não fecha a tag. #}
+<script type="application/json" id="dados-graficos">{{ charts_config|tojson }}</script>
+<script>{{ chart_js|safe }}</script>
+<script>
+  (function () {
+    if (!window.Chart) return;
+    var el = document.getElementById("dados-graficos");
+    var graficos;
+    try { graficos = JSON.parse(el.textContent); } catch (e) { return; }
+    graficos.forEach(function (g) {
+      var canvas = document.getElementById("grafico-" + g.id);
+      if (canvas) new window.Chart(canvas, g.config);
+    });
+  })();
+</script>
+</body>
+</html>

@@ -79,6 +79,12 @@
     if (btnExportar) {
       btnExportar.href = "/admin/marketing/export?periodo=" + encodeURIComponent(val);
     }
+    // Mesma regra para o relatório .html com os indicadores visuais
+    // (app/services/export_html.py) — os dois formatos saem do mesmo recorte.
+    const btnExportarHtml = document.getElementById("btn-exportar-html");
+    if (btnExportarHtml) {
+      btnExportarHtml.href = "/admin/marketing/export/html?periodo=" + encodeURIComponent(val);
+    }
 
     renderSummary();
     renderAllCharts();

@@ -57,6 +57,12 @@ from app.security.csrf import get_csrf
 from app.security.password_policy import SENHA_MIN_CHARS
 from app.security.uploads import UploadInvalido, validar_anexo
 from app.services.admin import AdminService
+from app.services.export_html import (
+    montar_relatorio_geral,
+    montar_relatorio_marketing,
+    nome_arquivo,
+    renderizar,
+)
 from app.services.export_marketing import gerar_workbook as gerar_workbook_marketing
 from app.services.ingestao_marketing_midia import parse_bytes as parse_midia_bytes
 from app.services.ingestao_quimico import ingerir_conn
@@ -1286,6 +1292,82 @@ async def export_csv(
     return Response(
         content=conteudo,
         media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{nome}"'},
+    )
+
+
+@router.get("/export/html")
+async def export_html(
+    request: Request,
+    periodo: str = "",
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+):
+    """Relatório visual (.html autocontido) do painel de indicadores — pedido do
+    usuário 2026-08-04: o CSV exporta chamados brutos e não se parece com o
+    painel; este arquivo leva os KPIs, os gráficos e as tabelas do mês
+    selecionado, abre sem internet e imprime em PDF (ver
+    `app/services/export_html.py`).
+
+    Mesmo escopo e mesmo mês da tela — inclusive o desvio para o painel de
+    Marketing, que tem indicadores próprios (`montar_relatorio_marketing`)."""
+    claims = ctx.user.claims
+    dep_id = str(ctx.perfil.get("departamento_id") or "") or None
+
+    if ctx.escopo == "Marketing":
+        mkt_data = await repo.mkt_dashboard_data(claims)
+        contexto = montar_relatorio_marketing(mkt_data, periodo or "all")
+    else:
+        ano, mes = _parse_periodo(periodo)
+        inicio, fim = _limites_periodo(ano, mes)
+        kwargs = {
+            "departamento_id": dep_id, "todos_setores": False,
+            "periodo_inicio": inicio, "periodo_fim": fim,
+        }
+        contexto = montar_relatorio_geral(
+            escopo=ctx.escopo,
+            periodo=f"{ano:04d}-{mes:02d}",
+            kpis=await repo.kpis(claims, **kwargs),
+            graficos={
+                "por_status": await repo.por_status(claims, **kwargs),
+                "csat": await repo.csat_distribuicao(claims, **kwargs),
+                "por_departamento": await repo.por_departamento(claims, **kwargs),
+                "por_setor": await repo.por_setor(claims, **kwargs),
+                "produtividade": await repo.produtividade(claims, **kwargs),
+            },
+            avaliacoes=await repo.avaliacoes_recentes(claims, **kwargs),
+        )
+
+    nome = nome_arquivo(contexto["escopo"], contexto["periodo"])
+    return Response(
+        content=renderizar(contexto),
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{nome}"'},
+    )
+
+
+@router.get("/marketing/export/html")
+async def exportar_marketing_html(
+    request: Request,
+    periodo: str = "all",
+    ctx: AdminCtx = Depends(admin_context),
+    repo: AdminRepo = Depends(get_admin_repo),
+):
+    """Versão .html (indicadores visuais) da exportação do Dashboard de
+    Marketing — irmã de `exportar_marketing` (.xlsx): mesmo filtro de período
+    vindo da tela, mesma fonte de dados (`mkt_dashboard_data`) e mesma regra de
+    acesso."""
+    if ctx.escopo != "Marketing":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Exportação restrita a quem vê o Dashboard de Marketing.",
+        )
+    mkt_data = await repo.mkt_dashboard_data(ctx.user.claims)
+    contexto = montar_relatorio_marketing(mkt_data, periodo)
+    nome = nome_arquivo("marketing", contexto["periodo"])
+    return Response(
+        content=renderizar(contexto),
+        media_type="text/html; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{nome}"'},
     )
 
