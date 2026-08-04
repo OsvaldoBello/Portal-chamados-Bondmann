@@ -126,7 +126,15 @@ class ChamadosRepo:
                 telefone,
             )
 
-    async def listar(self, claims: dict, *, limite: int = 100) -> list[dict[str, Any]]:
+    async def listar(
+        self,
+        claims: dict,
+        *,
+        limite: int = 100,
+        busca: str | None = None,
+        data_de: date | None = None,
+        data_ate: date | None = None,
+    ) -> list[dict[str, Any]]:
         """"Meus chamados": os que o usuário ABRIU (portal do solicitante).
 
         Filtra por `cliente_id = auth.uid()` para que também o staff (que via RLS
@@ -136,7 +144,17 @@ class ChamadosRepo:
         Duplicado de combinação (0065) **continua aparecendo** aqui, ao
         contrário da fila e dos indicadores: quem abriu o chamado precisa saber
         o que aconteceu com ele. `chamado_principal_id`/`principal_codigo`
-        trocam o badge de status por "Combinado com BOND-…" na listagem."""
+        trocam o badge de status por "Combinado com BOND-…" na listagem.
+
+        Filtros opcionais do histórico do solicitante (2026-08-04): ``busca``
+        (texto livre casado contra **código, assunto e descrição**,
+        case-insensitive — o código entra porque é a coluna que o usuário tem à
+        mão para procurar um chamado específico) e o período
+        ``data_de``/``data_ate`` sobre `created_at`, inclusive nas duas pontas,
+        igual ao Kanban. O filtro de **status** não é feito aqui: ele é aplicado
+        na rota, depois dos contadores, para que os cartões continuem mostrando
+        quantos chamados existem em cada status dentro do período/busca."""
+        busca_norm = f"%{busca.strip()}%" if busca and busca.strip() else None
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
@@ -149,11 +167,18 @@ class ChamadosRepo:
                   LEFT JOIN departamentos dep ON dep.id = c.departamento_id
                   LEFT JOIN chamados princ ON princ.id = c.chamado_principal_id
                  WHERE c.cliente_id = $1::uuid
+                   AND ($3::date IS NULL OR c.created_at >= $3::date)
+                   AND ($4::date IS NULL OR c.created_at < ($4::date + 1))
+                   AND ($5::text IS NULL
+                        OR c.codigo ILIKE $5 OR c.titulo ILIKE $5 OR c.descricao ILIKE $5)
                  ORDER BY c.created_at DESC
                  LIMIT $2
                 """,
                 claims["sub"],
                 limite,
+                data_de,
+                data_ate,
+                busca_norm,
             )
             return [dict(r) for r in rows]
 

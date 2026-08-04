@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import date
 from hashlib import sha256
+from urllib.parse import urlencode
 
 from fastapi import (
     APIRouter,
@@ -19,6 +21,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     Request,
     UploadFile,
     status,
@@ -46,6 +49,7 @@ from app.ia import triagem
 from app.ratelimit import limiter
 from app.repositories.chamados import (
     PRIORIDADES,
+    STATUS_CHAMADO,
     ChamadosRepo,
     get_chamados_repo,
     validar_comentario_avaliacao,
@@ -112,14 +116,76 @@ def _stats_de(chamados: list[dict]) -> dict[str, int]:
     }
 
 
+def _parse_filtros_meus(status_: str, busca: str, data_de: str, data_ate: str) -> dict:
+    """Normaliza os filtros do histórico de "Meus chamados" (2026-08-04).
+
+    Valor inválido (status fora do enum, data que não é ISO) é tratado como
+    "sem filtro" em vez de erro 422: a querystring é editável pelo usuário e
+    voltar a lista inteira é mais útil do que uma tela de erro. As versões
+    ``*_raw`` preservam o que veio para reexibir no formulário.
+    """
+
+    def _data(v: str) -> date | None:
+        v = (v or "").strip()
+        try:
+            return date.fromisoformat(v) if v else None
+        except ValueError:
+            return None
+
+    st = (status_ or "").strip().upper()
+    return {
+        "status": st if st in STATUS_CHAMADO else None,
+        "busca": (busca or "").strip() or None,
+        "data_de": _data(data_de),
+        "data_ate": _data(data_ate),
+        "data_de_raw": (data_de or "").strip(),
+        "data_ate_raw": (data_ate or "").strip(),
+    }
+
+
+def _qs_meus(f: dict, *, com_status: bool = True) -> str:
+    """Querystring com os filtros ativos. ``com_status=False`` omite o status —
+    é o sufixo usado pelos cartões, que são justamente o seletor de status."""
+    pares: dict[str, str] = {}
+    if com_status and f["status"]:
+        pares["status"] = f["status"]
+    if f["busca"]:
+        pares["busca"] = f["busca"]
+    if f["data_de_raw"]:
+        pares["data_de"] = f["data_de_raw"]
+    if f["data_ate_raw"]:
+        pares["data_ate"] = f["data_ate_raw"]
+    return urlencode(pares)
+
+
 @router.get("")
 async def dashboard(
     request: Request,
+    status_: str = Query("", alias="status"),
+    busca: str = "",
+    data_de: str = "",
+    data_ate: str = "",
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
-    chamados = await repo.listar(ctx.user.claims)
+    # `status_`/alias (e não um parâmetro `status`): o módulo `fastapi.status`
+    # é usado dentro desta rota-módulo e um parâmetro homônimo o sombrearia.
+    f = _parse_filtros_meus(status_, busca, data_de, data_ate)
+    # Busca e período vão ao banco; o status é aplicado aqui embaixo, DEPOIS de
+    # contar — assim os cartões mostram quantos chamados existem em cada status
+    # dentro do recorte atual (mesma lição do contador do Kanban, 2026-08-03) e
+    # continuam servindo de atalho para filtrar por status.
+    chamados = await repo.listar(
+        ctx.user.claims, busca=f["busca"], data_de=f["data_de"], data_ate=f["data_ate"]
+    )
     stats = _stats_de(chamados)
+    # Só os status que a pessoa realmente tem no recorte entram no select (não
+    # faz sentido oferecer "Aguardando terceiros" a quem nunca teve um) — mais o
+    # status selecionado, para o filtro ativo nunca sumir da própria lista.
+    presentes = {c["status"] for c in chamados}
+    status_opcoes = [s for s in STATUS_CHAMADO if s in presentes or s == f["status"]]
+    if f["status"]:
+        chamados = [c for c in chamados if c["status"] == f["status"]]
     # Líder de setor (ADMIN com departamento_id — migration 0028) acompanha,
     # nesta mesma página, os chamados abertos por colegas do seu setor (mesmo
     # que destinados a outro departamento); a RLS já restringe quem realmente
@@ -141,6 +207,15 @@ async def dashboard(
             "stats": stats,
             "chamados_colegas": chamados_colegas,
             "base_template": portal_base_template(ctx.perfil),
+            "status_sel": f["status"] or "",
+            "status_opcoes": status_opcoes,
+            "busca_sel": f["busca"] or "",
+            "data_de_sel": f["data_de_raw"],
+            "data_ate_sel": f["data_ate_raw"],
+            "tem_filtro": bool(
+                f["status"] or f["busca"] or f["data_de_raw"] or f["data_ate_raw"]
+            ),
+            "qs_sem_status": _qs_meus(f, com_status=False),
         },
     )
 

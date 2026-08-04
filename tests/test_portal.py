@@ -9,7 +9,7 @@ contra o Supabase local (Seção 4.2).
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,8 +65,18 @@ class FakeRepo:
 
     def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None,
                  role="CLIENTE", departamento_id=None, chamados_colegas=None, avaliacao_pendente=None,
-                 telefone=""):
+                 telefone="", chamados_meus=None):
         self._chamado = chamado
+        self._chamados_meus = chamados_meus if chamados_meus is not None else [
+            {
+                "id": "aaa", "codigo": "BOND-2026-00001", "titulo": "Vazamento na linha 3",
+                "descricao": "Detalhes...", "status": "NOVO", "prioridade": "ALTA",
+                "created_at": datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
+                "limite_resolucao": None, "avaliacao_nota": None,
+                "categoria": "Logística / Entrega",
+            }
+        ]
+        self.listar_filtros = None
         self._telefone = telefone
         self.telefones_salvos: list[str] = []
         self._avaliacao_pendente = avaliacao_pendente
@@ -110,15 +120,25 @@ class FakeRepo:
         self.chamados_departamento_filtros = {"departamento_id": departamento_id}
         return self._chamados_colegas
 
-    async def listar(self, claims, limite=100):
-        return [
-            {
-                "id": "aaa", "codigo": "BOND-2026-00001", "titulo": "Vazamento na linha 3",
-                "status": "NOVO", "prioridade": "ALTA",
-                "created_at": datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
-                "limite_resolucao": None, "avaliacao_nota": None, "categoria": "Logística / Entrega",
-            }
-        ]
+    async def listar(self, claims, *, limite=100, busca=None, data_de=None, data_ate=None):
+        """Espelha os filtros que o SQL real aplica (busca em código/assunto/
+        descrição e período de abertura, inclusive nas duas pontas) — sem isso
+        o teste de filtro passaria mesmo se a rota ignorasse os parâmetros."""
+        self.listar_filtros = {"busca": busca, "data_de": data_de, "data_ate": data_ate}
+        itens = list(self._chamados_meus)
+        if busca:
+            alvo = busca.strip().lower()
+            itens = [
+                c for c in itens
+                if alvo in (c.get("codigo") or "").lower()
+                or alvo in (c.get("titulo") or "").lower()
+                or alvo in (c.get("descricao") or "").lower()
+            ]
+        if data_de:
+            itens = [c for c in itens if c["created_at"].date() >= data_de]
+        if data_ate:
+            itens = [c for c in itens if c["created_at"].date() <= data_ate]
+        return itens[:limite]
 
     async def stats(self, claims):
         return {"total": 1, "novo": 1, "em_atendimento": 0, "aguardando": 0, "resolvido": 0}
@@ -747,6 +767,101 @@ def test_dashboard_lista_chamados():
     assert resp.status_code == 200
     assert "BOND-2026-00001" in resp.text
     assert "Vazamento na linha 3" in resp.text
+
+
+# --------------------------------------------------------------------------
+# Filtros do histórico de "Meus chamados" (2026-08-04): busca, status e período
+# --------------------------------------------------------------------------
+def _meus(n, titulo, status_, dia, descricao="Detalhes...", categoria="Logística / Entrega"):
+    return {
+        "id": f"id{n}", "codigo": f"BOND-2026-0000{n}", "titulo": titulo,
+        "descricao": descricao, "status": status_, "prioridade": "MEDIA",
+        "created_at": datetime(2026, 7, dia, 12, 0, tzinfo=UTC),
+        "limite_resolucao": None, "avaliacao_nota": None, "categoria": categoria,
+    }
+
+
+def _repo_com_historico():
+    return FakeRepo(chamados_meus=[
+        _meus(1, "Vazamento na linha 3", "NOVO", 2),
+        _meus(2, "Troca de monitor", "EM_ATENDIMENTO", 10),
+        _meus(3, "Acesso ao ERP", "AGUARDANDO", 20),
+        _meus(4, "Notebook novo", "RESOLVIDO", 28),
+    ])
+
+
+def test_dashboard_filtra_por_status():
+    repo = _repo_com_historico()
+    with portal_client(repo) as client:
+        resp = client.get("/portal?status=EM_ATENDIMENTO")
+    assert resp.status_code == 200
+    assert "Troca de monitor" in resp.text
+    assert "Vazamento na linha 3" not in resp.text
+    assert "Notebook novo" not in resp.text
+    # O status é aplicado DEPOIS da contagem: os cartões continuam mostrando
+    # quantos há em cada status (senão parecem quebrados ao filtrar).
+    assert ">4</div>" in resp.text  # total
+
+
+def test_dashboard_filtra_por_busca_no_codigo_e_no_assunto():
+    repo = _repo_com_historico()
+    with portal_client(repo) as client:
+        por_assunto = client.get("/portal?busca=monitor")
+        por_codigo = client.get("/portal?busca=BOND-2026-00003")
+    assert "Troca de monitor" in por_assunto.text
+    assert "Acesso ao ERP" not in por_assunto.text
+    assert repo.listar_filtros["busca"] == "BOND-2026-00003"
+    assert "Acesso ao ERP" in por_codigo.text
+    assert "Troca de monitor" not in por_codigo.text
+
+
+def test_dashboard_filtra_por_periodo_de_abertura():
+    repo = _repo_com_historico()
+    with portal_client(repo) as client:
+        resp = client.get("/portal?data_de=2026-07-05&data_ate=2026-07-20")
+    assert resp.status_code == 200
+    assert repo.listar_filtros["data_de"] == date(2026, 7, 5)
+    assert repo.listar_filtros["data_ate"] == date(2026, 7, 20)
+    assert "Troca de monitor" in resp.text
+    assert "Acesso ao ERP" in resp.text        # inclusivo na ponta final
+    assert "Vazamento na linha 3" not in resp.text
+    assert "Notebook novo" not in resp.text
+
+
+def test_dashboard_filtros_se_combinam():
+    repo = _repo_com_historico()
+    with portal_client(repo) as client:
+        resp = client.get("/portal?status=RESOLVIDO&data_de=2026-07-25")
+    assert "Notebook novo" in resp.text
+    assert "Troca de monitor" not in resp.text
+
+
+def test_dashboard_sem_resultado_com_filtro_nao_diz_que_nunca_abriu_chamado():
+    repo = _repo_com_historico()
+    with portal_client(repo) as client:
+        resp = client.get("/portal?busca=inexistente")
+    assert resp.status_code == 200
+    assert "Nenhum chamado encontrado" in resp.text
+    assert "Você ainda não abriu nenhum chamado" not in resp.text
+
+
+def test_dashboard_filtro_invalido_e_ignorado_em_vez_de_422():
+    """Querystring é editável pelo usuário — status fora do enum ou data que não
+    é ISO volta a lista inteira, não uma tela de erro."""
+    repo = _repo_com_historico()
+    with portal_client(repo) as client:
+        resp = client.get("/portal?status=BANANA&data_de=31/07/2026")
+    assert resp.status_code == 200
+    assert repo.listar_filtros == {"busca": None, "data_de": None, "data_ate": None}
+    assert "Notebook novo" in resp.text
+
+
+def test_dashboard_status_oferece_so_os_que_o_usuario_tem():
+    repo = FakeRepo(chamados_meus=[_meus(1, "Vazamento na linha 3", "NOVO", 2)])
+    with portal_client(repo) as client:
+        resp = client.get("/portal")
+    assert 'value="NOVO"' in resp.text
+    assert 'value="AGUARDANDO_TERCEIROS"' not in resp.text
 
 
 # --------------------------------------------------------------------------

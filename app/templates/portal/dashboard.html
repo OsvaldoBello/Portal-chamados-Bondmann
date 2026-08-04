@@ -22,21 +22,28 @@
   </div>
 </div>
 
+{# Cartões = também o seletor de status (mesmo padrão da fila do Workspace).
+   `qs_sem_status` preserva busca/período ao trocar de status pelo cartão, e os
+   números respeitam esses mesmos filtros — cartão parado enquanto a lista muda
+   passa a impressão de filtro quebrado (lição do contador do Kanban). #}
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-5 mb-6">
   {% set cards = [
-    ("Total",          stats.total,          "bg-navy-100 text-navy",       "M16.5 6v.75m0 3v.75m0 3v.75m0 3V18m-9-5.25h5.25M7.5 15h3M3.375 5.25c-.621 0-1.125.504-1.125 1.125v3.026a3 3 0 010 5.198v3.026c0 .621.504 1.125 1.125 1.125h17.25c.621 0 1.125-.504 1.125-1.125v-3.026a3 3 0 010-5.198V6.375c0-.621-.504-1.125-1.125-1.125H3.375z"),
-    ("Novos",          stats.novo,           "bg-st_novo/10 text-st_novo",   "M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"),
-    ("Em atendimento", stats.em_atendimento, "bg-st_atend/10 text-st_atend", "M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"),
-    ("Resolvidos",     stats.resolvido,      "bg-st_resolv/10 text-st_resolv","M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"),
+    ("",               "Total",          stats.total,          "bg-navy-100 text-navy",       "M16.5 6v.75m0 3v.75m0 3v.75m0 3V18m-9-5.25h5.25M7.5 15h3M3.375 5.25c-.621 0-1.125.504-1.125 1.125v3.026a3 3 0 010 5.198v3.026c0 .621.504 1.125 1.125 1.125h17.25c.621 0 1.125-.504 1.125-1.125v-3.026a3 3 0 010-5.198V6.375c0-.621-.504-1.125-1.125-1.125H3.375z"),
+    ("NOVO",           "Novos",          stats.novo,           "bg-st_novo/10 text-st_novo",   "M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"),
+    ("EM_ATENDIMENTO", "Em atendimento", stats.em_atendimento, "bg-st_atend/10 text-st_atend", "M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"),
+    ("RESOLVIDO",      "Resolvidos",     stats.resolvido,      "bg-st_resolv/10 text-st_resolv","M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"),
   ] %}
-  {% for label, valor, tile, icon in cards %}
-  <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+  {% for chave, label, valor, tile, icon in cards %}
+  <a href="/portal{% if chave %}?status={{ chave }}{% if qs_sem_status %}&{{ qs_sem_status }}{% endif %}{% elif qs_sem_status %}?{{ qs_sem_status }}{% endif %}"
+     class="block bg-white rounded-xl shadow-card p-5 border transition hover:border-navy-500
+            {% if status_sel == chave %}border-navy-500 ring-1 ring-navy-500{% else %}border-line/60{% endif %}"
+     {% if status_sel == chave %}aria-current="true"{% endif %}>
     <div class="w-10 h-10 rounded-lg grid place-items-center {{ tile }}">
       <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="{{ icon }}"/></svg>
     </div>
     <div class="mt-3 text-[28px] font-display font-bold text-navy leading-none">{{ valor }}</div>
     <div class="mt-1 text-[13px] text-muted">{{ label }}</div>
-  </div>
+  </a>
   {% endfor %}
 </div>
 
@@ -47,6 +54,46 @@
     + Abrir chamado
   </a>
 </div>
+
+{# Filtros do histórico (2026-08-04): busca, status e período de abertura.
+   Form GET único com `data-autosubmit` (shell.js) — selecionar/escolher a data
+   já aplica; a busca tem botão porque digitar não dispara `change` a cada
+   tecla. Tudo server-side: a lista pode passar de uma página. #}
+<form method="get" action="/portal" class="mb-4 flex flex-wrap items-end gap-3">
+  <label class="flex flex-col gap-1 flex-1 min-w-[220px]">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Buscar</span>
+    <input type="search" name="busca" value="{{ busca_sel }}" data-autosubmit
+           placeholder="Código, assunto ou descrição…"
+           class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
+  </label>
+  <label class="flex flex-col gap-1">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Status</span>
+    <select name="status" data-autosubmit
+            class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+      <option value="">Todos</option>
+      {% for s in status_opcoes %}
+      <option value="{{ s }}" {% if s == status_sel %}selected{% endif %}>{{ STATUS_META[s].label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="flex flex-col gap-1">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">Aberto de</span>
+    <input type="date" name="data_de" value="{{ data_de_sel }}" data-autosubmit
+           class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+  </label>
+  <label class="flex flex-col gap-1">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-muted">até</span>
+    <input type="date" name="data_ate" value="{{ data_ate_sel }}" data-autosubmit
+           class="px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
+  </label>
+  <button type="submit"
+          class="px-3.5 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800">
+    Filtrar
+  </button>
+  {% if tem_filtro %}
+  <a href="/portal" class="text-sm text-muted hover:text-navy pb-2">limpar filtros</a>
+  {% endif %}
+</form>
 
 <div class="bg-white rounded-xl shadow-card border border-line/60 overflow-hidden">
   {% if chamados %}
@@ -82,6 +129,13 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
+  {% elif tem_filtro %}
+  {# Vazio COM filtro não é "você nunca abriu chamado" — dizer isso faria a
+     pessoa achar que perdeu o histórico. #}
+  <div class="p-10 text-center text-muted">
+    <p class="mb-3">Nenhum chamado encontrado com esses filtros.</p>
+    <a href="/portal" class="text-navy font-semibold hover:underline">Limpar filtros</a>
   </div>
   {% else %}
   <div class="p-10 text-center text-muted">
