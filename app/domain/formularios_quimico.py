@@ -6,6 +6,13 @@ Microsoft Forms do setor (anexados pelo usuário em 2026-07-21):
   - Solicitação de visita técnica
   - Solicitação de análise em amostra externa
 
+Categoria "Solicitação de Desenvolvimento" (migration 0077, 2026-08-05):
+migrada do formulário Word do setor (anexado pelo usuário), voltada a pedidos
+de novo produto avaliados pela gestão de P&D — não tem um fluxo de aprovação
+modelado no sistema (isso continua manual, fora do portal); o formulário só
+coleta a justificativa de negócio e exibe um aviso estático de que a análise é
+feita pela gestão de P&D.
+
 Em vez de uma coluna por campo (como o precedente ad-hoc do Marketing —
 migration 0024), os campos são definidos aqui, em código, e as respostas são
 gravadas em `chamados.dados_formulario` (jsonb, migration 0049) como um objeto
@@ -41,6 +48,7 @@ from typing import Any
 CAT_OCORRENCIA = "Registro de Ocorrência"
 CAT_VISITA = "Solicitação de Visita Técnica"
 CAT_ANALISE = "Solicitação de Análise Laboratorial"
+CAT_DESENVOLVIMENTO = "Solicitação de Desenvolvimento"
 
 # Tipos de campo suportados pelo partial `_campos_quimico.html` e pela validação.
 # ``checkbox_multi``: 0..N opções marcadas — valor gravado é ``list[str]``.
@@ -140,12 +148,31 @@ _CAMPO_IDENTIFICADOR: dict[str, str] = {
     CAT_OCORRENCIA: "nome_empresa_cliente",
     CAT_VISITA: "cliente_visitado",
     CAT_ANALISE: "identificacao_cliente",
+    CAT_DESENVOLVIMENTO: "objetivo_desenvolvimento",
 }
 _CAMPO_NARRATIVA: dict[str, str] = {
     CAT_OCORRENCIA: "descricao_situacao",
     CAT_VISITA: "objetivo_visita",
     CAT_ANALISE: "descricao_amostra",
+    CAT_DESENVOLVIMENTO: "justificativa",
 }
+
+# Aviso estático exibido ao final do formulário de certas categorias (não é um
+# campo — não entra em `dados_formulario`). Categoria sem entrada aqui não
+# mostra nada.
+OBSERVACAO_POR_CATEGORIA: dict[str, str] = {
+    CAT_DESENVOLVIMENTO: (
+        "A solicitação será avaliada pela gestão de P&D e, caso aprovada, "
+        "será iniciado o projeto de desenvolvimento."
+    ),
+}
+
+
+def observacao_categoria(nome_categoria: str | None) -> str:
+    """Aviso estático da categoria (rodapé do formulário), ou string vazia."""
+    if not nome_categoria:
+        return ""
+    return OBSERVACAO_POR_CATEGORIA.get(nome_categoria, "")
 
 
 def titulo_e_descricao_automaticos(
@@ -280,6 +307,52 @@ CAMPOS_POR_CATEGORIA: dict[str, tuple[CampoDef, ...]] = {
             "selecionado no item anterior)",
             "textarea",
             obrigatorio=True,
+        ),
+    ),
+    CAT_DESENVOLVIMENTO: (
+        CampoDef(
+            "objetivo_desenvolvimento",
+            "Objetivo do Desenvolvimento",
+            "textarea",
+            obrigatorio=True,
+            ajuda="Objetivo da solicitação: produto desejado, finalidade, função ou "
+            "problema a ser resolvido.",
+        ),
+        CampoDef(
+            "justificativa",
+            "Justificativa (tamanho do mercado, clientes potenciais, tipo de "
+            "solução/aplicação, etc.)",
+            "textarea",
+            obrigatorio=True,
+            ajuda="Por que a Bondmann teria interesse em realizar a solicitação? Qual "
+            "o mercado/clientes que o novo produto vai atender? Qual o problema que o "
+            "novo produto vai resolver? Que tipo de aplicação teria o novo produto?",
+        ),
+        CampoDef(
+            "mercado_alvo",
+            "Mercado-alvo",
+            "textarea",
+            obrigatorio=True,
+            ajuda="Quais os clientes e/ou consumidores potenciais para este tipo de "
+            "produto a ser desenvolvido? Quem vai comprar e usar este novo produto?",
+        ),
+        CampoDef(
+            "concorrencia",
+            "Concorrência (empresas, produtos similares, preços, etc.)",
+            "textarea",
+            obrigatorio=True,
+            ajuda="Que empresas vendem produtos similares? Quais são os produtos "
+            "similares? Dentre estes, quais servem como referência de qualidade e "
+            "desempenho? Indicar preços praticados no mercado e quantidades de "
+            "unidades vendidas.",
+        ),
+        CampoDef(
+            "diferenciais",
+            "Principais diferenciais a serem explorados",
+            "textarea",
+            obrigatorio=True,
+            ajuda="Que diferenciais o produto desenvolvido pela Bondmann deve ter "
+            "para facilitar a entrada no mercado-alvo e vencer a concorrência?",
         ),
     ),
 }

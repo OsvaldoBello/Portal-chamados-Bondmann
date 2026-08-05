@@ -51,5 +51,8 @@
   </label>
   {% endif %}
   {% endfor %}
+  {% if observacao_quimico %}
+  <p class="text-xs text-muted border-t border-navy-100 pt-3">{{ observacao_quimico }}</p>
+  {% endif %}
 </div>
 {% endif %}

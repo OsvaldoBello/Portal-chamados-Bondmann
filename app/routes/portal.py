@@ -40,6 +40,7 @@ from app.config import get_settings
 from app.db import rls_request_scope
 from app.domain.formularios_quimico import (
     campos_da_categoria,
+    observacao_categoria,
     rotular,
     titulo_e_descricao_automaticos,
     validar_payload,
@@ -269,10 +270,12 @@ async def _render_form(
     # dinâmicos já preenchidos (para o usuário não perder o que digitou).
     campos_quimico: tuple = ()
     dados_form: dict = {}
+    observacao_quimico = ""
     if quimico_dep_id and dep_sel == quimico_dep_id and form.get("categoria_id"):
         nome_cat = await repo.nome_categoria(ctx.user.claims, form["categoria_id"])
         campos_quimico = campos_da_categoria(nome_cat)
         dados_form = valores_para_template(nome_cat, form.get("dados_formulario") or {})
+        observacao_quimico = observacao_categoria(nome_cat)
     usuarios_copia = await repo.usuarios_para_copia(ctx.user.claims, excluir_id=ctx.user.id)
     return render(
         request,
@@ -286,6 +289,7 @@ async def _render_form(
             "quimico_dep_id": quimico_dep_id,
             "campos_quimico": campos_quimico,
             "dados_form": dados_form,
+            "observacao_quimico": observacao_quimico,
             "prioridades": PRIORIDADES,
             "data_entrega_min": PortalService.data_entrega_min().isoformat(),
             "form": form,
@@ -373,7 +377,11 @@ async def campos_fragmento(
     return render(
         request,
         "portal/_campos_quimico.html",
-        {"campos_quimico": campos, "dados_form": {}},
+        {
+            "campos_quimico": campos,
+            "dados_form": {},
+            "observacao_quimico": observacao_categoria(nome_cat),
+        },
     )
 
 

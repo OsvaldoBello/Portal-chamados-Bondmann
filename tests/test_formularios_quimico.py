@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from app.domain.formularios_quimico import (
     CAT_ANALISE,
+    CAT_DESENVOLVIMENTO,
     CAT_OCORRENCIA,
     CAT_VISITA,
     campos_da_categoria,
     eh_categoria_quimico,
+    observacao_categoria,
     rotular,
     titulo_e_descricao_automaticos,
     validar_payload,
@@ -43,7 +45,7 @@ def _payload_ocorrencia_valido(**over: list[str]) -> dict[str, list[str]]:
 
 
 def test_categorias_conhecidas_tem_campos():
-    for nome in (CAT_OCORRENCIA, CAT_VISITA, CAT_ANALISE):
+    for nome in (CAT_OCORRENCIA, CAT_VISITA, CAT_ANALISE, CAT_DESENVOLVIMENTO):
         assert eh_categoria_quimico(nome)
         assert campos_da_categoria(nome), f"{nome} deveria ter campos"
 
@@ -221,3 +223,47 @@ def test_titulo_e_descricao_automaticos_sem_dados_cai_no_nome_da_categoria():
 def test_titulo_e_descricao_automaticos_categoria_nao_quimico_vazio():
     assert titulo_e_descricao_automaticos("Categoria de outro setor", {"x": "y"}) == ("", "")
     assert titulo_e_descricao_automaticos(None, {}) == ("", "")
+
+
+def _payload_desenvolvimento_valido(**over: list[str]) -> dict[str, list[str]]:
+    base = {
+        "objetivo_desenvolvimento": ["Novo desengraxante biodegradável"],
+        "justificativa": ["Mercado em crescimento, poucos concorrentes com apelo verde"],
+        "mercado_alvo": ["Indústria metalúrgica de médio porte"],
+        "concorrencia": ["Empresa A e B, preço médio R$ 30/L"],
+        "diferenciais": ["Menor toxicidade e custo-benefício"],
+    }
+    base.update(over)
+    return base
+
+
+def test_desenvolvimento_payload_valido():
+    ok, erro, limpo = validar_payload(CAT_DESENVOLVIMENTO, _payload_desenvolvimento_valido())
+    assert ok and erro is None
+    assert limpo["objetivo_desenvolvimento"] == "Novo desengraxante biodegradável"
+    assert limpo["diferenciais"] == "Menor toxicidade e custo-benefício"
+
+
+def test_desenvolvimento_obrigatorio_vazio_falha():
+    dados = _payload_desenvolvimento_valido(mercado_alvo=[""])
+    ok, erro, limpo = validar_payload(CAT_DESENVOLVIMENTO, dados)
+    assert not ok
+    assert erro and "Mercado-alvo" in erro
+    assert limpo == {}
+
+
+def test_titulo_e_descricao_automaticos_desenvolvimento():
+    dados = {
+        "objetivo_desenvolvimento": "Novo desengraxante biodegradável",
+        "justificativa": "Mercado em crescimento",
+    }
+    titulo, descricao = titulo_e_descricao_automaticos(CAT_DESENVOLVIMENTO, dados)
+    assert titulo == "Solicitação de Desenvolvimento — Novo desengraxante biodegradável"
+    assert descricao == "Mercado em crescimento"
+
+
+def test_observacao_categoria_desenvolvimento_presente_e_outras_vazias():
+    assert "P&D" in observacao_categoria(CAT_DESENVOLVIMENTO)
+    assert observacao_categoria(CAT_OCORRENCIA) == ""
+    assert observacao_categoria(None) == ""
+    assert observacao_categoria("Inexistente") == ""
