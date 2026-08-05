@@ -19,6 +19,7 @@ não é apagado (histórico do "porquê" importa tanto quanto o estado atual).
 | [0005](0005-railway-alvo-unico-deploy.md) | Railway como alvo único de deploy | Aceito |
 | [0006](0006-cache-rate-limit-local-processo.md) | Cache e rate limit local-por-processo (gatilho de migração pra Redis) | Aceito |
 | [0007](0007-mfa-totp-aal2-admin.md) | MFA (TOTP) com enforcement de `aal2` para ADMIN | Aceito |
+| [0008](0008-ia-reclassifica-categoria.md) | IA de triagem reclassifica categoria/subcategoria automaticamente | Aceito |
 
 Cada ADR referencia a seção correspondente do
 [`plano_mestre_desenvolvimento.md`](../../plano_mestre_desenvolvimento.md),

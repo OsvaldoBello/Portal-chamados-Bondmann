@@ -28,9 +28,22 @@ o que torna o motor idempotente por construção:
   após a chamada de modelo. Só chamado ``RESOLVIDO`` fica fora da triagem.
 
 Garantias permanentes (Regras de Ouro): kill switch sem efeito colateral;
-falha silenciosa ponta a ponta; a IA nunca conclui/altera nada (sugestões são
-texto de nota); ``is_interna=true`` fixado em código na persistência da nota
-(invariante 8.2 — o canal público tem função própria, usada só em PERGUNTAS).
+falha silenciosa ponta a ponta; a IA nunca conclui atendimento nem altera
+prioridade/status (essas seguem só como sugestão de texto na nota);
+``is_interna=true`` fixado em código na persistência da nota (invariante 8.2 —
+o canal público tem função própria, usada só em PERGUNTAS).
+
+**Reclassificação automática (F8, 2026-08-04):** a única alteração de estado do
+chamado que o motor faz é trocar ``categoria_id``/``subcategoria_id`` quando a
+classificação escolhida na abertura está evidentemente errada — pedido do
+gestor, ver ADR 0008 e Seção 2.5 do plano IA. É estrutural, não promessa de
+prompt: :func:`resolver_reclassificacao` (pura) só devolve destino que exista no
+**catálogo do departamento do próprio chamado**, e :func:`_aplicar_reclassificacao`
+ainda exige chamado intocado (ninguém atendendo, nenhuma reclassificação
+anterior, sem formulário dinâmico vinculado à categoria) e faz a escrita como
+compare-and-swap contra a categoria analisada. Nada disso roda sem o
+departamento estar em ``IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS`` (default
+vazio = feature desligada).
 
 **Dpto Químico (F4, Seção 3):** o Passe A acima é idêntico ao do TI, só que
 com o roteiro de perguntas de investigação no contexto (SEM dado de produto —
@@ -51,6 +64,7 @@ import json
 import logging
 import time
 import unicodedata
+from dataclasses import dataclass
 from datetime import timedelta
 from difflib import SequenceMatcher
 from functools import lru_cache
@@ -123,6 +137,7 @@ def _linhas_chamado(
         "## Chamado",
         f"Departamento: {chamado.get('departamento') or '—'}",
         f"Categoria escolhida: {chamado.get('categoria') or '—'}",
+        f"Subcategoria escolhida: {chamado.get('subcategoria') or '—'}",
         f"Prioridade declarada: {chamado.get('prioridade') or '—'}",
         f"Assunto: {chamado.get('titulo') or '—'}",
         "",
@@ -153,9 +168,38 @@ def _conteudo_usuario(linhas: list[str], anexos: anexos_contexto.ResultadoAnexos
     return [{"type": "text", "text": texto}, *anexos.blocos_imagem]
 
 
+def _nome_categoria(item: Any) -> str:
+    """Nome de uma entrada do catálogo — aceita ``str`` (formato histórico) ou
+    ``dict`` com ``nome``/``subcategorias`` (formato da F8)."""
+    return str(item.get("nome") or "") if isinstance(item, dict) else str(item)
+
+
+def _linha_catalogo(item: Any) -> str:
+    """Uma categoria do catálogo, com as subcategorias ativas quando houver —
+    o modelo só pode escolher destino que apareça aqui."""
+    nome = _nome_categoria(item)
+    subs = [
+        str(s.get("nome") or "") if isinstance(s, dict) else str(s)
+        for s in (item.get("subcategorias") or [] if isinstance(item, dict) else [])
+    ]
+    subs = [s for s in subs if s]
+    return f"- {nome}" + (f" → subcategorias: {'; '.join(subs)}" if subs else "")
+
+
+def _linha_catalogo_do_banco(linha: dict[str, Any]) -> dict[str, Any]:
+    """Normaliza a linha do catálogo vinda do banco (``json_agg`` chega como
+    ``str`` no asyncpg; catálogo sem subcategoria chega vazio)."""
+    subs = linha.get("subcategorias") or []
+    return {
+        "id": linha.get("id"),
+        "nome": linha.get("nome"),
+        "subcategorias": json.loads(subs) if isinstance(subs, str) else subs,
+    }
+
+
 def montar_mensagens(
     chamado: dict[str, Any],
-    categorias: list[str],
+    categorias: list[Any],
     conversa: list[dict[str, str]] | None = None,
     playbook: list[dict[str, Any]] | None = None,
     anexos: anexos_contexto.ResultadoAnexos | None = None,
@@ -192,7 +236,7 @@ def montar_mensagens(
         ]
     if categorias:
         linhas += ["", "## Catálogo de categorias do departamento"]
-        linhas += [f"- {nome}" for nome in categorias]
+        linhas += [_linha_catalogo(item) for item in categorias]
     prompt_nome = "quimico_passe_a" if _eh_quimico(chamado.get("departamento")) else "ti"
     return [
         {"role": "system", "content": _prompt(prompt_nome)},
@@ -222,9 +266,13 @@ def montar_mensagens_passe_b(
     ]
 
 
-def _normalizar_pergunta(texto: str) -> str:
-    """Forma canônica para comparar perguntas (acentuação, pontuação e caixa
-    fora) — o modelo raramente devolve o texto byte a byte igual."""
+def _normalizar_texto(texto: str) -> str:
+    """Forma canônica para comparar texto do modelo com texto nosso (acentuação,
+    pontuação e caixa fora) — o modelo raramente devolve byte a byte igual.
+
+    Usada para casar perguntas da rodada anterior (:func:`pendencias_do_ciclo`)
+    e nomes de categoria/subcategoria contra o catálogo do departamento
+    (:func:`resolver_reclassificacao`)."""
     sem_acento = unicodedata.normalize("NFKD", texto)
     sem_acento = "".join(c for c in sem_acento if not unicodedata.combining(c))
     return " ".join("".join(c if c.isalnum() else " " for c in sem_acento).split()).casefold()
@@ -248,10 +296,10 @@ def pendencias_do_ciclo(
     """
     if not perguntas_anteriores or not saida.perguntas_nao_respondidas:
         return []
-    alvos = [_normalizar_pergunta(p) for p in saida.perguntas_nao_respondidas]
+    alvos = [_normalizar_texto(p) for p in saida.perguntas_nao_respondidas]
     pendentes = []
     for anterior in perguntas_anteriores:
-        chave = _normalizar_pergunta(anterior)
+        chave = _normalizar_texto(anterior)
         if not chave:
             continue
         # Igualdade normalizada ou reformulação leve (o modelo às vezes corta a
@@ -310,6 +358,238 @@ def decidir_acao(
     return "PERGUNTAS"
 
 
+@dataclass(frozen=True)
+class Reclassificacao:
+    """Troca de categoria/subcategoria já resolvida contra o catálogo real.
+
+    Só existe quando TODAS as guardas puras passaram — quem constrói é
+    :func:`resolver_reclassificacao`, e os ids vêm do catálogo do departamento
+    do próprio chamado (o modelo devolve nome, nunca id)."""
+
+    categoria_id: str
+    categoria_nome: str
+    subcategoria_id: str | None
+    subcategoria_nome: str | None
+    de_categoria: str | None
+    de_subcategoria: str | None
+    motivo: str
+
+
+def _indice_catalogo(categorias: list[Any]) -> dict[str, dict[str, Any]]:
+    """Catálogo indexado por nome normalizado (só entradas com id — o formato
+    ``list[str]``, usado por testes antigos e pelo red team, não reclassifica
+    nada por construção: sem id não há destino)."""
+    indice: dict[str, dict[str, Any]] = {}
+    for item in categorias:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        chave = _normalizar_texto(_nome_categoria(item))
+        if chave:
+            indice[chave] = item
+    return indice
+
+
+def _achar_subcategoria(categoria: dict[str, Any], nome: str | None) -> dict[str, Any] | None:
+    if not nome:
+        return None
+    alvo = _normalizar_texto(nome)
+    if not alvo:
+        return None
+    for sub in categoria.get("subcategorias") or []:
+        if isinstance(sub, dict) and sub.get("id") and _normalizar_texto(str(sub.get("nome") or "")) == alvo:
+            return sub
+    return None
+
+
+def resolver_reclassificacao(
+    saida: SaidaTriagem,
+    chamado: dict[str, Any],
+    categorias: list[Any],
+    settings: Settings,
+) -> Reclassificacao | None:
+    """Destino da reclassificação automática, ou ``None`` para não mexer (F8).
+
+    Função pura — todo o julgamento fica aqui, testável sem banco. A IA passou
+    a poder corrigir a classificação (pedido do gestor 2026-08-04, ADR 0008),
+    mas só sob condições que não dependem da boa vontade do modelo:
+
+    1. departamento liberado em ``IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS``
+       (default vazio ⇒ ninguém — kill switch por construção);
+    2. o modelo declarou ``categoria_divergente`` (não basta ter devolvido uma
+       ``categoria_sugerida``: sugerir continua sendo o caminho da dúvida);
+    3. confiança ≥ ``IA_TRIAGEM_RECLASSIFICACAO_CONFIANCA_MINIMA`` (default
+       ALTA; env inválida degrada para ALTA);
+    4. justificativa não vazia — é o que o atendente lê na nota e no histórico;
+    5. o destino EXISTE no catálogo ativo do departamento do próprio chamado
+       (casamento por nome normalizado): nome inventado não vira escrita, e não
+       há como escapar para categoria de outro setor;
+    6. o resultado difere do par (categoria, subcategoria) atual.
+
+    Subcategoria: quando a categoria muda, a subcategoria antiga fica órfã —
+    vira a sugerida, se ela existir na categoria nova, ou ``None`` (mesma regra
+    da rota do staff, ``workspace.alterar_categoria``). Quando a categoria não
+    muda, uma subcategoria sugerida válida ainda pode ser corrigida sozinha.
+    """
+    if not settings.ia_triagem_reclassifica(chamado.get("departamento")):
+        return None
+    if not saida.categoria_divergente:
+        return None
+    minima = settings.ia_triagem_reclassificacao_confianca_minima.strip().upper()
+    if _CONFIANCA_ORDEM.get(saida.confianca, 0) < _CONFIANCA_ORDEM.get(
+        minima, _CONFIANCA_ORDEM["ALTA"]
+    ):
+        return None
+    motivo = (saida.categoria_justificativa or "").strip()
+    if not motivo:
+        return None
+
+    indice = _indice_catalogo(categorias)
+    if not indice:
+        return None
+    atual_nome = chamado.get("categoria")
+    if saida.categoria_sugerida:
+        destino = indice.get(_normalizar_texto(saida.categoria_sugerida))
+    else:
+        # Sem categoria nova: só a subcategoria pode estar errada. A categoria
+        # atual precisa existir no catálogo para ancorar a busca da sub.
+        destino = indice.get(_normalizar_texto(atual_nome or ""))
+    if destino is None:
+        return None  # nome fora do catálogo ⇒ não se inventa destino
+
+    categoria_mudou = str(destino["id"]) != str(chamado.get("categoria_id") or "")
+    sub = _achar_subcategoria(destino, saida.subcategoria_sugerida)
+    if sub is not None:
+        sub_id: str | None = str(sub["id"])
+        sub_nome: str | None = str(sub.get("nome") or "")
+    elif categoria_mudou:
+        sub_id, sub_nome = None, None  # órfã da categoria antiga: limpa
+    else:
+        sub_id = str(chamado.get("subcategoria_id") or "") or None
+        sub_nome = chamado.get("subcategoria")
+
+    if not categoria_mudou and sub_id == (str(chamado.get("subcategoria_id") or "") or None):
+        return None  # nada a fazer
+    return Reclassificacao(
+        categoria_id=str(destino["id"]),
+        categoria_nome=_nome_categoria(destino),
+        subcategoria_id=sub_id,
+        subcategoria_nome=sub_nome,
+        de_categoria=atual_nome,
+        de_subcategoria=chamado.get("subcategoria"),
+        motivo=motivo,
+    )
+
+
+async def _aplicar_reclassificacao(
+    conn: Any,
+    chamado: dict[str, Any],
+    reclassificacao: Reclassificacao,
+    perfil_id: str,
+    rodada: int,
+    confianca: str,
+) -> bool:
+    """Escreve a reclassificação no chamado + histórico (F8). ``False`` = não
+    aplicou (alguma guarda de banco/estado barrou) e a nota volta a apenas
+    sugerir.
+
+    Guardas que só existem aqui (as puras estão em
+    :func:`resolver_reclassificacao`):
+
+    - **formulário dinâmico:** ``dados_formulario`` preenchido significa que os
+      campos foram respondidos contra o schema da categoria atual
+      (``app/domain/formularios_quimico.py`` indexa o layout pelo NOME da
+      categoria) — trocar a categoria órfanaria os rótulos. Chamado com
+      formulário não é reclassificado, e é isso que mantém o Dpto Químico fora
+      da feature mesmo que alguém o liste na env;
+    - **classificação virgem:** já houve ``CATEGORIA_ALTERADA`` (staff) ou
+      ``IA_RECLASSIFICACAO`` antes ⇒ a IA não desfaz decisão de humano nem
+      briga consigo mesma entre rodadas;
+    - **compare-and-swap:** o ``UPDATE`` casa a categoria que foi analisada; se
+      alguém reclassificou durante a chamada de modelo, nenhuma linha é tocada.
+    """
+    if chamado.get("dados_formulario"):
+        return False
+    ja_classificado = await conn.fetchval(
+        """
+        SELECT 1 FROM historico_chamados
+         WHERE chamado_id = $1::uuid
+           AND acao IN ('CATEGORIA_ALTERADA', 'IA_RECLASSIFICACAO')
+         LIMIT 1
+        """,
+        chamado["id"],
+    )
+    if ja_classificado:
+        return False
+    atualizado = await conn.fetchval(
+        """
+        UPDATE chamados
+           SET categoria_id = $2::uuid, subcategoria_id = $3::uuid
+         WHERE id = $1::uuid
+           AND categoria_id IS NOT DISTINCT FROM $4::uuid
+        RETURNING id::text
+        """,
+        chamado["id"],
+        reclassificacao.categoria_id,
+        reclassificacao.subcategoria_id,
+        chamado.get("categoria_id"),
+    )
+    if atualizado is None:
+        return False
+    await conn.execute(
+        """
+        INSERT INTO historico_chamados (chamado_id, ator_id, acao, detalhes)
+        VALUES ($1::uuid, $2::uuid, 'IA_RECLASSIFICACAO', $3::jsonb)
+        """,
+        chamado["id"],
+        perfil_id,
+        json.dumps(
+            {
+                "rodada": rodada,
+                "confianca": confianca,
+                "de": {
+                    "categoria": reclassificacao.de_categoria,
+                    "subcategoria": reclassificacao.de_subcategoria,
+                    "categoria_id": chamado.get("categoria_id"),
+                    "subcategoria_id": chamado.get("subcategoria_id"),
+                },
+                "para": {
+                    "categoria": reclassificacao.categoria_nome,
+                    "subcategoria": reclassificacao.subcategoria_nome,
+                    "categoria_id": reclassificacao.categoria_id,
+                    "subcategoria_id": reclassificacao.subcategoria_id,
+                },
+                "motivo": reclassificacao.motivo,
+            },
+            ensure_ascii=False,
+        ),
+    )
+    # Estado em memória segue o banco: a nota (e o Passe B do Químico) já falam
+    # da classificação nova.
+    chamado["categoria_id"] = reclassificacao.categoria_id
+    chamado["categoria"] = reclassificacao.categoria_nome
+    chamado["subcategoria_id"] = reclassificacao.subcategoria_id
+    chamado["subcategoria"] = reclassificacao.subcategoria_nome
+    return True
+
+
+def _linhas_reclassificacao(reclassificacao: Reclassificacao | None) -> list[str]:
+    """Bloco da nota interna que registra o que a IA trocou (F8) — sempre
+    explícito: quem atende precisa ver que a classificação não é mais a que o
+    autor escolheu, e por quê."""
+    if reclassificacao is None:
+        return []
+    linha = (
+        "Categoria reclassificada automaticamente pela triagem: "
+        f"{reclassificacao.de_categoria or '—'} → {reclassificacao.categoria_nome}"
+    )
+    if reclassificacao.subcategoria_nome or reclassificacao.de_subcategoria:
+        linha += (
+            f" (subcategoria: {reclassificacao.de_subcategoria or '—'}"
+            f" → {reclassificacao.subcategoria_nome or '—'})"
+        )
+    return ["", linha, f"Motivo da reclassificação: {reclassificacao.motivo}"]
+
+
 def _resumir_resolucao(texto: str | None, max_chars: int = 280) -> str:
     """Resolução do chamado semelhante numa linha (espaços normalizados,
     truncada) — a nota cita a solução, não reproduz a conversa inteira."""
@@ -323,16 +603,27 @@ def montar_nota(
     saida: SaidaTriagem,
     chamado: dict[str, Any],
     semelhantes: list[dict[str, Any]] | None = None,
+    reclassificacao: Reclassificacao | None = None,
 ) -> str:
     """Texto da nota interna a partir da saída estruturada (função pura).
 
     ``semelhantes`` (F3): chamados resolvidos citados como referência (código +
     resolução registrada). Lista vazia/None omite a seção — degradação graciosa
-    (DoD F3: seção omitida, nunca inventada)."""
+    (DoD F3: seção omitida, nunca inventada).
+
+    ``reclassificacao`` (F8): quando a troca de categoria/subcategoria foi
+    APLICADA, a nota registra de→para e o motivo, e a linha "Categoria
+    sugerida" deixa de fazer sentido (já é a categoria do chamado). Sem
+    reclassificação aplicada, a sugestão continua saindo como sempre."""
     partes = ["Triagem automática — pré-análise da IA", "", saida.pre_analise.strip()]
+    partes += _linhas_reclassificacao(reclassificacao)
 
     sugestoes = []
-    if saida.categoria_sugerida and saida.categoria_sugerida != (chamado.get("categoria") or ""):
+    if (
+        reclassificacao is None
+        and saida.categoria_sugerida
+        and saida.categoria_sugerida != (chamado.get("categoria") or "")
+    ):
         sugestoes.append(
             f"Categoria sugerida: {saida.categoria_sugerida}"
             f" (escolhida: {chamado.get('categoria') or '—'})"
@@ -368,16 +659,23 @@ def montar_nota_quimico(
     saida: SaidaPasseB,
     chamado: dict[str, Any],
     semelhantes: list[dict[str, Any]] | None = None,
+    reclassificacao: Reclassificacao | None = None,
 ) -> str:
     """Texto da nota interna do Passe B do Químico (F4, função pura).
 
     Só chamada quando o Passe B teve sucesso — a falha degrada para
-    :func:`montar_nota` com a saída do Passe A (fallback, Regra de Ouro #5)."""
+    :func:`montar_nota` com a saída do Passe A (fallback, Regra de Ouro #5).
+
+    ``reclassificacao`` (F8) só chega preenchida se o Químico for liberado na
+    env E o chamado não tiver formulário dinâmico — hoje nenhuma das duas
+    condições vale em produção (o prompt do Passe A sequer conhece os campos),
+    mas a nota registra a troca do mesmo jeito se um dia valer."""
     partes = [
         "Triagem automática — pré-análise técnica da IA (Químico)",
         "",
         saida.pre_analise.strip(),
     ]
+    partes += _linhas_reclassificacao(reclassificacao)
     if saida.escalar_para_quimico:
         partes += ["", "⚠️ ESCALAR para o químico responsável."]
     if saida.produto_reconhecido:
@@ -625,10 +923,14 @@ async def _executar(chamado_id: str) -> None:
             SELECT c.id::text AS id, c.codigo, c.titulo, c.descricao,
                    c.status::text AS status, c.cliente_id, c.operador_id,
                    c.prioridade::text AS prioridade, c.dados_formulario,
-                   c.departamento_id, cat.nome AS categoria, d.nome AS departamento
+                   c.departamento_id, cat.nome AS categoria, d.nome AS departamento,
+                   c.categoria_id::text AS categoria_id,
+                   c.subcategoria_id::text AS subcategoria_id,
+                   sub.nome AS subcategoria
             FROM chamados c
             JOIN departamentos d ON d.id = c.departamento_id
             LEFT JOIN categorias cat ON cat.id = c.categoria_id
+            LEFT JOIN subcategorias sub ON sub.id = c.subcategoria_id
             WHERE c.id = $1::uuid
             """,
             chamado_id,
@@ -710,10 +1012,28 @@ async def _executar(chamado_id: str) -> None:
                     chamado_id,
                 )
             ]
+        # Catálogo do departamento com as subcategorias ativas de cada categoria
+        # (F8): é o contexto do modelo E o conjunto fechado de destinos que a
+        # reclassificação pode escolher — nome fora daqui não vira escrita.
         categorias = [
-            r["nome"]
+            _linha_catalogo_do_banco(dict(r))
             for r in await conn.fetch(
-                "SELECT nome FROM categorias WHERE departamento_id = $1 AND ativo ORDER BY nome",
+                """
+                SELECT cat.id::text AS id, cat.nome,
+                       COALESCE(
+                         json_agg(
+                           json_build_object('id', sub.id::text, 'nome', sub.nome)
+                           ORDER BY sub.nome
+                         ) FILTER (WHERE sub.id IS NOT NULL),
+                         '[]'::json
+                       ) AS subcategorias
+                  FROM categorias cat
+                  LEFT JOIN subcategorias sub
+                         ON sub.categoria_id = cat.id AND sub.ativo
+                 WHERE cat.departamento_id = $1 AND cat.ativo
+                 GROUP BY cat.id, cat.nome
+                 ORDER BY cat.nome
+                """,
                 chamado["departamento_id"],
             )
         ]
@@ -870,6 +1190,25 @@ async def _executar(chamado_id: str) -> None:
             log.warning("[IA TRIAGEM] Chamado %s sem triagem útil: %s", chamado_id, erro)
             return
         assert perfil_id is not None  # garantido pelo guard acima (saida None ⇒ já saiu)
+
+        # 3b) Reclassificação automática (F8): a única escrita do motor no
+        # próprio chamado. Roda DEPOIS do INSERT em `ia_triagens` de propósito —
+        # a execução que perdeu a corrida do UNIQUE já saiu acima, então a troca
+        # acontece uma vez só. Vale para as duas ações: uma categoria errada
+        # atrapalha o roteamento tanto no ciclo de perguntas quanto na nota.
+        # `resultado` (o que o modelo PROPÔS) já está gravado; o que foi
+        # APLICADO fica em `historico_chamados` (evento `IA_RECLASSIFICACAO`),
+        # que é a auditoria de estado do chamado.
+        reclassificacao = resolver_reclassificacao(saida, chamado, categorias, settings)
+        if reclassificacao is not None and not atendimento_iniciado:
+            aplicada = await _aplicar_reclassificacao(
+                conn, chamado, reclassificacao, perfil_id, rodada, saida.confianca
+            )
+            if not aplicada:
+                reclassificacao = None  # a nota volta a apenas sugerir
+        else:
+            reclassificacao = None
+
         if acao == "PERGUNTAS":
             # Ciclo de perguntas primeiro (decisão do usuário 2026-07-23): a
             # nota interna fica para o fim do ciclo — rodada N+1 (resposta do
@@ -886,7 +1225,10 @@ async def _executar(chamado_id: str) -> None:
             )
         elif not eh_quimico:
             await _salvar_nota_interna(
-                conn, chamado_id, perfil_id, montar_nota(saida, chamado, semelhantes)
+                conn,
+                chamado_id,
+                perfil_id,
+                montar_nota(saida, chamado, semelhantes, reclassificacao),
             )
             await _registrar_historico(
                 conn, chamado_id, perfil_id, rodada, passe_a_nome, acao, settings,
@@ -935,11 +1277,11 @@ async def _executar(chamado_id: str) -> None:
     if saida_b is not None:
         resultado_b: dict[str, Any] = saida_b.model_dump(exclude={"pre_analise"})
         acao_b = "NOTA_INTERNA"
-        nota = montar_nota_quimico(saida_b, chamado, semelhantes)
+        nota = montar_nota_quimico(saida_b, chamado, semelhantes, reclassificacao)
     else:
         resultado_b = {"erro": erro_b or "desconhecido"}
         acao_b = "ERRO"
-        nota = montar_nota(saida, chamado, semelhantes)
+        nota = montar_nota(saida, chamado, semelhantes, reclassificacao)
     async with admin_connection() as conn:
         triagem_id_b = await conn.fetchval(
             """

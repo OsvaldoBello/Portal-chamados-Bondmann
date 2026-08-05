@@ -144,6 +144,20 @@ class Settings(BaseSettings):
     # baixa e média também perguntam ⇒ default BAIXA. Reapertar é só env;
     # valor inválido degrada para ALTA (conservador).
     ia_triagem_perguntas_confianca_minima: str = Field(default="BAIXA")
+    # --- Reclassificação automática (F8, 2026-08-04) ---
+    # CSV de departamentos em que a triagem PODE trocar categoria/subcategoria
+    # do chamado sozinha, quando a divergência for evidente (ex.: "TI").
+    # Vazio (default) = ninguém — é o kill switch da feature, por construção:
+    # sem departamento listado, `resolver_reclassificacao` devolve None antes de
+    # qualquer consulta ou escrita. Independente de `IA_TRIAGEM_MODO_SOMBRA`: a
+    # reclassificação não toca no canal público (não fala com o autor), então
+    # não é a sombra que a governa — é esta lista.
+    ia_triagem_reclassificacao_departamentos: str = Field(default="")
+    # Confiança mínima da saída do modelo para APLICAR a reclassificação
+    # (BAIXA/MEDIA/ALTA). Default ALTA — trocar a classificação de um chamado é
+    # mudança de estado, bar mais alto que perguntar. Valor inválido degrada
+    # para ALTA (mesmo padrão de `ia_triagem_perguntas_confianca_minima`).
+    ia_triagem_reclassificacao_confianca_minima: str = Field(default="ALTA")
     ia_triagem_model: str = Field(
         default="gpt-5.4-mini",
         validation_alias=AliasChoices("ia_triagem_model", "groq_model"),
@@ -247,6 +261,23 @@ class Settings(BaseSettings):
         return [
             d.strip() for d in self.ia_triagem_perguntas_departamentos.split(",") if d.strip()
         ]
+
+    @property
+    def ia_triagem_reclassificacao_departamentos_lista(self) -> list[str]:
+        """Departamentos onde a IA pode reclassificar sozinha (CSV → lista)."""
+        return [
+            d.strip()
+            for d in self.ia_triagem_reclassificacao_departamentos.split(",")
+            if d.strip()
+        ]
+
+    def ia_triagem_reclassifica(self, departamento_nome: str | None) -> bool:
+        """A IA pode trocar categoria/subcategoria neste departamento? (F8.)
+
+        Lista vazia = feature desligada para todos (default). Não consulta a
+        sombra de propósito: reclassificar é escrita interna no chamado, não
+        mensagem ao autor — quem libera é esta lista, explicitamente."""
+        return (departamento_nome or "") in self.ia_triagem_reclassificacao_departamentos_lista
 
     def ia_triagem_em_sombra(self, departamento_nome: str | None) -> bool:
         """O departamento está em modo sombra? (Seção 2.3 do plano IA.)

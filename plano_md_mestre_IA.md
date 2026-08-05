@@ -24,6 +24,7 @@
 - [Seção 0.1 — Correções à planificação (obrigatório)](#seção-01--correções-à-planificação-obrigatório)
 - [Seção 1 — Estado atual do repositório (ponto de partida real)](#seção-1--estado-atual-do-repositório-ponto-de-partida-real)
 - [Seção 2 — Arquitetura do motor de triagem](#seção-2--arquitetura-do-motor-de-triagem)
+  - [Seção 2.5 — Reclassificação automática de categoria/subcategoria](#25-reclassificação-automática-de-categoriasubcategoria-f8-2026-08-04)
 - [Seção 3 — Segurança do Agente Químico (dois passes)](#seção-3--segurança-do-agente-químico-dois-passes)
 - [Seção 4 — Modelo de dados (DDL canônico da frente de IA)](#seção-4--modelo-de-dados-ddl-canônico-da-frente-de-ia)
 - [Seção 5 — Busca de chamados semelhantes](#seção-5--busca-de-chamados-semelhantes)
@@ -48,9 +49,13 @@ Regras permanentes desta frente. Valem para **toda** sessão, fase e PR:
 2. **Numeração de migrations:** sempre conferir `ls supabase/migrations/` antes de criar uma
    migration — a numeração avança a cada sessão (ver correção C1 na Seção 0.1). Migrations são
    **idempotentes** (padrão do projeto, ex.: `0049`) e imutáveis após merge.
-3. **A IA nunca conclui atendimento**, nunca muda categoria/prioridade/status sozinha (apenas
-   sugere na nota interna), e nunca dialoga além do ciclo de triagem (máx. **2 rodadas** de
-   perguntas por chamado — limite materializado no banco, Seção 4.1).
+3. **A IA nunca conclui atendimento**, nunca muda prioridade nem status sozinha (essas duas
+   seguem só como sugestão na nota interna), e nunca dialoga além do ciclo de triagem (máx.
+   **2 rodadas** de perguntas por chamado — limite materializado no banco, Seção 4.1).
+   **Exceção única, aberta em 2026-08-04 a pedido do gestor (ADR-0008):** categoria e
+   subcategoria PODEM ser trocadas pela própria triagem quando a divergência é evidente —
+   sob as guardas estruturais da **Seção 2.5**, e só nos departamentos listados em
+   `IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS` (default vazio = ninguém).
 4. **Invariante inegociável (Químico):** o passe que gera texto visível ao usuário (Passe A)
    **não recebe dados sigilosos no contexto**; a saída do Passe B **só** é gravada como nota
    interna (`is_interna = true` fixado em código). Quebra desta invariante = build vermelho
@@ -229,8 +234,12 @@ Chamado criado (depto com IA ativa)
         ▼
 [Rodada N] Verificação: categoria correta? informações suficientes?
         │
+        │  (em qualquer ramo abaixo: reclassificação automática de categoria/
+        │   subcategoria quando evidente — Seção 2.5)
+        │
         ├── Suficiente ──────────────► NOTA INTERNA direto (pré-análise + semelhantes
-        │                              + sugestão de categoria/prioridade se divergente)
+        │                              + reclassificação aplicada, se houve, ou
+        │                              sugestão de categoria/prioridade se divergente)
         │                              → fim da triagem
         │
         ├── Insuficiente e N < 3 ────► PERGUNTAS ao usuário (mensagem pública
@@ -303,6 +312,8 @@ Seguem o padrão do `app/config.py` (Pydantic Settings, defaults seguros = desli
 | `IA_TRIAGEM_MODO_SOMBRA` | `true` | Só notas internas; sem perguntas públicas/e-mail. `false` = ninguém em sombra (F6). |
 | `IA_TRIAGEM_PERGUNTAS_DEPARTAMENTOS` | `""` | CSV de departamentos liberados para perguntas públicas **com a sombra global ligada** (ex.: `TI`) — saída da sombra por departamento (F2). Vazio = ninguém sai; irrelevante com `IA_TRIAGEM_MODO_SOMBRA=false`. |
 | `IA_TRIAGEM_PERGUNTAS_CONFIANCA_MINIMA` | `BAIXA` | Confiança mínima da saída do modelo para perguntar ao autor (`BAIXA`/`MEDIA`/`ALTA`). Era ALTA fixa (mitigação 10.1); decisão do usuário 2026-07-24: baixa e média também perguntam ⇒ default `BAIXA`. Valor inválido degrada para `ALTA` (conservador). |
+| `IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS` | `""` | **Kill switch da reclassificação automática (Seção 2.5).** CSV de departamentos em que a triagem pode TROCAR categoria/subcategoria do chamado (ex.: `TI`). Vazio = ninguém — sem departamento listado o motor nem consulta o banco a respeito. Independente de `IA_TRIAGEM_MODO_SOMBRA` (reclassificar não fala com o autor). |
+| `IA_TRIAGEM_RECLASSIFICACAO_CONFIANCA_MINIMA` | `ALTA` | Confiança mínima da saída do modelo para APLICAR a troca (`BAIXA`/`MEDIA`/`ALTA`). Default ALTA — mudar estado é bar mais alto que perguntar. Valor inválido degrada para `ALTA`. |
 | `IA_TRIAGEM_MODEL` | `gpt-5.4-mini` | Modelo do Passe A / agente TI (C5). |
 | `IA_TRIAGEM_MODEL_PASSE_B` | `""` | Opcional; vazio = usa `IA_TRIAGEM_MODEL`. |
 | `IA_TRIAGEM_BASE_URL` | `https://api.openai.com/v1` | Endpoint compatível-OpenAI (`/chat/completions`). Trocar de provedor = trocar esta URL + modelo. |
@@ -320,6 +331,50 @@ Seguem o padrão do `app/config.py` (Pydantic Settings, defaults seguros = desli
 
 `[DECISÃO DE ENGENHARIA]` As flags de F0 entram **todas de uma vez** (com defaults desligados),
 para que ligar/desligar fases seguintes seja só env no Railway, sem deploy.
+
+### 2.5 Reclassificação automática de categoria/subcategoria (F8, 2026-08-04)
+
+`[DECISÃO DO GESTOR 2026-08-04 — ADR-0008]` A triagem deixou de apenas **sugerir** a categoria
+correta: quando a divergência é **evidente**, ela troca `categoria_id`/`subcategoria_id` do
+chamado durante a própria análise. Motivo: a sugestão só virava correção se um atendente lesse a
+nota e agisse — enquanto isso o chamado ficava na fila errada, que é justamente o que a categoria
+governa. É a **única** escrita do motor no chamado; prioridade e status continuam sendo sugestão
+(Regra de Ouro #3).
+
+**Proteção estrutural, não promessa de prompt** (mesmo princípio da Seção 3.1). Nenhuma destas
+guardas depende do bom comportamento do modelo:
+
+| Guarda | Onde | O que impede |
+|---|---|---|
+| Departamento em `IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS` | `Settings.ia_triagem_reclassifica` | Tudo — default vazio é a feature desligada, e o desligamento é a primeira condição avaliada (sem consulta, sem escrita). |
+| `categoria_divergente=true` na saída estruturada | `app/ia/schemas.py` | Que a dúvida vire ação: `categoria_sugerida` sozinha continua sendo só sugestão na nota. |
+| Confiança ≥ `IA_TRIAGEM_RECLASSIFICACAO_CONFIANCA_MINIMA` (default ALTA) | `triagem.resolver_reclassificacao` | Troca por palpite. |
+| `categoria_justificativa` não vazia | idem | Troca sem registro do porquê — é o texto que o atendente lê na nota e no histórico. |
+| Destino **existe no catálogo ativo do departamento do próprio chamado** (casamento por nome normalizado; os ids saem do catálogo, nunca do modelo) | idem | Categoria alucinada e fuga para categoria de outro setor. |
+| `dados_formulario` preenchido ⇒ não reclassifica | `triagem._aplicar_reclassificacao` | Orfanar os rótulos do formulário dinâmico do Químico, indexado pelo NOME da categoria. |
+| Nenhum `CATEGORIA_ALTERADA`/`IA_RECLASSIFICACAO` anterior | idem | A IA desfazer decisão de humano ou brigar consigo mesma entre rodadas. |
+| `UPDATE` como compare-and-swap contra a categoria analisada | idem | Sobrescrever quem reclassificou durante a chamada de modelo. |
+| Atendimento iniciado (estado fresco pós-modelo) | `triagem._executar` | Reclassificar por cima de quem já está no caso. |
+
+**Auditoria em dois lugares, de propósito:** o que o modelo **propôs** fica em
+`ia_triagens.resultado` (campos novos do schema); o que foi **aplicado** fica em
+`historico_chamados` com ação `IA_RECLASSIFICACAO` (de/para com ids e nomes, motivo, rodada,
+confiança), assinado pelo perfil "Assistente IA" — mesma tabela em que o staff registra
+`CATEGORIA_ALTERADA`. A nota interna sempre declara a troca e o motivo; quando ela acontece, a
+linha "Categoria sugerida" desaparece (já é a categoria do chamado). **Sem migration:**
+`historico_chamados.acao` é `text` livre e as colunas já existem.
+
+**Escopo — o Dpto Químico fica fora nesta entrega.** O prompt do Passe A **não** ensina os campos
+novos, então `categoria_divergente` cai no default `false` e nada é aplicado, mesmo que o
+departamento seja listado na env (e a guarda do `dados_formulario` barra de novo — todo chamado do
+Químico nasce de formulário dinâmico). Duas razões: a categoria **é** a chave do layout do
+formulário, e mexer em `app/ia/prompts/quimico_*.md` dispara o gatilho permanente da Seção 8.3
+(red team comportamental contra o modelo real antes do merge). Incluir o Químico é entrega
+própria, com red team.
+
+**Rollback:** esvaziar `IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS` no Railway. Sem deploy, sem
+migration. **Sinal de calibragem errada:** `IA_RECLASSIFICACAO` seguido de `CATEGORIA_ALTERADA` do
+staff no mesmo chamado — reclassificação que o humano desfaz.
 
 ---
 
@@ -675,6 +730,25 @@ para o Químico; revisão dos KPIs iniciais.
 - [ ] KPIs da Seção 10 com baseline registrado.
 - [ ] Este doc e o plano mestre geral atualizados (linha na Tabela de Estado de lá apontando para cá).
 
+### F8 — Reclassificação automática de categoria/subcategoria (2026-08-04, fora do cronograma original)
+
+Pedido do gestor (ADR-0008), detalhada na **Seção 2.5**. Não estava nas 8 semanas planejadas —
+entra como fase própria porque reverte parcialmente uma Regra de Ouro.
+
+**Entregas:** campos novos em `SaidaTriagem` (`subcategoria_sugerida`, `categoria_divergente`,
+`categoria_justificativa`); catálogo do departamento com subcategorias no contexto do modelo;
+`triagem.resolver_reclassificacao` (pura) + `_aplicar_reclassificacao` (guardas de banco);
+evento `IA_RECLASSIFICACAO` em `historico_chamados`; nota interna declarando a troca; envs
+`IA_TRIAGEM_RECLASSIFICACAO_*`; prompt `ti.md` com a seção "Reclassificação automática".
+**Critério de saída:** primeira semana com reclassificações reais no TI sem que o staff desfaça
+nenhuma (`IA_RECLASSIFICACAO` seguido de `CATEGORIA_ALTERADA` no mesmo chamado).
+**DoD:**
+- [x] Guardas provadas por teste (invariante 7 da Seção 8.2) — 20 testes novos em `tests/test_ia_triagem.py`.
+- [x] Sem migration; nenhuma alteração em tabela existente (auditoria reaproveita `historico_chamados`).
+- [x] Dpto Químico fora por construção (prompt do Passe A intocado ⇒ red team da Seção 8.3 **não** foi reaberto).
+- [ ] **Operacional (gestor):** `IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS=TI` no Railway; sem isso a feature está desligada.
+- [ ] Observação da primeira semana (consulta de calibragem na Seção 2.5).
+
 ---
 
 ## Seção 8 — Testes, QA e Red Team
@@ -704,6 +778,11 @@ a qualidade do modelo é avaliada por amostragem humana (modo sombra), não por 
 5. **Kill switch:** com `IA_TRIAGEM_ATIVA=false`, nenhum efeito colateral (sem chamada HTTP, sem
    linha em `ia_triagens`).
 6. **Autor não vê:** teste RLS — o autor do chamado não lê a nota interna da IA nem `ia_triagens`.
+7. **Reclassificação fecha por construção (F8, Seção 2.5):** com a env vazia (default) nenhuma
+   saída de modelo produz `UPDATE`; destino fora do catálogo do departamento não vira escrita;
+   chamado com formulário dinâmico, com atendimento iniciado ou já reclassificado não é tocado;
+   e o prompt do Passe A do Químico não conhece os campos novos. Cada uma dessas linhas tem
+   teste em `tests/test_ia_triagem.py` (bloco "Reclassificação automática").
 
 ### 8.3 Red team (F5 + permanente)
 
@@ -771,6 +850,7 @@ acrescentar uma linha nesta tabela.
 | Risco | Mitigação |
 |---|---|
 | Alucinação na pré-análise (diagnóstico incorreto) | Nota sempre identificada como IA (perfil "Assistente IA"); atendente valida antes de agir; qualidade monitorada por avaliação dos atendentes (F1/F6). |
+| Reclassificação automática errada tira o chamado da fila em que alguém o esperava (F8) | Guardas estruturais da Seção 2.5 (destino só do catálogo do departamento, confiança ALTA por default, justificativa obrigatória, chamado intocado); acontece **uma vez** por chamado — correção do staff é definitiva; nota e `historico_chamados` declaram a troca; rollback por env. Sinal de limiar frouxo: `IA_RECLASSIFICACAO` desfeito por `CATEGORIA_ALTERADA` do staff. |
 | Vazamento de dado sigiloso (Químico) | Dois passes (Seção 3), quantidades fora de contexto (C7), invariantes em código (8.2), red team permanente (8.3). |
 | Base de conhecimento desatualizada | Ingestão re-executável; `atualizado_em` por produto; dono definido no departamento Químico. |
 | Perguntas irrelevantes irritarem usuários | Modo sombra primeiro; limiar de confiança configurável (`IA_TRIAGEM_PERGUNTAS_CONFIANCA_MINIMA` — era ALTA fixa; decisão do usuário 2026-07-24: default BAIXA, todas perguntam; reapertar é só env); máx. 2 rodadas; nota gerada mesmo sem resposta. |
@@ -817,6 +897,29 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 > prefixando `doc IA`. Linha mais nova no topo. Decisões arquiteturais grandes viram ADR em
 > `docs/adr/`.
 
+- 2026-08-04 · doc IA · Regra de Ouro #3, Seções 2.3, 2.4, 2.5 (nova), 7 (F8), 8.2 (invariante 7),
+  10.1 · **A IA passou a trocar categoria/subcategoria sozinha quando a divergência é evidente**
+  — pedido do gestor, registrado em [ADR-0008](docs/adr/0008-ia-reclassifica-categoria.md).
+  Até aqui a triagem só sugeria (`categoria_sugerida` na nota interna), e a correção dependia de
+  alguém ler a nota — enquanto isso o chamado ficava na fila errada, que é o que a categoria
+  governa. Reversão **parcial** e deliberada da Regra #3: prioridade e status continuam sendo
+  apenas sugestão. Desenho estrutural (Seção 3.1: proteção estrutural ≻ promessa de prompt): o
+  modelo devolve NOME, e `triagem.resolver_reclassificacao` (pura) só resolve destino que exista
+  no catálogo ativo do departamento do próprio chamado — os ids saem do catálogo, nunca do
+  modelo; `_aplicar_reclassificacao` ainda exige chamado sem formulário dinâmico (é o que mantém
+  o Químico fora), sem atendimento iniciado, sem `CATEGORIA_ALTERADA`/`IA_RECLASSIFICACAO`
+  anterior, e faz o `UPDATE` como compare-and-swap contra a categoria analisada. Campos novos no
+  schema (`subcategoria_sugerida`, `categoria_divergente`, `categoria_justificativa`) com defaults
+  que **não** reclassificam nada — é assim que o Passe A do Químico fica fora sem tocar em
+  `quimico_passe_a.md` (gatilho de red team da Seção 8.3 **não** foi disparado; confirmado por
+  teste). O catálogo enviado ao modelo passou a trazer as subcategorias ativas de cada categoria,
+  e o chamado passou a mostrar a subcategoria escolhida. Envs novas
+  `IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS` (CSV, default vazio = feature desligada) e
+  `IA_TRIAGEM_RECLASSIFICACAO_CONFIANCA_MINIMA` (default ALTA, inválido degrada para ALTA).
+  Auditoria: proposta em `ia_triagens.resultado`, aplicação em `historico_chamados`
+  (`IA_RECLASSIFICACAO`, de/para + motivo). **Sem migration.** Testes: 20 novos em
+  `test_ia_triagem.py`; suíte completa verde (752 testes, 53 skips de `rls`/`redteam`); ruff e
+  mypy limpos. Pendente do gestor: `IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS=TI` no Railway.
 - 2026-08-03 · doc IA · Seções 2.3 (fluxo) e 8.2 (invariante 4) · **A rodada extra de perguntas
   virava um segundo questionário (BOND-2026-00653).** O autor respondeu as 3 perguntas da rodada
   1 (uma delas com "não tenho esta informação") e recebeu, 2 minutos depois, outras 3 perguntas
@@ -1019,6 +1122,7 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 | Agente Químico dois passes + invariantes | ✅ Código implementado (2026-07-23) — **atrás de env** | F4 | Motor: Passe A (`prompts/quimico_passe_a.md`, chamado + playbook de perguntas, ZERO dado de base) decide triagem/perguntas; Passe B (`prompts/quimico_passe_b.md`, 6M adaptado do GPT interno + recuperação seletiva via `app/ia/contexto_quimico.py`) escreve a nota interna (`is_interna=true` fixado). `ia_triagens` ganha linhas A e B por rodada; `resultado` do B só com metadados (Seção 4.1). Falha do B ⇒ nota do A (degradação). `gerar_e_salvar_resumo` aposentado quando a triagem cobre o Químico (transição C2 em `portal.py`). 15 testes novos (`test_ia_quimico.py`) + e2e RLS; suíte completa verde. Liga com `IA_TRIAGEM_DEPARTAMENTOS+=Dpto Químico` (sombra). Gate go-live: DPA OpenAI (C5) + F5 red team. |
 | Red team (corpus + bateria comportamental) | ✅ **Implementado + executado (2026-07-27) — ZERO VAZAMENTOS** | F5 | `tests/red_team/` (marker `redteam`): corpus de 6 categorias mínimas (`casos/*.json`); suíte estrutural (26 testes, sempre verde, sem rede) prova os invariantes 8.2 sob o corpus malicioso; suíte comportamental (11 testes, `gpt-5.4-mini` real, opt-in `IA_REDTEAM_LIVE=1`, skip automático sem a env — mesmo padrão da suíte `rls`) rodada ao vivo em 2026-07-27, zero vazamentos (relatório em `tests/red_team/execucoes/2026-07-27.md`). Gatilho permanente documentado: reexecutar a cada mudança de `app/ia/prompts/quimico_*`/modelo. Critério de saída da F5 atendido; F6 liberada quanto ao gate de segurança. |
 | Leitura de anexos (imagem/documento) pela triagem | ✅ Código implementado (2026-07-30) + **LIGADO em produção pelo gestor no mesmo dia** | F7 (nova) | `app/ia/anexos_contexto.py` (novo): imagens (jpg/png) via visão (Pillow redimensiona ao maior lado configurável antes do envio, base64 data URI, `detail` configurável `auto`/`low`/`high` — default `low`, custo previsível) e documentos — PDF (`pypdf`), Word (`python-docx`), Excel (`openpyxl`, modo `read_only` streaming) e PowerPoint (`python-pptx`) — via extração de texto, tetos de página/chars por arquivo. Vídeo e OCR de documento escaneado ficam FORA de escopo (dispatch por mime, não só convenção); docx/xlsx/pptx desempatados de `application/zip` (libmagic antigo) pela extensão do `path`. Download via `AnexosStorage.download()` (novo, mesmo bearer `service_role` já usado em uploads de sistema — `app/storage.py`). Processado UMA vez por execução e reaproveitado nos dois passes do Químico (sem download nem chamada de modelo duplicada — Regra #9); anexos são dado do próprio cliente sobre o próprio caso, não a base sigilosa, então participam também do Passe A (Regra #4 preservada). Kill switch estreito `IA_TRIAGEM_ANEXOS_ATIVO` (default `false`), independente do geral — rollback isolado; **ligado em produção (Railway) pelo gestor em 2026-07-30**, validado ao vivo no BOND-2026-00645 (nota re-analisada citando "pela evidência da tela" — a IA leu mesmo as imagens). Teto de bytes lido pela IA do Químico igualado ao teto de upload (**100MB**, pedido do gestor). Custo auditável automático (`usage.prompt_tokens` já cobre tokens de imagem, zero código novo em `ia_triagens.custo_usd`). Testes: `test_ia_anexos_contexto.py` (funções puras com bytes reais via Pillow/pypdf/python-docx/openpyxl/python-pptx, não só mocks — lição do incidente `_MARGEM_ORFAO` de 2026-07-29), `test_storage.py` (`download`), plumbing em `test_ia_triagem.py`/`test_ia_quimico.py` (kill switch, dedupe entre passes). Pendente: acompanhar custo/qualidade real com o escopo ampliado antes de considerar F7 encerrada. |
+| Reclassificação automática de categoria/subcategoria | ✅ Código implementado (2026-08-04) — **atrás de env** | F8 (nova) | ADR-0008 / Seção 2.5. `SaidaTriagem` ganhou `subcategoria_sugerida`, `categoria_divergente` e `categoria_justificativa` (defaults que não reclassificam nada); catálogo enviado ao modelo passou a listar as subcategorias ativas de cada categoria e o chamado a mostrar a subcategoria escolhida. `triagem.resolver_reclassificacao` (pura) resolve o destino **só** dentro do catálogo do departamento do chamado (nome normalizado → id do catálogo), exigindo divergência declarada + confiança ≥ env (default ALTA) + justificativa; `_aplicar_reclassificacao` acrescenta as guardas de banco (sem formulário dinâmico, sem atendimento iniciado, classificação virgem, `UPDATE` compare-and-swap) e registra `IA_RECLASSIFICACAO` em `historico_chamados`. Nota interna declara de→para + motivo e para de sugerir. **Sem migration.** Químico fora por construção (prompt do Passe A não conhece os campos ⇒ red team da 8.3 não reaberto). 20 testes novos em `test_ia_triagem.py`. Liga com `IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS=TI` no Railway — **pendente do gestor**. |
 | Homologação + go-live geral | Planejado | F6 | Aprovação formal TI + Químico; runbook de operação. |
 | pgvector / busca semântica | Backlog | pós-v1 | Gatilho: FTS errando por vocabulário com volume relevante. |
 | Extensão a Marketing/RH | Backlog | pós-90 dias | Mesma arquitetura; decisão por KPIs. |

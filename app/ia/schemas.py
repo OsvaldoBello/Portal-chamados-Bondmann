@@ -28,8 +28,21 @@ class SaidaTriagem(BaseModel):
     confianca: Literal["ALTA", "MEDIA", "BAIXA"] = "MEDIA"
     # Pré-análise técnica para a nota interna (2–6 frases, pt-BR).
     pre_analise: str = Field(min_length=1)
-    # Sugestões APENAS quando divergem do chamado (a IA nunca altera — Regra #3).
+    # Sugestões APENAS quando divergem do chamado. Prioridade e status seguem
+    # sendo só sugestão (Regra #3); categoria/subcategoria podem ser APLICADAS
+    # pelo motor quando `categoria_divergente` é true e todas as guardas da
+    # F8 passam (`triagem.resolver_reclassificacao`).
     categoria_sugerida: str | None = None
+    subcategoria_sugerida: str | None = None
+    # A classificação atual está EVIDENTEMENTE errada? (F8, 2026-08-04.)
+    # Default false: modelo/prompt que não conhece o campo nunca reclassifica —
+    # é assim que o Químico fica fora da feature sem depender de env (o prompt
+    # do Passe A não ensina estes campos; mudá-lo reabriria o red team, 8.3).
+    categoria_divergente: bool = False
+    # Por que a troca se justifica, citando o que no chamado a sustenta. Vazio
+    # ⇒ nada é aplicado, mesmo com `categoria_divergente=true`: a justificativa
+    # é o registro que o atendente lê na nota e no histórico.
+    categoria_justificativa: str | None = None
     prioridade_sugerida: Literal["BAIXA", "MEDIA", "ALTA", "URGENTE"] | None = None
     # Perguntas que fariam a triagem avançar (máx. 3). Em modo sombra ficam
     # registradas na nota interna; na F2 viram mensagem pública.

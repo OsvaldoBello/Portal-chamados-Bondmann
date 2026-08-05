@@ -41,8 +41,31 @@ _CHAMADO = {
     "dados_formulario": "{}",  # jsonb chega como str no asyncpg
     "departamento_id": "dep-ti",
     "categoria": "Hardware",
+    "categoria_id": "cat-hardware",
+    "subcategoria": None,
+    "subcategoria_id": None,
     "departamento": "TI",
 }
+
+# Catálogo do departamento como o motor o lê do banco (F8): id + nome + as
+# subcategorias ativas. É também o conjunto fechado de destinos que a
+# reclassificação automática pode escolher.
+_CATALOGO = (
+    {
+        "id": "cat-hardware",
+        "nome": "Hardware",
+        "subcategorias": [{"id": "sub-notebook", "nome": "Notebook"}],
+    },
+    {
+        "id": "cat-redes",
+        "nome": "Redes",
+        "subcategorias": [
+            {"id": "sub-vpn", "nome": "VPN"},
+            {"id": "sub-wifi", "nome": "Wi-Fi"},
+        ],
+    },
+    {"id": "cat-sistemas", "nome": "Sistemas", "subcategorias": []},
+)
 
 _SAIDA_OK = {
     "informacoes_suficientes": False,
@@ -86,12 +109,14 @@ class FakeConn:
         ultimas_perguntas: tuple[str, ...] = (),
         autor_respondeu: bool = False,
         conversa: tuple[dict, ...] = (),
-        categorias: tuple[str, ...] = ("Hardware", "Redes", "Sistemas"),
+        categorias: tuple[dict, ...] = _CATALOGO,
         perfil_id: str | None = "perfil-ia-uuid",
         triagem_insert_id: int | None = 1,
         semelhantes: tuple[dict, ...] = (),
         busca_quebra: bool = False,
         anexos_mensagens: tuple[dict, ...] = (),
+        ja_classificado: bool = False,
+        update_categoria_perdeu: bool = False,
     ):
         self._chamado = chamado
         self._ultima_rodada = ultima_rodada
@@ -109,8 +134,14 @@ class FakeConn:
         # Linhas de `mensagens.anexos` (F7) — cada item já é o valor da coluna
         # (lista de {path, nome, mime, tamanho}), como `asyncpg` devolveria.
         self._anexos_mensagens = anexos_mensagens
+        # F8: já houve CATEGORIA_ALTERADA/IA_RECLASSIFICACAO no histórico?
+        self._ja_classificado = ja_classificado
+        # F8: o compare-and-swap do UPDATE não encontrou linha (alguém trocou a
+        # categoria durante a chamada de modelo).
+        self._update_categoria_perdeu = update_categoria_perdeu
         self.busca_args: tuple | None = None  # captura os args da busca FTS (F3)
         self.triagem_inserts: list[tuple] = []
+        self.updates_categoria: list[tuple] = []  # args do UPDATE chamados (F8)
         self.executes: list[tuple[str, tuple]] = []
 
     async def fetchrow(self, sql: str, *args):
@@ -131,6 +162,11 @@ class FakeConn:
         if "INSERT INTO ia_triagens" in sql:
             self.triagem_inserts.append(args)
             return self._triagem_insert_id
+        if "FROM historico_chamados" in sql:  # guarda de classificação virgem (F8)
+            return 1 if self._ja_classificado else None
+        if "UPDATE chamados" in sql:  # reclassificação automática (F8)
+            self.updates_categoria.append(args)
+            return None if self._update_categoria_perdeu else "cid"
         if "FROM mensagens" in sql:
             return 1 if self._autor_respondeu else None
         raise AssertionError(f"fetchval inesperado: {sql}")
@@ -142,7 +178,16 @@ class FakeConn:
             self.busca_args = args
             return [dict(s) for s in self._semelhantes]
         if "FROM categorias" in sql:
-            return [{"nome": n} for n in self._categorias]
+            # `json_agg` chega como str no asyncpg — o fake devolve no mesmo
+            # formato para exercitar a normalização do motor.
+            return [
+                {
+                    "id": c["id"],
+                    "nome": c["nome"],
+                    "subcategorias": json.dumps(c.get("subcategorias") or []),
+                }
+                for c in self._categorias
+            ]
         if "m.anexos" in sql:  # checar ANTES do genérico "FROM mensagens" abaixo
             return [{"anexos": a} for a in self._anexos_mensagens]
         if "FROM mensagens" in sql:
@@ -1064,6 +1109,244 @@ def test_montar_nota_com_semelhantes_e_truncamento():
     nota2 = triagem.montar_nota(saida, _CHAMADO, [dict(_SEMELHANTE, resolucao=None)])
     assert "resolução registrada" not in nota2
     assert "BOND-2026-00412" in nota2
+
+
+# ------------------------------------------------------------------
+# Reclassificação automática de categoria/subcategoria (F8, 2026-08-04)
+#
+# Pedido do gestor: quando a divergência for evidente, a IA troca a
+# classificação em vez de só sugerir (ADR 0008). Tudo o que segue prova que a
+# troca é ESTRUTURALMENTE limitada — destino dentro do catálogo do próprio
+# departamento, chamado intocado, e nenhuma escrita fora dos departamentos
+# liberados na env.
+# ------------------------------------------------------------------
+
+
+_SAIDA_RECLASSIFICA = {
+    **_SAIDA_OK,
+    "informacoes_suficientes": True,
+    "perguntas": [],
+    "confianca": "ALTA",
+    "categoria_sugerida": "Redes",
+    "subcategoria_sugerida": "VPN",
+    "categoria_divergente": True,
+    "categoria_justificativa": "O autor descreve perda de acesso à VPN, não falha de equipamento.",
+}
+
+
+def _settings_reclassifica(**overrides) -> Settings:
+    base = {"ia_triagem_reclassificacao_departamentos": "TI"}
+    base.update(overrides)
+    return _settings(**base)
+
+
+def _resolver(saida_extra: dict | None = None, chamado_extra: dict | None = None, **settings_kw):
+    saida = SaidaTriagem.model_validate({**_SAIDA_RECLASSIFICA, **(saida_extra or {})})
+    chamado = {**_CHAMADO, **(chamado_extra or {})}
+    return triagem.resolver_reclassificacao(
+        saida, chamado, list(_CATALOGO), _settings_reclassifica(**settings_kw)
+    )
+
+
+def test_reclassificacao_desligada_por_default():
+    """Sem departamento na env, `resolver_reclassificacao` devolve None mesmo
+    com a saída mais convincente possível — é o kill switch da feature."""
+    saida = SaidaTriagem.model_validate(_SAIDA_RECLASSIFICA)
+    assert triagem.resolver_reclassificacao(saida, dict(_CHAMADO), list(_CATALOGO), _settings()) is None
+
+
+def test_reclassificacao_resolve_categoria_e_subcategoria_do_catalogo():
+    recl = _resolver()
+    assert recl is not None
+    assert (recl.categoria_id, recl.categoria_nome) == ("cat-redes", "Redes")
+    assert (recl.subcategoria_id, recl.subcategoria_nome) == ("sub-vpn", "VPN")
+    assert recl.de_categoria == "Hardware"
+    assert "VPN" in recl.motivo
+
+
+def test_reclassificacao_casa_nome_com_acento_e_caixa_diferentes():
+    """O modelo raramente devolve o nome byte a byte igual ao do catálogo."""
+    recl = _resolver({"categoria_sugerida": "redes", "subcategoria_sugerida": "wi fi"})
+    assert recl is not None
+    assert recl.categoria_id == "cat-redes" and recl.subcategoria_id == "sub-wifi"
+
+
+def test_reclassificacao_exige_divergencia_declarada():
+    """Devolver `categoria_sugerida` continua sendo só sugestão — trocar exige
+    a declaração explícita de divergência."""
+    assert _resolver({"categoria_divergente": False}) is None
+
+
+def test_reclassificacao_exige_confianca_minima_e_justificativa():
+    assert _resolver({"confianca": "MEDIA"}) is None  # default da env é ALTA
+    assert _resolver({"categoria_justificativa": "   "}) is None
+    assert _resolver({"categoria_justificativa": None}) is None
+    # Env mais frouxa libera MEDIA; env inválida degrada para ALTA (conservador).
+    assert _resolver(
+        {"confianca": "MEDIA"}, ia_triagem_reclassificacao_confianca_minima="MEDIA"
+    ) is not None
+    assert _resolver(
+        {"confianca": "MEDIA"}, ia_triagem_reclassificacao_confianca_minima="qualquer coisa"
+    ) is None
+
+
+def test_reclassificacao_nao_inventa_destino_fora_do_catalogo():
+    """Categoria alucinada (ou de outro departamento) não vira escrita."""
+    assert _resolver({"categoria_sugerida": "Jurídico"}) is None
+    # Subcategoria que não é da categoria de destino é ignorada, não inventada:
+    # a categoria muda e a subcategoria fica limpa (órfã da antiga).
+    recl = _resolver({"subcategoria_sugerida": "Notebook"})  # é de Hardware
+    assert recl is not None and recl.categoria_id == "cat-redes"
+    assert recl.subcategoria_id is None and recl.subcategoria_nome is None
+
+
+def test_reclassificacao_so_de_subcategoria_mantem_a_categoria():
+    recl = _resolver(
+        {"categoria_sugerida": None, "subcategoria_sugerida": "Notebook"},
+        {"subcategoria": None, "subcategoria_id": None},
+    )
+    assert recl is not None
+    assert recl.categoria_id == "cat-hardware"  # categoria intocada
+    assert recl.subcategoria_id == "sub-notebook"
+
+
+def test_reclassificacao_sem_mudanca_efetiva_devolve_none():
+    """Destino igual ao par atual = nada a fazer (não gera escrita nem nota)."""
+    assert _resolver(
+        {"categoria_sugerida": "Hardware", "subcategoria_sugerida": "Notebook"},
+        {"subcategoria": "Notebook", "subcategoria_id": "sub-notebook"},
+    ) is None
+
+
+def test_reclassificacao_ignora_catalogo_sem_id():
+    """Catálogo no formato antigo (`list[str]`, sem id) não tem destino
+    resolvível — nenhuma troca acontece."""
+    saida = SaidaTriagem.model_validate(_SAIDA_RECLASSIFICA)
+    assert triagem.resolver_reclassificacao(
+        saida, dict(_CHAMADO), ["Hardware", "Redes"], _settings_reclassifica()
+    ) is None
+
+
+async def test_fluxo_aplica_reclassificacao_com_update_historico_e_nota():
+    conn = FakeConn()
+    completar = AsyncMock(return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_RECLASSIFICA)))
+    with _patched(conn, _settings_reclassifica(), completar):
+        await triagem.executar_triagem("cid")
+
+    # UPDATE com compare-and-swap contra a categoria analisada.
+    assert len(conn.updates_categoria) == 1
+    chamado_id, categoria_id, subcategoria_id, categoria_de = conn.updates_categoria[0]
+    assert (chamado_id, categoria_id, subcategoria_id) == ("cid", "cat-redes", "sub-vpn")
+    assert categoria_de == "cat-hardware"
+
+    # Histórico do chamado registra o que foi APLICADO (a proposta do modelo já
+    # está em `ia_triagens.resultado`).
+    _, hist_args = next(
+        (s, a) for s, a in conn.executes if "IA_RECLASSIFICACAO" in s
+    )
+    detalhes = json.loads(hist_args[2])
+    assert detalhes["de"]["categoria"] == "Hardware"
+    assert detalhes["para"] == {
+        "categoria": "Redes",
+        "subcategoria": "VPN",
+        "categoria_id": "cat-redes",
+        "subcategoria_id": "sub-vpn",
+    }
+    assert detalhes["confianca"] == "ALTA" and detalhes["rodada"] == 1
+    assert "VPN" in detalhes["motivo"]
+
+    # Nota interna conta a troca e para de repetir a sugestão (já é a categoria).
+    _, msg_args = next((s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s)
+    nota = msg_args[2]
+    assert "reclassificada automaticamente pela triagem: Hardware → Redes" in nota
+    assert "subcategoria: — → VPN" in nota
+    assert "Categoria sugerida" not in nota
+
+
+async def test_reclassificacao_nao_toca_no_banco_quando_desligada():
+    """Default (env vazia): mesma saída do modelo, zero UPDATE, e a nota volta
+    ao comportamento de sempre — sugerir."""
+    conn = FakeConn()
+    completar = AsyncMock(return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_RECLASSIFICA)))
+    with _patched(conn, _settings(), completar):
+        await triagem.executar_triagem("cid")
+    assert conn.updates_categoria == []
+    assert not any("IA_RECLASSIFICACAO" in s for s, _ in conn.executes)
+    _, msg_args = next((s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s)
+    assert "Categoria sugerida: Redes (escolhida: Hardware)" in msg_args[2]
+
+
+async def test_reclassificacao_barrada_com_atendimento_iniciado():
+    """Atendente atuando: a classificação é decisão dele, não da IA."""
+    conn = FakeConn(chamado={**_CHAMADO, "status": "EM_ATENDIMENTO", "operador_id": "op-1"})
+    completar = AsyncMock(return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_RECLASSIFICA)))
+    with _patched(conn, _settings_reclassifica(), completar):
+        await triagem.executar_triagem("cid")
+    assert conn.updates_categoria == []
+
+
+async def test_reclassificacao_barrada_com_formulario_dinamico():
+    """`dados_formulario` preenchido = campos respondidos contra o schema da
+    categoria atual (Químico). Trocar a categoria orfanaria os rótulos — é
+    esta guarda que mantém o Químico fora da feature."""
+    conn = FakeConn(chamado={**_CHAMADO, "dados_formulario": json.dumps({"produto": "ALKARES"})})
+    completar = AsyncMock(return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_RECLASSIFICA)))
+    with _patched(conn, _settings_reclassifica(), completar):
+        await triagem.executar_triagem("cid")
+    assert conn.updates_categoria == []
+    _, msg_args = next((s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s)
+    assert "reclassificada automaticamente" not in msg_args[2]
+
+
+async def test_reclassificacao_nao_desfaz_classificacao_ja_alterada():
+    """Já houve CATEGORIA_ALTERADA (staff) ou IA_RECLASSIFICACAO: a IA não
+    briga com o humano nem consigo mesma entre rodadas."""
+    conn = FakeConn(ja_classificado=True)
+    completar = AsyncMock(return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_RECLASSIFICA)))
+    with _patched(conn, _settings_reclassifica(), completar):
+        await triagem.executar_triagem("cid")
+    assert conn.updates_categoria == []
+    assert not any("IA_RECLASSIFICACAO" in s for s, _ in conn.executes)
+
+
+async def test_reclassificacao_perdida_na_corrida_nao_vira_nota():
+    """O UPDATE não achou linha (alguém reclassificou durante a chamada de
+    modelo): nenhum histórico, e a nota não afirma uma troca que não houve."""
+    conn = FakeConn(update_categoria_perdeu=True)
+    completar = AsyncMock(return_value=RespostaModelo(conteudo=json.dumps(_SAIDA_RECLASSIFICA)))
+    with _patched(conn, _settings_reclassifica(), completar):
+        await triagem.executar_triagem("cid")
+    assert len(conn.updates_categoria) == 1
+    assert not any("IA_RECLASSIFICACAO" in s for s, _ in conn.executes)
+    _, msg_args = next((s, a) for s, a in conn.executes if "INSERT INTO mensagens" in s)
+    assert "reclassificada automaticamente" not in msg_args[2]
+
+
+def test_catalogo_no_prompt_lista_subcategorias():
+    user = triagem.montar_mensagens(dict(_CHAMADO, dados_formulario={}), list(_CATALOGO))[1][
+        "content"
+    ]
+    assert "- Redes → subcategorias: VPN; Wi-Fi" in user
+    assert "- Sistemas" in user  # categoria sem subcategoria não ganha seta
+    assert "Subcategoria escolhida: —" in user
+
+
+def test_prompt_ti_documenta_a_reclassificacao():
+    prompt = " ".join(triagem._prompt("ti").split())
+    assert "categoria_divergente" in prompt
+    assert "subcategoria_sugerida" in prompt
+    # A regra que não pode se perder numa reescrita do prompt.
+    assert "NUNCA altera prioridade ou status" in prompt
+
+
+def test_prompt_quimico_passe_a_nao_ensina_reclassificacao():
+    """Decisão de escopo (F8): o Químico fica fora — o prompt do Passe A não
+    conhece os campos novos, então `categoria_divergente` cai no default
+    `false` e nada é aplicado, sem depender de env. Mexer neste prompt reabre
+    a bateria de red team (Seção 8.3 do plano IA)."""
+    prompt = triagem._prompt("quimico_passe_a")
+    assert "categoria_divergente" not in prompt
+    assert "NUNCA altera categoria" in " ".join(prompt.split())
 
 
 def test_montar_consulta_une_termos_com_or_e_ignora_vazios():
