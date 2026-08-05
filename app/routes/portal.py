@@ -252,7 +252,9 @@ async def _render_form(
     # Categorias pertencem ao departamento (0019): só carregam após escolher o setor.
     dep_sel = form.get("departamento_id") or ""
     categorias = (
-        await repo.categorias_ativas(ctx.user.claims, dep_sel) if dep_sel else []
+        await repo.categorias_ativas(ctx.user.claims, dep_sel, filtrar_publico=True)
+        if dep_sel
+        else []
     )
     subcategorias: list[dict] = []
     if form.get("categoria_id"):
@@ -326,7 +328,7 @@ async def categorias_fragmento(
     da rota dinâmica ``/chamados/{chamado_id}``."""
     departamento_id = departamento_id.strip()
     cats = (
-        await repo.categorias_ativas(ctx.user.claims, departamento_id)
+        await repo.categorias_ativas(ctx.user.claims, departamento_id, filtrar_publico=True)
         if departamento_id
         else []
     )
@@ -479,7 +481,10 @@ async def criar_chamado(
     # A categoria precisa pertencer ao departamento escolhido (0019 — defesa em
     # profundidade contra POST forjado).
     if not await repo.categoria_valida(
-        ctx.user.claims, categoria_id=categoria_id, departamento_id=departamento_id
+        ctx.user.claims,
+        categoria_id=categoria_id,
+        departamento_id=departamento_id,
+        filtrar_publico=True,
     ):
         return await _erro("A categoria não pertence ao departamento escolhido.")
     # Subcategoria só é exigida quando a categoria tem subcategorias ativas

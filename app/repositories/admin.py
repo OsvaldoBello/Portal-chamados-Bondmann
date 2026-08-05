@@ -419,7 +419,7 @@ class AdminRepo:
     async def categorias(self, claims: dict) -> list[dict[str, Any]]:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
-                """SELECT c.id, c.nome, c.descricao, c.ativo,
+                """SELECT c.id, c.nome, c.descricao, c.ativo, c.publico_alvo,
                           c.departamento_id, d.nome AS departamento
                      FROM categorias c
                      LEFT JOIN departamentos d ON d.id = c.departamento_id
@@ -428,17 +428,25 @@ class AdminRepo:
             return [dict(r) for r in rows]
 
     async def criar_categoria(
-        self, claims: dict, nome: str, descricao: str | None, departamento_id: str | None = None
+        self,
+        claims: dict,
+        nome: str,
+        descricao: str | None,
+        departamento_id: str | None = None,
+        publico_alvo: str = "AMBOS",
     ) -> None:
         """Cria categoria já vinculada a um departamento (categorias por setor,
-        migration 0019). ``departamento_id`` None deixa a categoria sem setor."""
+        migration 0019). ``departamento_id`` None deixa a categoria sem setor.
+        ``publico_alvo`` (0076) restringe quem vê a categoria na abertura:
+        CLT, PJ (representantes) ou AMBOS (default — comportamento pré-0076)."""
         async with rls_connection(claims) as conn:
             await conn.execute(
-                "INSERT INTO categorias (nome, descricao, departamento_id) "
-                "VALUES ($1, $2, $3::uuid)",
+                "INSERT INTO categorias (nome, descricao, departamento_id, publico_alvo) "
+                "VALUES ($1, $2, $3::uuid, $4)",
                 nome,
                 descricao,
                 departamento_id,
+                publico_alvo,
             )
 
     async def toggle_categoria(self, claims: dict, cat_id: str) -> None:

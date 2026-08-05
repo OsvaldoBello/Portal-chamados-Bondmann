@@ -204,15 +204,29 @@ class ChamadosRepo:
     # -- CatalogoRepo ---------------------------------------------------------
 
     async def categorias_ativas(
-        self, claims: dict, departamento_id: str | None = None
+        self,
+        claims: dict,
+        departamento_id: str | None = None,
+        *,
+        filtrar_publico: bool = False,
     ) -> list[dict[str, Any]]:
-        return await self._catalogo.categorias_ativas(claims, departamento_id)
+        return await self._catalogo.categorias_ativas(
+            claims, departamento_id, filtrar_publico=filtrar_publico
+        )
 
     async def categoria_valida(
-        self, claims: dict, *, categoria_id: str, departamento_id: str
+        self,
+        claims: dict,
+        *,
+        categoria_id: str,
+        departamento_id: str,
+        filtrar_publico: bool = False,
     ) -> bool:
         return await self._catalogo.categoria_valida(
-            claims, categoria_id=categoria_id, departamento_id=departamento_id
+            claims,
+            categoria_id=categoria_id,
+            departamento_id=departamento_id,
+            filtrar_publico=filtrar_publico,
         )
 
     async def nome_categoria(self, claims: dict, categoria_id: str) -> str | None:

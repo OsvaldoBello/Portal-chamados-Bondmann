@@ -67,6 +67,13 @@
       <div class="flex gap-2">
         <input name="descricao" placeholder="Descrição (opcional)"
                class="flex-1 px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500">
+        <select name="publico_alvo"
+                class="px-3 py-2 rounded-lg ring-1 ring-line text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer"
+                title="Quem vê essa categoria na abertura de chamado">
+          <option value="AMBOS" selected>CLT + PJ</option>
+          <option value="CLT">Só CLT</option>
+          <option value="PJ">Só PJ (representantes)</option>
+        </select>
         <button class="px-4 py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold">Adicionar</button>
       </div>
     </form>
@@ -76,6 +83,9 @@
         <span class="text-sm {{ 'text-navy' if c.ativo else 'text-faint line-through' }}">
           {{ c.nome }}
           <span class="ml-1.5 inline-flex rounded-full bg-navy-100 px-2 py-0.5 text-[11px] font-semibold text-navy align-middle">{{ c.departamento or "sem setor" }}</span>
+          {% if c.publico_alvo and c.publico_alvo != "AMBOS" %}
+          <span class="ml-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700 align-middle">{{ c.publico_alvo }}</span>
+          {% endif %}
         </span>
         {{ toggle_btn("/admin/categorias/" ~ c.id ~ "/toggle", c.ativo) }}
       </li>

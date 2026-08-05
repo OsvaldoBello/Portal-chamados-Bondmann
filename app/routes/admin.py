@@ -654,12 +654,16 @@ async def toggle_recebe_departamento(
     return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
 
 
+_PUBLICOS_CATEGORIA = {"CLT", "PJ", "AMBOS"}
+
+
 @router.post("/categorias")
 async def criar_categoria(
     request: Request,
     nome: str = Form(...),
     descricao: str = Form(""),
     departamento_id: str = Form(""),
+    publico_alvo: str = Form("AMBOS"),
     ctx: AdminCtx = Depends(admin_context),
     repo: AdminRepo = Depends(get_admin_repo),
     _: None = Depends(_csrf_guard),
@@ -671,8 +675,15 @@ async def criar_categoria(
     dep_id = AdminService.departamento_valido(
         await repo.departamentos(ctx.user.claims), departamento_id, exigir_fila=True
     )
+    # Público-alvo (0076): CLT/PJ/AMBOS — valor forjado/desconhecido cai em AMBOS
+    # (mais permissivo, igual ao comportamento pré-0076).
+    publico = publico_alvo.strip().upper()
+    if publico not in _PUBLICOS_CATEGORIA:
+        publico = "AMBOS"
     if nome and dep_id:
-        await repo.criar_categoria(ctx.user.claims, nome, descricao.strip() or None, dep_id)
+        await repo.criar_categoria(
+            ctx.user.claims, nome, descricao.strip() or None, dep_id, publico
+        )
         cache.invalidate_prefix(CACHE_CATEGORIAS)
     return RedirectResponse("/admin/gestao", status_code=status.HTTP_303_SEE_OTHER)
 

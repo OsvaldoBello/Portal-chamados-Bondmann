@@ -158,10 +158,12 @@ class FakeRepo:
     async def mensagens_assinatura(self, claims, chamado_id):
         return (0, None)
 
-    async def categorias_ativas(self, claims, departamento_id=None):
+    async def categorias_ativas(self, claims, departamento_id=None, *, filtrar_publico=False):
         return self._categorias
 
-    async def categoria_valida(self, claims, *, categoria_id, departamento_id):
+    async def categoria_valida(
+        self, claims, *, categoria_id, departamento_id, filtrar_publico=False
+    ):
         return any(str(c["id"]) == str(categoria_id) for c in self._categorias)
 
     async def departamentos_ativos(self, claims):
