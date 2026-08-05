@@ -1,0 +1,304 @@
+{#
+  Relatório de Marketing exportado (.html autocontido) — ver
+  app/services/export_html.py::montar_relatorio_marketing.
+
+  Diferente do relatório genérico (admin/relatorio_export.html), este arquivo
+  NÃO resume os indicadores num layout de impressão à parte: ele é um CLONE
+  autocontido do próprio conteúdo de admin/dashboard_marketing.html — mesmo
+  HTML (mesmos ids/classes que admin_marketing.js espera), mesmo CSS compilado
+  do site (app.css + anim.css + dashboard_marketing.css) e o mesmo
+  admin_marketing.js, todos colados inline. `mkt_data` viaja OS MESMOS dados
+  brutos (não filtrados) que a tela recebe — o JS já faz toda a filtragem por
+  período e a troca de aba no cliente, então o relatório abre com os MESMOS
+  filtros, gráficos (inclusive os plugins de pill/rótulo) e cartões da tela,
+  sem precisar duplicar essa lógica em Python (pedido do usuário 2026-08-05:
+  "100% fiel [...] mantendo gráficos, estilo e etc da mesma forma vista no
+  site").
+
+  Removido de propósito (não fazem sentido num arquivo estático, offline):
+  - o seletor de setor do TI (a tela sempre mostra o chip estático aqui);
+  - os botões "Exportar" (.xlsx / .html) da barra de filtro;
+  - o card de upload da planilha "Investimento por Região" na aba Mídia
+    (envia POST pro servidor — o relatório exportado não tem servidor).
+  Todo o resto — ids, classes, estrutura das 7 abas — é idêntico à tela, pois
+  admin_marketing.js referencia vários desses ids sem checagem de nulo.
+#}<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ titulo }} — {{ escopo }} — {{ periodo }}</title>
+<style>{{ app_css|safe }}</style>
+<style>{{ anim_css|safe }}</style>
+<style>{{ marketing_css|safe }}</style>
+<style>
+  /* Ctrl+P → "Salvar como PDF" é como este relatório costuma ser arquivado;
+     a barra de filtro não faz sentido no papel. */
+  @media print {
+    #filter-bar { display: none !important; }
+    body { background: #fff; }
+  }
+</style>
+</head>
+<body class="min-h-screen bg-surface text-ink font-sans antialiased">
+<div class="max-w-[1400px] mx-auto p-4 sm:p-7">
+
+<div class="anim-fade mb-5 flex flex-wrap items-center justify-between gap-4 text-sm">
+  <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface text-brandgreen-700 font-medium border border-line">
+    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21"/></svg>
+    Indicadores de: <strong>{{ escopo }}</strong>
+  </span>
+  <h2 id="header-title" class="font-display font-black text-navy text-base">Dashboard de Marketing</h2>
+  <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface text-muted font-medium border border-line text-xs">
+    Relatório emitido em {{ gerado_em }}
+  </span>
+</div>
+
+<!-- FILTER BAR -->
+<div id="filter-bar" class="flex flex-wrap items-center gap-2 mb-6">
+  <span class="text-xs font-bold uppercase tracking-wider text-muted mr-2">Filtrar Período:</span>
+  <button class="filter-pill active px-3.5 py-1.5 rounded-full bg-gray-200 text-navy font-semibold text-xs transition" data-filter="all">Acumulado</button>
+  {% for m in mkt_data.monthly %}
+  <button class="filter-pill px-3.5 py-1.5 rounded-full bg-gray-200 text-navy font-semibold text-xs transition" data-filter="{{ m.label }}">{{ m.label }}</button>
+  {% endfor %}
+  <span id="filter-period-label" class="text-xs text-muted italic ml-2"></span>
+</div>
+
+<!-- SUMMARY CARDS -->
+<div id="summary" class="grid md:grid-cols-2 gap-4 mb-6">
+  <div id="sum-left" class="bg-white rounded-xl shadow-card border-l-4 border-l-brandgreen-600 border border-line/60 p-5">
+  </div>
+  <div id="sum-right" class="bg-white rounded-xl shadow-card border-l-4 border-l-purple-600 border border-line/60 p-5">
+  </div>
+</div>
+
+<!-- TABS BAR -->
+<div id="tabs" class="flex flex-wrap gap-2 mb-6">
+  <button class="tab-btn active px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy transition shadow-soft" data-tab="entrega">1. Taxa de Entrega</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="volume">2. Volume Produzido</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="origem">3. Origem de Demanda</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="dept">4. Solicitantes</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="tempo">5. Tempo de Entrega</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="midia">6. Mídia Regional</button>
+  <button class="tab-btn px-4 py-2 rounded-full font-bold text-xs bg-gray-200 text-navy hover:bg-gray-300 transition" data-tab="operador">7. Operadores</button>
+</div>
+
+<!-- TAB PANELS -->
+<div id="tab-entrega" class="tab-panel active">
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Status das Demandas — Histórico Mensal</h4>
+    <p class="text-xs text-muted mb-4">Total de demandas recebidas por mês e status</p>
+    <div class="chart-box-md"><canvas id="chartEntrega"></canvas></div>
+  </div>
+</div>
+
+<div id="tab-volume" class="tab-panel space-y-4">
+  <div class="insight-row grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="volume-total" class="text-lg font-bold text-purple-600">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Volume total acumulado</div>
+      <div id="volume-total-nota" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="volume-razao" class="text-lg font-bold text-amber-600">—</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Razão volume/demanda</div>
+      <div id="volume-razao-nota" class="text-[11px] text-muted mt-0.5 truncate">Média acumulada</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="volume-crescimento" class="text-lg font-bold text-brandgreen-700">—</div>
+      <div id="volume-crescimento-rotulo" class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Crescimento mês a mês</div>
+      <div id="volume-crescimento-nota" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="volume-razao-mes" class="text-lg font-bold text-brandgreen-700">—</div>
+      <div id="volume-razao-mes-rotulo" class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Razão do último mês</div>
+      <div id="volume-razao-mes-nota" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+  </div>
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Demandas vs Volume Produzido — Evolução Mensal</h4>
+    <p class="text-xs text-muted mb-4">Quantidade de demandas vs total de peças/cards produzidos</p>
+    <div class="chart-box-md"><canvas id="chartVolume"></canvas></div>
+  </div>
+</div>
+
+<div id="tab-origem" class="tab-panel">
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Origem da Demanda — Evolução Mensal</h4>
+    <p class="text-xs text-muted mb-4">Comparativo de demandas criadas pelo próprio Marketing vs Solicitações de outros setores</p>
+    <div class="chart-box-md"><canvas id="chartOrigem"></canvas></div>
+  </div>
+</div>
+
+<div id="tab-dept" class="tab-panel">
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Demandas por Setor Solicitante — Ranking Acumulado</h4>
+    <p class="text-xs text-muted mb-4">Ordenado do maior para o menor setor solicitante</p>
+    <div class="chart-box-lg"><canvas id="chartDept"></canvas></div>
+    <p id="dept-aviso" class="text-[11px] text-muted mt-3"></p>
+  </div>
+</div>
+
+<div id="tab-tempo" class="tab-panel space-y-4">
+  <div class="insight-row grid grid-cols-2 md:grid-cols-5 gap-3">
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="tempo-media-acumulado" class="text-lg font-bold text-brandgreen-700">0.0 d</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Tempo médio acumulado</div>
+      <div class="text-[11px] text-muted mt-0.5">Apenas demandas concluídas</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="tempo-atrasos-qtd" class="text-lg font-bold text-red-600">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Atrasos >5 dias</div>
+      <div id="tempo-atrasos-pct" class="text-[11px] text-muted mt-0.5">0.0% do total</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="tempo-maior-atraso" class="text-lg font-bold text-red-600">0 d</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Maior atraso registrado</div>
+      <div id="tempo-maior-atraso-nome" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="tempo-melhor-media" class="text-lg font-bold text-brandgreen-700">0.0 d</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Melhor média mensal</div>
+      <div id="tempo-melhor-media-mes" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="tempo-causa-principal" class="text-lg font-bold text-amber-600 truncate">—</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Causa principal</div>
+      <div id="tempo-causa-principal-detalhes" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+  </div>
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Tempo Médio de Entrega (dias) — Evolução Mensal</h4>
+    <p class="text-xs text-muted mb-4">Apenas demandas concluídas · Linha tracejada = limite de 5 dias</p>
+    <div class="chart-box-xl"><canvas id="chartTempo"></canvas></div>
+  </div>
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+      <h4 class="font-display font-bold text-navy text-sm">⚠️ Demandas com Atraso > 5 dias — Causas Registradas</h4>
+      <p class="text-xs text-muted mb-4">Causas informadas no atendimento</p>
+      <div class="overflow-x-auto">
+        <table class="tbl table-auto w-full text-left border-collapse text-xs mt-3">
+          <thead>
+            <tr class="bg-gray-100 text-muted uppercase text-[10px] tracking-wider">
+              <th class="p-2 border-b">Demanda</th>
+              <th class="p-2 border-b">Mês</th>
+              <th class="p-2 border-b">Dias</th>
+              <th class="p-2 border-b">Causa</th>
+            </tr>
+          </thead>
+          <tbody id="atrasos-tbody" class="divide-y">
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+      <h4 class="font-display font-bold text-navy text-sm">Ranking de Causas de Atraso</h4>
+      <p class="text-xs text-muted mb-4">Distribuição de causas para atrasos > 5 dias</p>
+      <div class="chart-box-sm"><canvas id="chartCausas"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<div id="tab-midia" class="tab-panel space-y-4">
+  <div class="insight-row grid grid-cols-2 md:grid-cols-5 gap-3">
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="midia-investimento-total" class="text-lg font-bold text-brandgreen-700">R$ 0,00</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Investimento total</div>
+      <div class="text-[11px] text-muted mt-0.5">Período selecionado</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="midia-regioes-var" class="text-lg font-bold text-navy">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Regiões ativas</div>
+      <div id="midia-regioes-nota" class="text-[11px] text-muted mt-0.5 truncate">Último mês</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="midia-descontinuidades" class="text-lg font-bold text-red-600">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Descontinuidades</div>
+      <div class="text-[11px] text-muted mt-0.5">Total no período</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="midia-aderencias" class="text-lg font-bold text-brandgreen-700">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Aderências totais</div>
+      <div class="text-[11px] text-muted mt-0.5">Total no período</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="midia-invest-var" class="text-lg font-bold text-amber-600">0.0%</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Variação investimento</div>
+      <div id="midia-invest-var-detalhe" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+  </div>
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Mídia Regional — Indicadores por Mês</h4>
+    <p class="text-xs text-muted mb-4">Regiões Ativas · Descontinuidades · Aderências</p>
+    <div class="chart-box-md"><canvas id="chartMidiaIndicadores"></canvas></div>
+  </div>
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Investimento BD (R$) — Evolução Mensal</h4>
+    <p class="text-xs text-muted mb-4">Valores mensais de veiculação regional</p>
+    <div class="chart-box-md-alt"><canvas id="chartMidiaInvest"></canvas></div>
+  </div>
+  {# Dados brutos (não filtrados) para o admin_marketing.js embutido abaixo —
+     mesmo id/local do dado na tela; a posição não importa pra leitura via JS,
+     só a presença no DOM antes do script rodar. #}
+  <script type="application/json" id="mkt-data">{{ mkt_data | tojson }}</script>
+</div>
+
+<div id="tab-operador" class="tab-panel space-y-4">
+  <div class="insight-row grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="operador-atendidos" class="text-lg font-bold text-purple-600">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Chamados atendidos</div>
+      <div id="operador-atendidos-nota" class="text-[11px] text-muted mt-0.5 truncate">Período selecionado</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="operador-resolvidos" class="text-lg font-bold text-brandgreen-700">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Resolvidos</div>
+      <div id="operador-resolvidos-nota" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="operador-top" class="text-base font-bold text-navy truncate">—</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Quem mais atendeu</div>
+      <div id="operador-top-nota" class="text-[11px] text-muted mt-0.5 truncate">—</div>
+    </div>
+    <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
+      <div id="operador-qtd" class="text-lg font-bold text-amber-600">0</div>
+      <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Operadores ativos</div>
+      <div class="text-[11px] text-muted mt-0.5">Com ao menos 1 atendimento</div>
+    </div>
+  </div>
+  <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h4 class="font-display font-bold text-navy text-sm">Chamados Atendidos por Operador</h4>
+    <p class="text-xs text-muted mb-4">
+      <strong>Atendidos</strong> = demandas abertas no período e atribuídas ao operador ·
+      <strong>Resolvidos</strong> = demandas que ele fechou no período (mesmo critério de "Concluídas").
+      Num mês os resolvidos podem passar os atendidos, quando fecha demanda que entrou antes.
+    </p>
+    <div class="chart-box-md"><canvas id="chartOperador"></canvas></div>
+    <p id="operador-aviso" class="text-[11px] text-muted mt-3"></p>
+  </div>
+</div>
+
+<footer class="mt-9 pt-4 border-t border-line text-xs text-muted flex flex-wrap gap-2 justify-between">
+  <span>Gerado pelo Portal de Chamados — Bondmann Química.</span>
+  <span>Arquivo autocontido: abre sem internet, com os mesmos filtros e gráficos da tela; use Ctrl+P para salvar em PDF.</span>
+</footer>
+
+</div>
+
+<script>{{ chart_js|safe }}</script>
+<script>{{ admin_marketing_js|safe }}</script>
+<script>
+  // Abre no mesmo período que estava selecionado na tela no momento do
+  // "Exportar" (ver app/services/export_html.py::montar_relatorio_marketing).
+  // admin_marketing.js já expõe os pills como o único jeito de trocar de
+  // filtro, então simular o clique reaproveita 100% da lógica de filtragem
+  // dele em vez de duplicá-la aqui.
+  (function () {
+    var alvo = {{ periodo_filtro|tojson }};
+    if (!alvo || alvo === "all") return;
+    var btn = document.querySelector('.filter-pill[data-filter="' + alvo.replace(/"/g, '\\"') + '"]');
+    if (btn) btn.click();
+  })();
+</script>
+</body>
+</html>

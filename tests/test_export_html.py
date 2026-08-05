@@ -115,80 +115,103 @@ def test_csat_cobre_as_cinco_notas_mesmo_sem_avaliacao_em_alguma():
 
 
 # ---------------------------------------------------------------------------
-# Marketing — mesmo recorte de período do .xlsx
+# Marketing — clone autocontido da própria tela (não um resumo à parte)
 # ---------------------------------------------------------------------------
-def test_relatorio_marketing_acumulado_soma_todos_os_meses():
-    ctx = montar_relatorio_marketing(MKT, "all")
-    valores = {k["rotulo"]: k["valor"] for k in ctx["kpis"]}
-    assert valores["Total de demandas"] == 14
-    assert valores["Concluídas"] == 10
-    assert valores["Volume produzido"] == 31
-    assert valores["Atrasos > 5 dias"] == 2
-    assert ctx["periodo"] == "Acumulado"
-
-
-def test_relatorio_marketing_filtra_pelo_mes_selecionado_na_tela():
-    """Mesmo `periodo` dos "pills" do dashboard e da exportação .xlsx — os dois
-    formatos passam pelo mesmo `filtrar_por_periodo`, então não podem
-    divergir."""
+# `montar_relatorio_marketing` não recorta/agrega mais nada em Python: o
+# `admin_marketing.js` embutido pelo `renderizar()` já faz a filtragem por
+# período e a troca de aba no cliente, a partir de `mkt_data` sem filtrar
+# (pedido do usuário 2026-08-05: "100% fiel [...] mantendo gráficos, estilo e
+# etc da mesma forma vista no site"). Estes testes protegem o contrato novo:
+# os dados brutos passam intactos, e o `periodo` só vira o pill pré-selecionado.
+def test_relatorio_marketing_passa_mkt_data_sem_filtrar():
     ctx = montar_relatorio_marketing(MKT, "JUN/26")
-    valores = {k["rotulo"]: k["valor"] for k in ctx["kpis"]}
-    assert valores["Total de demandas"] == 4
-    assert valores["Atrasos > 5 dias"] == 0  # os 2 atrasos são de JUL/26
+    assert ctx["tipo"] == "marketing_fiel"
+    assert ctx["mkt_data"] is MKT  # nenhum recorte em Python — o JS filtra no cliente
     assert ctx["periodo"] == "JUN/26"
-    labels = next(g for g in ctx["charts"] if g["id"] == "entrega")["config"]["data"]["labels"]
-    assert labels == ["JUN/26"]
+    assert ctx["periodo_filtro"] == "JUN/26"
 
 
-def test_marketing_tempo_medio_ignora_mes_sem_conclusao_nos_dois_lados():
-    """`tempo_medio` vem `None` (não 0.0) no mês sem nenhuma conclusão — dividir
-    pelo total de concluídas do período puxaria a média pra baixo. Mesma conta do
-    `mediaTempoPonderada` do `admin_marketing.js`, para não divergir da tela."""
-    dados = dict(MKT, monthly=[
-        dict(MKT["monthly"][0], tempo_medio=None, concluidas=2),
-        dict(MKT["monthly"][1], tempo_medio=4.0, concluidas=8),
-    ])
-    ctx = montar_relatorio_marketing(dados, "all")
-    valores = {k["rotulo"]: k["valor"] for k in ctx["kpis"]}
-    assert valores["Tempo médio de entrega"] == "4.0 d"  # e não 3.2 d (8*4/10)
-
-    sem_dado = dict(MKT, monthly=[dict(MKT["monthly"][0], tempo_medio=None)])
-    ctx_vazio = montar_relatorio_marketing(sem_dado, "all")
-    assert {k["rotulo"]: k["valor"] for k in ctx_vazio["kpis"]}["Tempo médio de entrega"] == "—"
+def test_relatorio_marketing_acumulado():
+    ctx = montar_relatorio_marketing(MKT, "all")
+    assert ctx["periodo"] == "Acumulado"
+    assert ctx["periodo_filtro"] == "all"
 
 
 def test_marketing_periodo_desconhecido_cai_em_acumulado():
     """Rótulo fora do conjunto fechado (querystring editada, ou o `YYYY-MM` do
     botão genérico do painel chegando pelo desvio do Marketing) não pode virar
-    um relatório zerado, que se parece com um mês sem movimento."""
+    um relatório filtrado por um pill que não existe na tela."""
     ctx = montar_relatorio_marketing(MKT, "2026-08")
-    valores = {k["rotulo"]: k["valor"] for k in ctx["kpis"]}
-    assert valores["Total de demandas"] == 14
     assert ctx["periodo"] == "Acumulado"
+    assert ctx["periodo_filtro"] == "all"
 
 
-def test_marketing_soma_operadores_do_periodo():
-    ctx = montar_relatorio_marketing(MKT, "all")
-    grafico = next(g for g in ctx["charts"] if g["id"] == "operadores")
-    assert grafico["config"]["data"]["labels"] == ["Gabriela", "Felipe"]  # do maior pro menor
-    assert grafico["config"]["data"]["datasets"][0]["data"] == [11, 3]  # atendidos jun+jul
+# ---------------------------------------------------------------------------
+# Render do relatório de Marketing — mesmo HTML/CSS/JS da tela, autocontido
+# ---------------------------------------------------------------------------
+def _marketing_html(periodo: str = "all") -> str:
+    return renderizar(montar_relatorio_marketing(MKT, periodo))
 
 
-def test_marketing_ranking_de_causas_agrupa_repetidas():
-    ctx = montar_relatorio_marketing(MKT, "all")
-    grafico = next(g for g in ctx["charts"] if g["id"] == "causas")
-    assert grafico["config"]["data"]["labels"] == ["Aguardando arte"]
-    assert grafico["config"]["data"]["datasets"][0]["data"] == [2]
+def test_html_marketing_nao_referencia_nenhum_recurso_externo():
+    html = _marketing_html()
+    assert not re.search(r"<script[^>]+\bsrc=", html)
+    assert not re.search(r"<link[^>]+\bhref=", html)
+    assert not re.search(r"<img[^>]+\bsrc=", html)
+    assert "@import" not in html
+    assert not re.search(r"url\(\s*['\"]?(https?:)?//", html)
+    assert not re.search(r"""\b(src|href)=['"](https?:)?//""", html)
 
 
-def test_so_o_grafico_de_status_e_empilhado():
-    """Empilhar séries que não somam o mesmo todo (demandas × peças produzidas,
-    atendidos × resolvidos) inventa um total que não existe."""
-    ctx = montar_relatorio_marketing(MKT, "all")
-    por_id = {g["id"]: g["config"]["options"]["scales"] for g in ctx["charts"] if "x" in g["config"]["options"]["scales"]}
-    assert por_id["entrega"]["y"]["stacked"] is True
-    assert por_id["volume"]["y"]["stacked"] is False
-    assert por_id["operadores"]["y"]["stacked"] is False
+def test_html_marketing_tem_os_mesmos_ids_que_admin_marketing_js_espera():
+    """`admin_marketing.js` acessa vários destes ids sem checagem de nulo
+    (ex.: `document.getElementById("header-title").textContent = ...`) — se um
+    faltar, o script quebra no meio e as abas seguintes nem renderizam."""
+    html = _marketing_html()
+    for elemento_id in (
+        "header-title", "filter-period-label", "sum-left", "sum-right",
+        "chartEntrega", "chartVolume", "chartOrigem", "chartDept", "chartTempo",
+        "chartCausas", "chartMidiaIndicadores", "chartMidiaInvest", "chartOperador",
+        "dept-aviso", "atrasos-tbody", "operador-aviso", "mkt-data",
+    ):
+        assert f'id="{elemento_id}"' in html, elemento_id
+
+
+def test_html_marketing_leva_o_mesmo_js_da_tela_embutido():
+    html = _marketing_html()
+    assert "Chart.js" in html  # licença do bundle, colado inline
+    assert "function renderAllCharts" in html  # admin_marketing.js real, não uma cópia resumida
+    assert "filter-pill" in html
+
+
+def test_html_marketing_pre_seleciona_o_pill_do_periodo_ativo_na_tela():
+    html = _marketing_html("JUN/26")
+    assert '"JUN/26"' in html  # periodo_filtro serializado pro script de clique automático
+    assert 'data-filter="JUN/26"' in html
+
+
+def test_html_marketing_nao_leva_acoes_que_nao_funcionam_offline():
+    """Upload de planilha e os botões "Exportar" fazem POST/GET pro servidor —
+    não fazem sentido num arquivo baixado, sem sessão e possivelmente offline.
+    (`admin_marketing.js` embutido ainda referencia esses ids nos handlers de
+    filtro — de forma defensiva, `if (btnExportar) {...}` — então a string
+    aparece no bundle de JS; o que não pode existir é o elemento em si.)"""
+    html = _marketing_html()
+    assert "marketing-midia/upload" not in html
+    assert 'id="btn-exportar"' not in html
+    assert 'id="btn-exportar-html"' not in html
+
+
+def test_html_marketing_texto_do_banco_nao_escapa_do_mkt_data_json():
+    """Causa de atraso vem do atendimento (texto livre). Dentro de um
+    `<script>`, a sequência `</script` fecha a tag onde quer que apareça —
+    inclusive dentro de uma string JSON."""
+    dados = dict(MKT, atrasosData=[
+        dict(MKT["atrasosData"][0], causa="</script><script>alert(1)</script>")
+    ])
+    html = renderizar(montar_relatorio_marketing(dados, "all"))
+    assert "<script>alert(1)</script>" not in html
+    assert "alert(1)" in html
 
 
 # ---------------------------------------------------------------------------

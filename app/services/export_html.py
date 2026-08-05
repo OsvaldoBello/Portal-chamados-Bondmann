@@ -39,7 +39,6 @@ from pathlib import Path
 from typing import Any
 
 from app.domain.periodo import TZ_BR
-from app.services.export_marketing import filtrar_por_periodo
 
 # Paleta do painel (app/static/js/admin.js e tailwind.config.js).
 NAVY = "#2E466F"
@@ -70,22 +69,35 @@ STATUS_LABEL = {
     "RESOLVIDO": "Resolvido",
 }
 
-_VENDOR_CHART = Path(__file__).resolve().parents[1] / "static" / "vendor" / "chart.umd.js"
+_STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
+_VENDOR_CHART = _STATIC_DIR / "vendor" / "chart.umd.js"
+_APP_CSS = _STATIC_DIR / "css" / "app.css"
+_ANIM_CSS = _STATIC_DIR / "css" / "anim.css"
+_MKT_CSS = _STATIC_DIR / "css" / "dashboard_marketing.css"
+_MKT_JS = _STATIC_DIR / "js" / "admin_marketing.js"
 _MESES = (
     "janeiro", "fevereiro", "março", "abril", "maio", "junho",
     "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
 )
 
 
-def _chart_js() -> str:
-    """Bundle do Chart.js lido do disco para ir inline no arquivo exportado.
+def _read_inline_script(path: Path) -> str:
+    """JS lido do disco para ir inline no arquivo exportado — mesmo arquivo
+    (mesma versão) que o painel serve, para o relatório nunca desenhar/agir
+    diferente da tela por estar numa versão distinta. ``</script`` é
+    neutralizado porque o conteúdo vai **dentro** de um ``<script>``: o parser
+    HTML fecha a tag na primeira ocorrência literal, onde quer que ela esteja,
+    inclusive dentro de uma string JS."""
+    return path.read_text(encoding="utf-8").replace("</script", "<\\/script")
 
-    O mesmo arquivo (mesma versão, mesmo SRI) que o painel serve — o relatório
-    não pode desenhar diferente da tela por estar numa versão distinta.
-    ``</script`` é neutralizado porque o bundle vai **dentro** de um
-    ``<script>``: o parser HTML fecha a tag na primeira ocorrência literal,
-    onde quer que ela esteja, inclusive dentro de uma string JS."""
-    return _VENDOR_CHART.read_text(encoding="utf-8").replace("</script", "<\\/script")
+
+def _read_inline_style(path: Path) -> str:
+    """Mesma ideia de `_read_inline_script`, para CSS dentro de um `<style>`."""
+    return path.read_text(encoding="utf-8").replace("</style", "<\\/style")
+
+
+def _chart_js() -> str:
+    return _read_inline_script(_VENDOR_CHART)
 
 
 def _grafico(
@@ -328,233 +340,35 @@ def _rotulo_periodo(periodo: str) -> str:
 # Relatório do painel de Marketing (/admin com escopo Marketing)
 # ---------------------------------------------------------------------------
 def montar_relatorio_marketing(mkt_data: dict[str, Any], periodo: str = "all") -> dict[str, Any]:
-    """Contexto do relatório de Marketing — mesmas 7 abas da tela, achatadas em
-    seções de um documento. ``periodo`` = "all" (Acumulado) ou o rótulo de um
-    mês ("JUL/26"), exatamente como no `.xlsx` (`filtrar_por_periodo` é
-    reaproveitado para os dois formatos não divergirem).
+    """Contexto do relatório de Marketing — clone autocontido da PRÓPRIA tela
+    (`admin/dashboard_marketing.html`), não um resumo à parte num layout
+    diferente (pedido do usuário 2026-08-05: "100% fiel [...] mantendo
+    gráficos, estilo e etc da mesma forma vista no site").
 
-    Rótulo desconhecido (querystring editada à mão, ou o botão genérico do
-    painel mandando um `YYYY-MM` para quem é do Marketing) cai em "all": os
-    rótulos são um conjunto fechado, então um valor fora dele é erro de entrada
-    — e filtrar por ele devolveria um relatório inteiro zerado, que parece um
-    mês sem movimento em vez de um filtro inválido."""
+    `mkt_data` viaja **inteiro, sem filtrar**: `admin_marketing.js` (colado
+    inline pelo `renderizar()`) já faz toda a filtragem por período e a troca
+    de aba no cliente a partir de `#mkt-data` — duplicar essa lógica aqui em
+    Python é como o relatório antigo divergia da tela (chart diferente, cores
+    diferentes, sem os plugins de pill/rótulo dos gráficos).
+
+    ``periodo`` = "all" (Acumulado) ou o rótulo de um mês ("JUL/26") — o
+    filtro que estava ativo na tela no momento do clique em "Exportar". Vira
+    apenas o pill pré-selecionado no arquivo aberto (o template simula o
+    clique nele via JS), não um recorte feito aqui. Rótulo desconhecido
+    (querystring editada à mão, ou o botão genérico do painel mandando um
+    `YYYY-MM` para quem é do Marketing) cai em "all": os rótulos são um
+    conjunto fechado vindo do backend."""
     rotulos = {m["label"] for m in mkt_data.get("monthly", [])}
     if periodo != "all" and periodo not in rotulos:
         periodo = "all"
-    dados = filtrar_por_periodo(mkt_data, periodo)
-    monthly = dados["monthly"]
-    labels = [m["label"] for m in monthly]
-
-    total = sum(m["total"] for m in monthly)
-    concluidas = sum(m["concluidas"] for m in monthly)
-    em_andamento = sum(m["em_andamento"] for m in monthly)
-    abertas = sum(m["abertas"] for m in monthly)
-    volume = sum(m["volume"] for m in monthly)
-    mkt_orig = sum(m["mkt_orig"] for m in monthly)
-    atrasos = dados["atrasosData"]
-    # Média ponderada por `concluidas`, ignorando os meses **sem dado** nos dois
-    # lados da fração — `tempo_medio` vem `None` (não 0.0) quando o mês não teve
-    # nenhuma conclusão, e dividir pelo total de concluídas do período puxaria a
-    # média pra baixo. Mesma conta do `mediaTempoPonderada` do
-    # `admin_marketing.js`, para o relatório não divergir da tela.
-    peso = sum(m["concluidas"] for m in monthly if m["tempo_medio"] is not None)
-    tempo_medio = (
-        sum(m["tempo_medio"] * m["concluidas"] for m in monthly if m["tempo_medio"] is not None)
-        / peso
-        if peso
-        else None
-    )
-
-    ranking: dict[str, int] = {}
-    for por_setor in dados["deptByMonth"].values():
-        for setor, qtd in por_setor.items():
-            ranking[setor] = ranking.get(setor, 0) + qtd
-    ranking_ord = sorted(ranking.items(), key=lambda kv: kv[1], reverse=True)
-
-    causas: dict[str, int] = {}
-    for a in atrasos:
-        causas[a["causa"]] = causas.get(a["causa"], 0) + 1
-    causas_ord = sorted(causas.items(), key=lambda kv: kv[1], reverse=True)
-
-    # Operadores: soma dos meses do recorte (o dashboard mostra por mês; num
-    # relatório do período acumulado o total é o que interessa).
-    operadores: dict[str, dict[str, int]] = {}
-    for rotulo in labels:
-        for nome, v in (mkt_data.get("operadorByMonth", {}).get(rotulo) or {}).items():
-            alvo = operadores.setdefault(nome, {"atendidos": 0, "resolvidos": 0})
-            alvo["atendidos"] += v["atendidos"]
-            alvo["resolvidos"] += v["resolvidos"]
-    operadores_ord = sorted(operadores.items(), key=lambda kv: kv[1]["atendidos"], reverse=True)
-
-    midia = dados["midia"]
-
-    cartoes = [
-        _kpi("Total de demandas", total),
-        _kpi("Concluídas", concluidas, f"{_pct(concluidas, total)}% do total", VERDE),
-        _kpi("Em andamento", em_andamento, destaque=AZUL),
-        _kpi("Abertas", abertas, destaque=AMBAR),
-        _kpi("Volume produzido", volume, "peças/cards", ROXO),
-        _kpi(
-            "Tempo médio de entrega",
-            f"{round(tempo_medio, 1)} d" if tempo_medio is not None else "—",
-            "só concluídas",
-            VERDE,
-        ),
-        _kpi("Atrasos > 5 dias", len(atrasos), f"{_pct(len(atrasos), total)}% do total", VERMELHO),
-        _kpi("Origem Marketing", mkt_orig, f"{_pct(mkt_orig, total)}% das demandas", ROXO),
-    ]
-
-    charts = [
-        _grafico(
-            "entrega",
-            "Status das demandas — histórico mensal",
-            "bar",
-            labels,
-            [
-                _barras([m["concluidas"] for m in monthly], "#16A34A", "Concluídas"),
-                _barras([m["em_andamento"] for m in monthly], "#6366F1", "Em andamento"),
-                _barras([m["abertas"] for m in monthly], AMBAR, "Abertas"),
-            ],
-            subtitulo="Total de demandas recebidas por mês e status",
-            legenda=True,
-            empilhado=True,  # as três séries somam o total do mês
-            largura_total=True,
-        ),
-        _grafico(
-            "volume",
-            "Demandas vs volume produzido",
-            "bar",
-            labels,
-            [
-                _barras([m["total"] for m in monthly], NAVY, "Demandas"),
-                _barras([m["volume"] for m in monthly], ROXO, "Peças/cards"),
-            ],
-            subtitulo="Quantidade de demandas vs total de peças produzidas",
-            legenda=True,
-        ),
-        _grafico(
-            "origem",
-            "Origem da demanda",
-            "bar",
-            labels,
-            [
-                _barras([m["mkt_orig"] for m in monthly], ROXO, "Marketing"),
-                _barras([m["sol_orig"] for m in monthly], NAVY, "Outros setores"),
-            ],
-            subtitulo="Criadas pelo próprio Marketing vs solicitações",
-            legenda=True,
-        ),
-        _grafico(
-            "solicitantes",
-            "Demandas por setor solicitante",
-            "bar",
-            [s for s, _ in ranking_ord],
-            [_barras([q for _, q in ranking_ord], NAVY)],
-            subtitulo="Ranking acumulado do período",
-            horizontal=True,
-        ),
-        _grafico(
-            "tempo",
-            "Tempo médio de entrega (dias)",
-            "line",
-            labels,
-            [
-                _linha([m["tempo_medio"] for m in monthly], VERDE, "Tempo médio"),
-                _linha([5 for _ in monthly], VERMELHO, "Limite (5 dias)"),
-            ],
-            subtitulo="Apenas demandas concluídas",
-            legenda=True,
-        ),
-    ]
-    if causas_ord:
-        charts.append(
-            _grafico(
-                "causas",
-                "Causas de atraso",
-                "doughnut",
-                [c for c, _ in causas_ord],
-                [{
-                    "data": [q for _, q in causas_ord],
-                    "backgroundColor": [VERMELHO, AMBAR, ROXO, NAVY, TEAL, AZUL, VERDE],
-                }],
-                subtitulo="Distribuição das causas em atrasos > 5 dias",
-                legenda=True,
-            )
-        )
-    if operadores_ord:
-        charts.append(
-            _grafico(
-                "operadores",
-                "Chamados por operador",
-                "bar",
-                [n for n, _ in operadores_ord],
-                [
-                    _barras([v["atendidos"] for _, v in operadores_ord], NAVY, "Atendidos"),
-                    _barras([v["resolvidos"] for _, v in operadores_ord], VERDE, "Resolvidos"),
-                ],
-                subtitulo="Só de chamados do Portal (meses pré-sistema não têm essa quebra)",
-                legenda=True,
-                largura_total=True,
-            )
-        )
-    if midia["meses"]:
-        charts.append(
-            _grafico(
-                "midia_indicadores",
-                "Mídia regional — indicadores por mês",
-                "bar",
-                midia["meses"],
-                [
-                    _barras(midia["regioes"], NAVY, "Regiões ativas"),
-                    _barras(midia["descontinuidades"], VERMELHO, "Descontinuidades"),
-                    _barras(midia["aderencias"], VERDE, "Aderências"),
-                ],
-                legenda=True,
-            )
-        )
-        charts.append(
-            _grafico(
-                "midia_investimento",
-                "Investimento BD (R$)",
-                "line",
-                midia["meses"],
-                [_linha(midia["investimento"], ROXO, "Investimento")],
-                subtitulo="Valores mensais de veiculação regional",
-            )
-        )
-
-    tabelas = [{
-        "titulo": "Histórico mensal",
-        "subtitulo": "Taxa de entrega e volume produzido",
-        "colunas": [
-            "Mês", "Total", "Concluídas", "Em andamento", "Abertas",
-            "Volume", "Origem MKT", "Tempo médio (d)", "Atrasos > 5d",
-        ],
-        "linhas": [
-            [
-                m["label"], m["total"], m["concluidas"], m["em_andamento"], m["abertas"],
-                m["volume"], m["mkt_orig"],
-                "—" if m["tempo_medio"] is None else round(m["tempo_medio"], 1),
-                m["atrasos"],
-            ]
-            for m in monthly
-        ],
-    }]
-    if atrasos:
-        tabelas.append({
-            "titulo": "Demandas com atraso > 5 dias",
-            "subtitulo": "Causas registradas no atendimento",
-            "colunas": ["Demanda", "Mês", "Dias em aberto", "Causa"],
-            "linhas": [[a["nome"], a["mes"], a["dias"], a["causa"]] for a in atrasos],
-        })
 
     return {
+        "tipo": "marketing_fiel",
         "titulo": "Indicadores de Marketing",
         "escopo": "Marketing",
         "periodo": "Acumulado" if periodo == "all" else periodo,
-        "kpis": cartoes,
-        "charts": charts,
-        "tabelas": tabelas,
+        "periodo_filtro": periodo,
+        "mkt_data": mkt_data,
     }
 
 
@@ -562,8 +376,26 @@ def montar_relatorio_marketing(mkt_data: dict[str, Any], periodo: str = "all") -
 # Render
 # ---------------------------------------------------------------------------
 def renderizar(contexto: dict[str, Any]) -> str:
-    """Renderiza o relatório como HTML autocontido (string pronta pra resposta)."""
+    """Renderiza o relatório como HTML autocontido (string pronta pra resposta).
+
+    Marketing usa um template próprio — clone da tela, ver
+    `montar_relatorio_marketing`. Os demais escopos seguem o relatório
+    genérico de KPIs/gráficos/tabelas (`montar_relatorio_geral`)."""
     from app.templating import templates
+
+    gerado_em = datetime.now(TZ_BR).strftime("%d/%m/%Y às %H:%M")
+
+    if contexto.get("tipo") == "marketing_fiel":
+        template = templates.env.get_template("admin/relatorio_marketing_export.html")
+        return template.render(
+            **contexto,
+            app_css=_read_inline_style(_APP_CSS),
+            anim_css=_read_inline_style(_ANIM_CSS),
+            marketing_css=_read_inline_style(_MKT_CSS),
+            chart_js=_chart_js(),
+            admin_marketing_js=_read_inline_script(_MKT_JS),
+            gerado_em=gerado_em,
+        )
 
     template = templates.env.get_template("admin/relatorio_export.html")
     return template.render(
@@ -573,7 +405,7 @@ def renderizar(contexto: dict[str, Any]) -> str:
         # \uXXXX) — texto vindo do banco, ex. o assunto de um chamado, entra
         # aqui e não pode fechar a tag `<script>`.
         charts_config=[{"id": g["id"], "config": g["config"]} for g in contexto["charts"]],
-        gerado_em=datetime.now(TZ_BR).strftime("%d/%m/%Y às %H:%M"),
+        gerado_em=gerado_em,
     )
 
 
