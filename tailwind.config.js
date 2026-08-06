@@ -11,7 +11,7 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        navy: { 900: "#0E2747", 800: "#14315A", 700: "#1C3A63", DEFAULT: "#2E466F", 500: "#3D5A8A", 100: "#E7ECF3" },
+        navy: { 900: "#0E2747", 800: "#14315A", 700: "#1C3A63", DEFAULT: "#2E466F", 500: "#3D5A8A", 100: "#E7ECF3", 50: "#F3F6FB" },
         brandgreen: { DEFAULT: "#ACC76B", 600: "#7FA53D", 700: "#5F8A2E", 100: "#EEF4E0" },
         ink: "#1E293B", muted: "#64748B", faint: "#94A3B8",
         surface: "#F4F6F9", surface2: "#EAEEF4", line: "#E2E8F0",
