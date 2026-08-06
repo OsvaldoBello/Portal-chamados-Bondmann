@@ -250,6 +250,14 @@ async def _render_form(
     # que RECEBEM chamado (têm fila/staff) entram no destino do roteamento.
     setores_ativos = await repo.departamentos_ativos(ctx.user.claims)
     departamentos = [d for d in setores_ativos if d.get("recebe_chamados")]
+    # Representantes não abrem chamado para o Marketing (2026-08-06) — só
+    # Supervisão de Vendas e Gerentes de vendas escalam demandas pra lá. Tira
+    # da lista em vez de só desabilitar: some do <select> e o front nem chega
+    # a tratar Marketing como destino selecionável pra quem é Representante.
+    if not PortalService.representante_pode_marketing(ctx.perfil.get("departamento")):
+        departamentos = [
+            d for d in departamentos if (d.get("nome") or "").strip().lower() != "marketing"
+        ]
     # Categorias pertencem ao departamento (0019): só carregam após escolher o setor.
     dep_sel = form.get("departamento_id") or ""
     categorias = (
@@ -467,6 +475,21 @@ async def criar_chamado(
     setores_ativos = await repo.departamentos_ativos(ctx.user.claims)
     if setor not in {d["nome"] for d in setores_ativos}:
         return await _erro("Setor selecionado inválido.")
+    # Representantes não abrem chamado para o Marketing (2026-08-06) — defesa em
+    # profundidade contra POST forjado (o <select> já não lista Marketing pra
+    # eles em `_render_form`, mas o id chega solto no form). Checagem pelo
+    # setor do PRÓPRIO perfil (ctx.perfil, atribuído pelo admin), não pelo
+    # campo "Setor" digitado no formulário — esse é livre e não amarrado à conta.
+    marketing_dep_id_form = PortalService.marketing_dep_id(setores_ativos)
+    if (
+        marketing_dep_id_form
+        and departamento_id == marketing_dep_id_form
+        and not PortalService.representante_pode_marketing(ctx.perfil.get("departamento"))
+    ):
+        return await _erro(
+            "Representantes não podem abrir chamados para o Marketing. "
+            "Peça para seu supervisor ou gerente de vendas abrir a solicitação."
+        )
 
     # Marketing trabalha por DEMANDA: em vez de prioridade, exige uma DATA DE
     # ENTREGA com no mínimo 48h (2 dias). Para os demais setores, mantém a

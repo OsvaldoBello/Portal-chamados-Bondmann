@@ -64,8 +64,9 @@ class FakeRepo:
     """Implementa a superfície usada pelas rotas do portal."""
 
     def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None,
-                 role="CLIENTE", departamento_id=None, chamados_colegas=None, avaliacao_pendente=None,
-                 telefone="", chamados_meus=None, operadores_por_departamento=None):
+                 role="CLIENTE", departamento_id=None, departamento=None, chamados_colegas=None,
+                 avaliacao_pendente=None, telefone="", chamados_meus=None,
+                 operadores_por_departamento=None):
         self._chamado = chamado
         self._chamados_meus = chamados_meus if chamados_meus is not None else [
             {
@@ -82,6 +83,7 @@ class FakeRepo:
         self._avaliacao_pendente = avaliacao_pendente
         self._role = role
         self._departamento_id = departamento_id
+        self._departamento = departamento
         self._chamados_colegas = chamados_colegas if chamados_colegas is not None else []
         self.chamados_departamento_filtros = None
         self._categorias = categorias or [{"id": "c1", "nome": "Logística / Entrega"}]
@@ -109,7 +111,8 @@ class FakeRepo:
     async def perfil(self, claims):
         return {
             "id": UID, "nome": "Cliente Teste", "role": self._role, "empresa_id": EMPRESA,
-            "departamento_id": self._departamento_id, "telefone": self._telefone,
+            "departamento_id": self._departamento_id, "departamento": self._departamento,
+            "telefone": self._telefone,
         }
 
     async def atualizar_telefone(self, claims, *, telefone):
@@ -649,6 +652,92 @@ def test_criar_marketing_com_outra_etiqueta_de_setor_conta_como_solicitacao(etiq
         )
     assert resp.status_code == 303
     assert repo.criados[0]["origem_demanda"] == "Solicitação"
+
+
+# --------------------------------------------------------------------------
+# Representantes não abrem chamado para o Marketing (2026-08-06) — só
+# Supervisão de Vendas e Gerentes de vendas escalam demandas pra lá. Baseado
+# no setor do PRÓPRIO perfil (ctx.perfil["departamento"]), não no campo
+# "Setor" digitado no formulário.
+# --------------------------------------------------------------------------
+def _opcoes_departamento_destino(html: str) -> str:
+    """Recorta só o <select name="departamento_id"> — o campo "Setor" (de
+    origem, sem relação com esta regra) também pode listar "Marketing" como
+    texto, então checar a página inteira daria falso positivo/negativo."""
+    inicio = html.index('id="departamento-select"')
+    fim = html.index("</select>", inicio)
+    return html[inicio:fim]
+
+
+def test_form_novo_chamado_esconde_marketing_para_representante():
+    repo = FakeRepo(departamento="Representantes")
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/novo")
+    assert resp.status_code == 200
+    opcoes = _opcoes_departamento_destino(resp.text)
+    assert "Marketing" not in opcoes
+    # Os demais destinos continuam disponíveis.
+    assert "TI" in opcoes and "RH" in opcoes
+
+
+def test_form_novo_chamado_mostra_marketing_para_outros_setores():
+    repo = FakeRepo(departamento="Supervisão de Vendas")
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/novo")
+    assert resp.status_code == 200
+    assert "Marketing" in _opcoes_departamento_destino(resp.text)
+
+
+def test_criar_marketing_bloqueado_para_representante_retorna_400():
+    from app.services.portal import PortalService
+
+    repo = FakeRepo(departamento="Representantes")
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(
+            departamento_id="d3", setor="Financeiro",
+            data_entrega=PortalService.data_entrega_min().isoformat(),
+        )
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "representante" in resp.text.lower()
+    assert repo.criados == []
+
+
+@pytest.mark.parametrize("departamento", ["Supervisão de Vendas", "Gerentes de vendas", "TI", None])
+def test_criar_marketing_permitido_para_outros_setores(departamento):
+    from app.services.portal import PortalService
+
+    repo = FakeRepo(departamento=departamento)
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(
+            departamento_id="d3", setor="Financeiro",
+            data_entrega=PortalService.data_entrega_min().isoformat(),
+        )
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert len(repo.criados) == 1
+
+
+def test_criar_fora_do_marketing_permitido_para_representante():
+    """A restrição é só sobre o Marketing como destino — Representante abre
+    normalmente pra qualquer outro departamento."""
+    repo = FakeRepo(departamento="Representantes")
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        data = _abertura_valida(departamento_id="d2", setor="Financeiro")
+        resp = client.post(
+            "/portal/chamados", data=data, headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert len(repo.criados) == 1
 
 
 def test_criar_fora_do_marketing_origem_demanda_sempre_solicitacao():

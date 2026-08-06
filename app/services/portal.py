@@ -99,6 +99,17 @@ class PortalService:
         )
 
     @staticmethod
+    def representante_pode_marketing(perfil_departamento: str | None) -> bool:
+        """Só o setor "Representantes" fica de fora do Marketing como destino
+        (2026-08-06) — Supervisão de Vendas, Gerentes de vendas e todo o resto
+        da empresa continuam livres para abrir chamado lá. Fonte do setor é o
+        perfil cadastrado pelo admin (``perfis.departamento_id`` via
+        ``ctx.perfil["departamento"]``), não o campo "Setor" digitado no
+        formulário: esse é texto livre sem amarração à conta logada, então
+        bloquear por ele seria só um aviso de UI, não uma restrição real."""
+        return (perfil_departamento or "").strip().lower() != "representantes"
+
+    @staticmethod
     def quimico_dep_id(departamentos: list[dict]) -> str:
         """Id do departamento Químico ("Dpto Químico", migration 0027/0049) na
         lista, ou "" se ausente. O front usa para exibir o bloco de campos

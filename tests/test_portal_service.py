@@ -108,6 +108,22 @@ def test_marketing_dep_id_vazio_se_ausente():
     assert PortalService.marketing_dep_id([{"id": "d1", "nome": "TI"}]) == ""
 
 
+def test_representante_pode_marketing_falso_para_representantes():
+    assert PortalService.representante_pode_marketing("Representantes") is False
+    assert PortalService.representante_pode_marketing("  representantes  ") is False
+
+
+def test_representante_pode_marketing_verdadeiro_para_supervisao_e_gerencia():
+    assert PortalService.representante_pode_marketing("Supervisão de Vendas") is True
+    assert PortalService.representante_pode_marketing("Gerentes de vendas") is True
+
+
+def test_representante_pode_marketing_verdadeiro_para_outros_setores():
+    assert PortalService.representante_pode_marketing("TI") is True
+    assert PortalService.representante_pode_marketing(None) is True
+    assert PortalService.representante_pode_marketing("") is True
+
+
 def test_regras_marketing_fora_do_marketing_preserva_prioridade():
     r = PortalService.regras_marketing(
         departamento_id=OUTRO_ID,
