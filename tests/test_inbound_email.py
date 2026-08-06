@@ -91,7 +91,8 @@ def test_inbound_webhook_valid_token(mock_notify, mock_admin_conn):
     }
 
     mock_conn.fetchrow.side_effect = [chamado_row, profile_row, insert_row]
-    
+    mock_conn.fetch.return_value = []  # observadores ("em cópia") do chamado
+
     # Mock do context manager
     class MockCM:
         async def __aenter__(self):

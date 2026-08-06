@@ -340,13 +340,21 @@ async def inbound_email(
 
         log.info(f"Processed inbound reply from {sender_email} on ticket {codigo}: msg {msg_row['id']}")
 
-    # 6. Notifica o outro participante via e-mail
+        # "Em cópia" (Fase 8): quem acompanha o chamado também é avisado da
+        # resposta chegada por e-mail, mesma regra do fluxo pelo chat.
+        observadores_rows = await conn.fetch(
+            "SELECT perfil_id FROM chamados_observadores WHERE chamado_id = $1::uuid",
+            chamado["id"],
+        )
+
+    # 6. Notifica o outro participante (e quem está em cópia) via e-mail
     from app.notification import agendar_notificacao_email
     await agendar_notificacao_email(
         background_tasks,
         chamado,
         sender_id,
-        cleaned_content or "[Imagem anexada]"
+        cleaned_content or "[Imagem anexada]",
+        observadores=[str(r["perfil_id"]) for r in observadores_rows],
     )
 
     # 7. Re-triagem por IA (F2): resposta do AUTOR por e-mail num depto habilitado

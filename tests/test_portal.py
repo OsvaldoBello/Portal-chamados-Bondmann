@@ -65,7 +65,7 @@ class FakeRepo:
 
     def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None,
                  role="CLIENTE", departamento_id=None, chamados_colegas=None, avaliacao_pendente=None,
-                 telefone="", chamados_meus=None):
+                 telefone="", chamados_meus=None, operadores_por_departamento=None):
         self._chamado = chamado
         self._chamados_meus = chamados_meus if chamados_meus is not None else [
             {
@@ -104,6 +104,7 @@ class FakeRepo:
         self.observadores_adicionados: list[tuple] = []
         self.observadores_removidos: list[tuple] = []
         self._observadores_por_chamado: dict[str, list[dict]] = {}
+        self._operadores_por_departamento = operadores_por_departamento or {}
 
     async def perfil(self, claims):
         return {
@@ -208,6 +209,9 @@ class FakeRepo:
 
     async def usuarios_para_copia(self, claims, *, excluir_id=None):
         return [{"id": "u9", "nome": "Zeca Financeiro", "departamento": "Financeiro"}]
+
+    async def operadores(self, claims, *, departamento_id=None, excluir_id=None):
+        return self._operadores_por_departamento.get(departamento_id, [])
 
     async def observadores(self, claims, chamado_id):
         return self._observadores_por_chamado.get(chamado_id, [])

@@ -630,6 +630,22 @@ async def criar_chamado(
     if triagem_cobre:
         triagem.agendar_triagem(str(novo["id"]))
 
+    # Aviso por e-mail à equipe do setor de destino: até aqui a fila só
+    # avisava quem já estivesse com o sino/Realtime do Workspace aberto —
+    # ninguém era notificado por e-mail da entrada de um chamado NOVO na
+    # fila (relatado pelo TI). Mesma lista de quem pode ser designado
+    # responsável (``FilaRepo.operadores``), exclui o próprio autor.
+    equipe_destino = await repo.operadores(
+        ctx.user.claims, departamento_id=departamento_id, excluir_id=ctx.user.id
+    )
+    if equipe_destino:
+        from app.notification import agendar_notificacao_novo_chamado
+        await agendar_notificacao_novo_chamado(
+            tarefa_ia,
+            {"id": str(novo["id"]), "codigo": novo["codigo"], "titulo": titulo, "departamento_nome": dep_destino_nome},
+            [str(o["id"]) for o in equipe_destino],
+        )
+
     # "Em cópia" (Fase 8): observadores escolhidos já na abertura — multi-setorial,
     # qualquer pessoa da organização (não só do departamento de destino).
     for observador_id in {v.strip() for v in form_data.getlist("observadores") if v.strip()}:
@@ -813,8 +829,10 @@ async def responder_chamado(
     chamado = await repo.obter(ctx.user.claims, chamado_id)
     if chamado:
         from app.notification import agendar_notificacao_email
+        observadores = await repo.observadores(ctx.user.claims, chamado_id)
         await agendar_notificacao_email(
-            background_tasks, chamado, ctx.user.id, conteudo or "[Arquivo anexo]"
+            background_tasks, chamado, ctx.user.id, conteudo or "[Arquivo anexo]",
+            observadores=[str(o["perfil_id"]) for o in observadores],
         )
         # Re-triagem por IA (F2): resposta do AUTOR num depto habilitado reagenda
         # a triagem (disparo imediato) — o motor decide se há mesmo rodada nova

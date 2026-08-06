@@ -965,8 +965,10 @@ async def responder(
             chamado = await repo.obter(ctx.user.claims, chamado_id)
             if chamado:
                 from app.notification import agendar_notificacao_email
+                observadores = await repo.observadores(ctx.user.claims, chamado_id)
                 await agendar_notificacao_email(
-                    background_tasks, chamado, ctx.user.id, conteudo or "[Arquivo anexo]"
+                    background_tasks, chamado, ctx.user.id, conteudo or "[Arquivo anexo]",
+                    observadores=[str(o["perfil_id"]) for o in observadores],
                 )
     return _voltar(chamado_id, origem)
 
@@ -993,8 +995,10 @@ async def encerrar(
         chamado = await repo.obter(ctx.user.claims, chamado_id)
         if chamado:
             from app.notification import agendar_notificacao_email
+            observadores = await repo.observadores(ctx.user.claims, chamado_id)
             await agendar_notificacao_email(
-                background_tasks, chamado, ctx.user.id, resolucao
+                background_tasks, chamado, ctx.user.id, resolucao,
+                observadores=[str(o["perfil_id"]) for o in observadores],
             )
     await repo.alterar_status(ctx.user.claims, chamado_id, "RESOLVIDO")
     return _voltar(chamado_id, origem)

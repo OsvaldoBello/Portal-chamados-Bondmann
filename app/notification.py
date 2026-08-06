@@ -125,9 +125,18 @@ def enviar_email_smtp(para: str, assunto: str, corpo_texto: str, corpo_html: str
         return False
 
 
-async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteudo: str) -> None:
+async def notificar_nova_mensagem_email(
+    chamado: dict, remetente_id: str, conteudo: str, observadores: list[str] | None = None
+) -> None:
     """Identifica o destinatário (cliente ou operador) e envia uma notificação por e-mail
     com layout HTML organizado e cabeçalho Reply-To para processamento inbound.
+
+    ``observadores`` (Fase 8 — "em cópia"): perfil_ids de quem acompanha o
+    chamado sem poder responder por ele. Eles também recebem um aviso por
+    e-mail (até aqui só o sino/Realtime avisava, e só pra quem já estivesse
+    com a tela do Workspace/Portal aberta) — sempre link de leitura (rota do
+    Portal, que qualquer perfil com RLS de observador consegue abrir) e sem
+    Reply-To: quem está em cópia não responde pelo chamado, nem por e-mail.
     """
     cliente_id = str(chamado.get("cliente_id"))
     operador_id = str(chamado.get("operador_id")) if chamado.get("operador_id") else None
@@ -136,15 +145,24 @@ async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteu
     # Caso contrário, o destinatário é o cliente.
     destinatario_id = operador_id if str(remetente_id) == cliente_id else cliente_id
 
-    if not destinatario_id:
-        return
-
-    # Buscar e-mail do destinatário usando a API de administração do Supabase.
     client = await ensure_admin_client()
     if not client:
-        log.warning(f"Could not load email for user {destinatario_id}: Supabase admin client is not configured.")
+        log.warning("Could not load email recipients: Supabase admin client is not configured.")
         return
 
+    if destinatario_id:
+        await _notificar_destinatario_mensagem(client, chamado, destinatario_id, operador_id, conteudo)
+
+    ja_notificados = {str(remetente_id), destinatario_id} if destinatario_id else {str(remetente_id)}
+    for observador_id in {str(o) for o in (observadores or []) if o}:
+        if observador_id in ja_notificados:
+            continue
+        await _notificar_observador_mensagem(client, chamado, observador_id, conteudo)
+
+
+async def _notificar_destinatario_mensagem(
+    client, chamado: dict, destinatario_id: str, operador_id: str | None, conteudo: str
+) -> None:
     try:
         res = await client.auth.admin.get_user_by_id(destinatario_id)
         u = getattr(res, "user", res)
@@ -327,6 +345,151 @@ async def notificar_nova_mensagem_email(chamado: dict, remetente_id: str, conteu
     await enviar_email(email, assunto, corpo_texto, corpo_html, reply_to=reply_to)
 
 
+async def _notificar_observador_mensagem(client, chamado: dict, observador_id: str, conteudo: str) -> None:
+    """Avisa quem está "em cópia" (Fase 8) de uma nova mensagem pública no
+    chamado. Link sempre pela rota do Portal — a RLS de observador dá
+    visibilidade ali independente do departamento/role de quem está em cópia
+    (diferente do Workspace, restrito ao staff do próprio setor). Sem
+    Reply-To: em cópia é só leitura, nunca responde pelo chamado."""
+    try:
+        res = await client.auth.admin.get_user_by_id(observador_id)
+        u = getattr(res, "user", res)
+        email = getattr(u, "email", None)
+        if not email:
+            log.warning(f"Observador {observador_id} sem e-mail cadastrado.")
+            return
+    except Exception as e:
+        log.error(f"Erro ao buscar e-mail do observador {observador_id}: {e}")
+        return
+
+    settings = get_settings()
+    codigo = chamado.get("codigo", "")
+    titulo = chamado.get("titulo", "")
+    chamado_id = chamado.get("id")
+    site_url = settings.site_url.rstrip("/")
+    url = f"{site_url}/portal/chamados/{chamado_id}"
+
+    assunto = f"[Portal Bondmann] Nova mensagem no chamado {codigo} (você está em cópia)"
+
+    corpo_texto = (
+        f"Olá,\n\n"
+        f"Você está em cópia no chamado {codigo} ({titulo}) e há uma nova mensagem:\n\n"
+        f"\"{conteudo}\"\n\n"
+        f"Para acompanhar, acesse: {url}\n\n"
+        f"Atenciosamente,\n"
+        f"Portal de Chamados Bondmann Química\n"
+    )
+
+    corpo_html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f8fafc;
+      color: #334155;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }}
+    .wrapper {{ width: 100%; background-color: #f8fafc; padding: 30px 15px; }}
+    .container {{
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+      border: 1px solid #e2e8f0;
+    }}
+    .header {{ background-color: #1e293b; padding: 24px; text-align: center; }}
+    .header-logo {{ color: #ffffff; font-weight: 800; font-size: 20px; letter-spacing: 0.05em; }}
+    .header-sub {{ color: #1d9e75; font-size: 10px; font-weight: bold; letter-spacing: 0.3em; margin-top: 4px; }}
+    .content {{ padding: 32px 24px; }}
+    .title {{ font-size: 18px; font-weight: 700; color: #0f172a; margin-top: 0; margin-bottom: 8px; }}
+    .subtitle {{ font-size: 13px; color: #64748b; margin-bottom: 24px; }}
+    .cc-tag {{
+      display: inline-block;
+      background-color: #f1f5f9;
+      color: #475569;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      border-radius: 999px;
+      padding: 3px 10px;
+      margin-bottom: 16px;
+    }}
+    .message-box {{
+      background-color: #f1f5f9;
+      border-left: 4px solid #1d9e75;
+      border-radius: 4px;
+      padding: 16px;
+      margin-bottom: 28px;
+      font-size: 15px;
+      line-height: 1.6;
+      color: #334155;
+    }}
+    .btn-container {{ text-align: center; margin-bottom: 24px; }}
+    .btn {{
+      display: inline-block;
+      background-color: #1e293b;
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 6px;
+      box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    }}
+    .footer {{
+      background-color: #f8fafc;
+      padding: 24px;
+      text-align: center;
+      font-size: 11px;
+      color: #94a3b8;
+      border-top: 1px solid #e2e8f0;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <div class="header-logo">BONDMANN</div>
+        <div class="header-sub">PORTAL DE CHAMADOS</div>
+      </div>
+      <div class="content">
+        <div class="cc-tag">EM CÓPIA</div>
+        <h2 class="title" style="margin-top: 0; margin-bottom: 8px;">Nova mensagem no chamado {codigo}</h2>
+        <div class="subtitle">Assunto: <strong>{titulo}</strong></div>
+
+        <p style="margin-top:0; font-size:14px; color: #475569;">Você está em cópia neste chamado e recebeu uma nova mensagem:</p>
+
+        <div class="message-box">
+          "{conteudo}"
+        </div>
+
+        <div class="btn-container">
+          <a href="{url}" class="btn">Acompanhar chamado</a>
+        </div>
+
+        <p style="font-size: 12px; color: #94a3b8; margin-bottom: 0;">Se o botão não funcionar, copie e cole o link no seu navegador:<br><a href="{url}" style="color: #1d9e75; text-decoration: none;">{url}</a></p>
+      </div>
+      <div class="footer">
+        Este é um e-mail automático enviado pelo Portal de Chamados Bondmann Química.<br>
+        Por favor, não responda diretamente a este endereço de e-mail.
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+    await enviar_email(email, assunto, corpo_texto, corpo_html)
+
+
 async def notificar_novo_usuario_email(nome: str, email: str) -> None:
     """E-mail de boas-vindas ao criar uma conta pelo painel Admin (2026-07-21):
     instrui o primeiro acesso via "Esqueci minha senha" (o TI cria a conta com
@@ -445,7 +608,13 @@ async def notificar_novo_usuario_email(nome: str, email: str) -> None:
     await enviar_email(email, assunto, corpo_texto, corpo_html)
 
 
-async def agendar_notificacao_email(background_tasks: BackgroundTasks, chamado: dict, remetente_id: str, conteudo: str) -> None:
+async def agendar_notificacao_email(
+    background_tasks: BackgroundTasks,
+    chamado: dict,
+    remetente_id: str,
+    conteudo: str,
+    observadores: list[str] | None = None,
+) -> None:
     """Dispara a notificação de e-mail de forma assíncrona via BackgroundTasks.
 
     Processo persistente (Railway — Sprint 1 / item 1.8, M10: alvo único de
@@ -453,4 +622,145 @@ async def agendar_notificacao_email(background_tasks: BackgroundTasks, chamado: 
     após a resposta, sem o modo inline que a Vercel serverless exigia (função
     efêmera derrubada logo após responder, o que perdia o envio)."""
     log.info("[NOTIFICATION] Queueing background task for email notification")
-    background_tasks.add_task(notificar_nova_mensagem_email, chamado, remetente_id, conteudo)
+    background_tasks.add_task(notificar_nova_mensagem_email, chamado, remetente_id, conteudo, observadores)
+
+
+async def notificar_novo_chamado_email(chamado: dict, destinatarios_ids: list[str]) -> None:
+    """Avisa a equipe do departamento de destino quando um chamado novo entra
+    na fila. Antes desta função só existia notificação de e-mail para
+    respostas/mensagens — a abertura de um chamado dependia inteiramente do
+    sino/Realtime do Workspace, então o setor só sabia de um chamado NOVO
+    se alguém estivesse com a tela aberta no momento (motivo do TI relatar
+    que não recebia aviso nenhum de chamado novo)."""
+    ids = {str(d) for d in destinatarios_ids if d}
+    if not ids:
+        return
+
+    client = await ensure_admin_client()
+    if not client:
+        log.warning("Novo chamado: Supabase admin client não configurado, notificação da equipe pulada.")
+        return
+
+    settings = get_settings()
+    codigo = chamado.get("codigo", "")
+    titulo = chamado.get("titulo", "")
+    chamado_id = chamado.get("id")
+    departamento_nome = chamado.get("departamento_nome") or ""
+    site_url = settings.site_url.rstrip("/")
+    url = f"{site_url}/workspace/chamados/{chamado_id}"
+
+    assunto = f"[Portal Bondmann] Novo chamado na fila do {departamento_nome}: {codigo}"
+
+    corpo_texto = (
+        f"Olá,\n\n"
+        f"Um novo chamado entrou na fila do setor {departamento_nome}:\n\n"
+        f"{codigo} — {titulo}\n\n"
+        f"Para visualizar e atender, acesse: {url}\n\n"
+        f"Atenciosamente,\n"
+        f"Portal de Chamados Bondmann Química\n"
+    )
+
+    corpo_html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f8fafc;
+      color: #334155;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }}
+    .wrapper {{ width: 100%; background-color: #f8fafc; padding: 30px 15px; }}
+    .container {{
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+      border: 1px solid #e2e8f0;
+    }}
+    .header {{ background-color: #1e293b; padding: 24px; text-align: center; }}
+    .header-logo {{ color: #ffffff; font-weight: 800; font-size: 20px; letter-spacing: 0.05em; }}
+    .header-sub {{ color: #1d9e75; font-size: 10px; font-weight: bold; letter-spacing: 0.3em; margin-top: 4px; }}
+    .content {{ padding: 32px 24px; }}
+    .title {{ font-size: 18px; font-weight: 700; color: #0f172a; margin-top: 0; margin-bottom: 8px; }}
+    .subtitle {{ font-size: 13px; color: #64748b; margin-bottom: 24px; }}
+    .btn-container {{ text-align: center; margin-bottom: 24px; }}
+    .btn {{
+      display: inline-block;
+      background-color: #1e293b;
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 6px;
+      box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    }}
+    .footer {{
+      background-color: #f8fafc;
+      padding: 24px;
+      text-align: center;
+      font-size: 11px;
+      color: #94a3b8;
+      border-top: 1px solid #e2e8f0;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <div class="header-logo">BONDMANN</div>
+        <div class="header-sub">PORTAL DE CHAMADOS</div>
+      </div>
+      <div class="content">
+        <h2 class="title" style="margin-top: 0; margin-bottom: 8px;">Novo chamado na fila</h2>
+        <div class="subtitle">Setor: <strong>{departamento_nome}</strong></div>
+
+        <p style="margin-top:0; font-size:14px; color: #475569;">{codigo} — {titulo}</p>
+
+        <div class="btn-container">
+          <a href="{url}" class="btn">Visualizar e atender</a>
+        </div>
+
+        <p style="font-size: 12px; color: #94a3b8; margin-bottom: 0;">Se o botão não funcionar, copie e cole o link no seu navegador:<br><a href="{url}" style="color: #1d9e75; text-decoration: none;">{url}</a></p>
+      </div>
+      <div class="footer">
+        Este é um e-mail automático enviado pelo Portal de Chamados Bondmann Química.<br>
+        Por favor, não responda diretamente a este endereço de e-mail.
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+    for destinatario_id in ids:
+        try:
+            res = await client.auth.admin.get_user_by_id(destinatario_id)
+            u = getattr(res, "user", res)
+            email = getattr(u, "email", None)
+            if not email:
+                log.warning(f"Staff {destinatario_id} sem e-mail cadastrado.")
+                continue
+        except Exception as e:
+            log.error(f"Erro ao buscar e-mail do staff {destinatario_id}: {e}")
+            continue
+        await enviar_email(email, assunto, corpo_texto, corpo_html)
+
+
+async def agendar_notificacao_novo_chamado(
+    background_tasks: BackgroundTasks, chamado: dict, destinatarios_ids: list[str]
+) -> None:
+    """Agenda (via BackgroundTasks) o aviso de chamado novo para a equipe do
+    setor de destino — mesmo padrão de :func:`agendar_notificacao_email`."""
+    if not destinatarios_ids:
+        return
+    log.info("[NOTIFICATION] Queueing background task for new-ticket team notification")
+    background_tasks.add_task(notificar_novo_chamado_email, chamado, destinatarios_ids)
