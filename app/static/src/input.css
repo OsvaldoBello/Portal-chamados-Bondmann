@@ -1,3 +1,28 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /* Safari (macOS/iOS) desenha o <select> com o "chrome" nativo do SO por
+     cima do box-shadow do utilitário ring-*, deixando o contorno sumido ou
+     um fio quase invisível — mesmo com border real, o tema nativo ainda
+     domina o traço. A correção definitiva é desligar esse chrome nativo
+     (appearance:none) e redesenhar a mesma caixa branca + borda + seta que
+     os outros navegadores já mostram, assim o select fica idêntico ao
+     input ao lado em qualquer navegador. */
+  select[class*="ring-line"] {
+    -webkit-appearance: none;
+    appearance: none;
+    background-color: #fff;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%2364748B' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.7rem center;
+    background-size: 0.9em auto;
+    padding-right: 2.25rem;
+    border: 1px solid theme("colors.line");
+  }
+
+  select[class*="ring-line"]:focus {
+    border-color: theme("colors.navy.500");
+  }
+}
