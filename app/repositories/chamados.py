@@ -295,6 +295,9 @@ class ChamadosRepo:
     ) -> list[dict[str, Any]]:
         return await self._mensagens.usuarios_para_copia(claims, excluir_id=excluir_id)
 
+    async def chamados_em_copia(self, claims: dict, *, limite: int = 100) -> list[dict[str, Any]]:
+        return await self._mensagens.chamados_em_copia(claims, limite=limite)
+
     async def observadores(self, claims: dict, chamado_id: str) -> list[dict[str, Any]]:
         return await self._mensagens.observadores(claims, chamado_id)
 

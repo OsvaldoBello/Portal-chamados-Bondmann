@@ -205,6 +205,11 @@ async def dashboard(
             ctx.user.claims,
             departamento_id=str(ctx.perfil.get("departamento_id") or "") or None,
         )
+    # "Em cópia" (Fase 8): chamados em que a pessoa foi adicionada como
+    # observadora, mas não é a autora — sem isso, cópia só era visível pelo
+    # link direto (sino/e-mail), nunca pela própria listagem (bug relatado
+    # pelo RH, 2026-08-07: cópia "não aparecia" para quem foi adicionado).
+    chamados_copia = await repo.chamados_em_copia(ctx.user.claims)
     return render(
         request,
         "portal/dashboard.html",
@@ -213,6 +218,7 @@ async def dashboard(
             "chamados": chamados,
             "stats": stats,
             "chamados_colegas": chamados_colegas,
+            "chamados_copia": chamados_copia,
             "base_template": portal_base_template(ctx.perfil),
             "status_sel": f["status"] or "",
             "status_opcoes": status_opcoes,

@@ -66,7 +66,7 @@ class FakeRepo:
     def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None,
                  role="CLIENTE", departamento_id=None, departamento=None, chamados_colegas=None,
                  avaliacao_pendente=None, telefone="", chamados_meus=None,
-                 operadores_por_departamento=None):
+                 operadores_por_departamento=None, chamados_copia=None):
         self._chamado = chamado
         self._chamados_meus = chamados_meus if chamados_meus is not None else [
             {
@@ -107,6 +107,7 @@ class FakeRepo:
         self.observadores_removidos: list[tuple] = []
         self._observadores_por_chamado: dict[str, list[dict]] = {}
         self._operadores_por_departamento = operadores_por_departamento or {}
+        self._chamados_copia = chamados_copia if chamados_copia is not None else []
 
     async def perfil(self, claims):
         return {
@@ -218,6 +219,9 @@ class FakeRepo:
 
     async def observadores(self, claims, chamado_id):
         return self._observadores_por_chamado.get(chamado_id, [])
+
+    async def chamados_em_copia(self, claims, *, limite=100):
+        return self._chamados_copia[:limite]
 
     async def adicionar_observador(self, claims, chamado_id, perfil_id):
         self.observadores_adicionados.append((chamado_id, perfil_id))
@@ -1001,6 +1005,36 @@ def test_dashboard_nao_mostra_chamados_do_departamento_para_funcionario():
     assert resp.status_code == 200
     assert "Chamados do Departamento" not in resp.text
     assert repo.chamados_departamento_filtros is None
+
+
+def test_dashboard_mostra_chamados_em_copia():
+    """Bug relatado pelo RH (2026-08-07): quem é adicionado "em cópia" num
+    chamado de outra pessoa não o via em lugar nenhum do próprio Portal — só
+    pelo link direto (sino/e-mail). `listar` ("Meus chamados") só devolve o
+    que a própria pessoa abriu; a seção "Chamados em cópia" cobre o resto."""
+    repo = FakeRepo(
+        role="CLIENTE",
+        chamados_copia=[{
+            "id": "c10", "codigo": "BOND-2026-00010", "titulo": "Ajuste de ponto",
+            "status": "EM_ATENDIMENTO", "prioridade": "MEDIA", "departamento": "RH",
+            "created_at": datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
+            "cliente_nome": "Nayane Exemplo",
+        }],
+    )
+    with portal_client(repo) as client:
+        resp = client.get("/portal")
+    assert resp.status_code == 200
+    assert "Chamados em cópia" in resp.text
+    assert "BOND-2026-00010" in resp.text
+    assert "Nayane Exemplo" in resp.text
+
+
+def test_dashboard_sem_copia_nao_mostra_secao():
+    repo = FakeRepo(role="CLIENTE", chamados_copia=[])
+    with portal_client(repo) as client:
+        resp = client.get("/portal")
+    assert resp.status_code == 200
+    assert "Chamados em cópia" not in resp.text
 
 
 # --------------------------------------------------------------------------

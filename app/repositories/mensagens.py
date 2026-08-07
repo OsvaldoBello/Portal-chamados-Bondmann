@@ -214,6 +214,43 @@ class MensagensRepo:
             )
             return [dict(r) for r in rows]
 
+    async def chamados_em_copia(
+        self, claims: dict, *, limite: int = 100
+    ) -> list[dict[str, Any]]:
+        """Chamados em que o usuário está "em cópia" (observador) — mas NÃO é o
+        autor. Sem isso, quem é adicionado como observador só enxerga o
+        chamado pelo link direto (sino/e-mail): a RLS (`chamados_select`,
+        migration 0034/0036) já libera a leitura, mas `ChamadosRepo.listar`
+        ("Meus chamados") filtra por `cliente_id = auth.uid()` e nunca devolve
+        essas linhas — o motivo do bug relatado pelo RH (2026-08-07): cópia
+        "invisível" na listagem/kanban de quem foi adicionado.
+
+        Exclui duplicados (`chamado_principal_id IS NOT NULL`) pelo mesmo
+        motivo da fila/`ChamadosRepo.listar`: quem combinou já vira observador
+        do principal, então o duplicado em si não precisa duplicar a linha
+        aqui — a informação relevante está no principal."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT c.id, c.codigo, c.titulo, c.status, c.prioridade, c.created_at,
+                       cat.nome AS categoria, dep.nome AS departamento,
+                       autor.nome AS cliente_nome
+                  FROM chamados_observadores o
+                  JOIN chamados c ON c.id = o.chamado_id
+                  LEFT JOIN categorias cat ON cat.id = c.categoria_id
+                  LEFT JOIN departamentos dep ON dep.id = c.departamento_id
+                  LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                 WHERE o.perfil_id = $1::uuid
+                   AND c.cliente_id <> $1::uuid
+                   AND c.chamado_principal_id IS NULL
+                 ORDER BY c.created_at DESC
+                 LIMIT $2
+                """,
+                claims["sub"],
+                limite,
+            )
+            return [dict(r) for r in rows]
+
     async def observadores(self, claims: dict, chamado_id: str) -> list[dict[str, Any]]:
         """Quem está "em cópia" no chamado (RLS: só quem já enxerga o chamado
         vê a lista — mesma regra de quem pode adicionar/remover)."""
