@@ -86,8 +86,29 @@
     if (semPrazo) dataEntregaInput.value = "";
   }
 
+  // O Marketing não atende aos finais de semana: bloqueia sábado/domingo no
+  // campo de data (o backend também valida — esta checagem é só UX).
+  function validarDataEntrega() {
+    if (!dataEntregaInput || !dataEntregaInput.value) return;
+    var partes = dataEntregaInput.value.split("-");
+    var d = new Date(Number(partes[0]), Number(partes[1]) - 1, Number(partes[2]));
+    var diaDaSemana = d.getDay(); // 0 = domingo, 6 = sábado
+    if (diaDaSemana === 0 || diaDaSemana === 6) {
+      dataEntregaInput.setCustomValidity(
+        "O Marketing não atende aos finais de semana — escolha um dia útil (segunda a sexta)."
+      );
+    } else {
+      dataEntregaInput.setCustomValidity("");
+    }
+    dataEntregaInput.reportValidity();
+  }
+
   if (depSelect) depSelect.addEventListener("change", aplicar);
   if (semPrazoCheckbox) semPrazoCheckbox.addEventListener("change", aplicarSemPrazo);
+  if (dataEntregaInput) {
+    dataEntregaInput.addEventListener("input", validarDataEntrega);
+    dataEntregaInput.addEventListener("change", validarDataEntrega);
+  }
   aplicar(); // estado inicial (ex.: re-render de erro com Marketing já selecionado)
   aplicarSemPrazo();
 

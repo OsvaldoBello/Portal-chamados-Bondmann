@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 _TZ_BR = ZoneInfo("America/Sao_Paulo")
 _ENTREGA_MIN_DIAS = 2
+_SABADO = 5
+_DOMINGO = 6
 
 
 @dataclass(frozen=True)
@@ -80,8 +82,22 @@ class PortalService:
 
     @staticmethod
     def data_entrega_min() -> date:
-        """Menor data de entrega permitida (hoje + 48h, no fuso de Brasília)."""
-        return datetime.now(_TZ_BR).date() + timedelta(days=_ENTREGA_MIN_DIAS)
+        """Menor data de entrega permitida (hoje + 48h, no fuso de Brasília).
+
+        O Marketing não atende aos finais de semana: quando hoje + 48h cai em
+        sábado ou domingo (abertura na quinta ou na sexta), o prazo avança
+        para a próxima terça (a partir de sábado) ou quarta (a partir de
+        domingo) — nunca a segunda, pois o fim de semana não conta como parte
+        das 48h úteis.
+        """
+        minimo = datetime.now(_TZ_BR).date() + timedelta(days=_ENTREGA_MIN_DIAS)
+        if minimo.weekday() in (_SABADO, _DOMINGO):
+            minimo += timedelta(days=3)
+        return minimo
+
+    @staticmethod
+    def _eh_fim_de_semana(d: date) -> bool:
+        return d.weekday() in (_SABADO, _DOMINGO)
 
     @staticmethod
     def marketing_dep_id(departamentos: list[dict]) -> str:
@@ -176,6 +192,11 @@ class PortalService:
                     "A data de entrega deve ser a partir de "
                     f"{minimo.strftime('%d/%m/%Y')} — mínimo de 48h para início do desenvolvimento."
                 ),
+            )
+        if cls._eh_fim_de_semana(escolhida):
+            return RegrasMarketing(
+                is_marketing=True, prioridade="MEDIA", data_entrega=None, sem_prazo=False,
+                erro="O Marketing não atende aos finais de semana — escolha um dia útil (segunda a sexta).",
             )
         return RegrasMarketing(
             is_marketing=True, prioridade="MEDIA", data_entrega=escolhida, sem_prazo=False

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
+import pytest
+
+from app.services import portal as portal_service_module
 from app.services.portal import PortalService
 
 DEPARTAMENTOS = [
@@ -201,3 +204,72 @@ def test_regras_marketing_data_valida_aceita_e_forca_media():
     assert r.prioridade == "MEDIA"
     assert r.data_entrega == minimo
     assert r.erro is None
+
+
+# --------------------------------------------------------------------------
+# data_entrega_min / regras_marketing: o Marketing não atende fins de semana
+# --------------------------------------------------------------------------
+def _congelar_hoje(monkeypatch, ano, mes, dia):
+    """Fixa `datetime.now()` (usado por `data_entrega_min`) numa data fixa."""
+
+    class _DatetimeCongelado(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(ano, mes, dia, 10, 0, tzinfo=tz)
+
+    monkeypatch.setattr(portal_service_module, "datetime", _DatetimeCongelado)
+
+
+@pytest.mark.parametrize(
+    "hoje,minimo_esperado",
+    [
+        ((2026, 8, 6), "2026-08-11"),  # quinta -> terça (não segunda)
+        ((2026, 8, 7), "2026-08-12"),  # sexta -> quarta (não segunda)
+        ((2026, 8, 3), "2026-08-05"),  # segunda -> quarta (sem fim de semana no meio)
+    ],
+)
+def test_data_entrega_min_pula_fim_de_semana(monkeypatch, hoje, minimo_esperado):
+    _congelar_hoje(monkeypatch, *hoje)
+    assert PortalService.data_entrega_min().isoformat() == minimo_esperado
+
+
+def test_regras_marketing_data_no_sabado_da_erro_mesmo_apos_o_minimo(monkeypatch):
+    _congelar_hoje(monkeypatch, 2026, 8, 3)  # segunda; mínimo = quarta (05/08)
+    r = PortalService.regras_marketing(
+        departamento_id=MARKETING_ID,
+        setores_ativos=DEPARTAMENTOS,
+        prioridade="ALTA",
+        sem_prazo_marcado=False,
+        # 08/08/2026 é sábado, está após o mínimo mas cai no fim de semana.
+        data_entrega="2026-08-08",
+    )
+    assert r.erro is not None
+    assert "fim de semana" in r.erro.lower() or "dia útil" in r.erro.lower()
+    assert r.data_entrega is None
+
+
+def test_regras_marketing_aberto_na_quinta_nao_aceita_segunda_exige_terca(monkeypatch):
+    _congelar_hoje(monkeypatch, 2026, 8, 6)  # quinta
+    r = PortalService.regras_marketing(
+        departamento_id=MARKETING_ID,
+        setores_ativos=DEPARTAMENTOS,
+        prioridade="ALTA",
+        sem_prazo_marcado=False,
+        # 10/08/2026 é a segunda seguinte — não deve ser aceita como mínimo.
+        data_entrega="2026-08-10",
+    )
+    assert r.erro is not None
+    assert r.data_entrega is None
+
+
+def test_regras_marketing_aberto_na_quinta_aceita_terca(monkeypatch):
+    _congelar_hoje(monkeypatch, 2026, 8, 6)  # quinta; mínimo = terça (11/08)
+    r = PortalService.regras_marketing(
+        departamento_id=MARKETING_ID,
+        setores_ativos=DEPARTAMENTOS,
+        prioridade="ALTA",
+        sem_prazo_marcado=False,
+        data_entrega="2026-08-11",
+    )
+    assert r.erro is None
+    assert r.data_entrega.isoformat() == "2026-08-11"
