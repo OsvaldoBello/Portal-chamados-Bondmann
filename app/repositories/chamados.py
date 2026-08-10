@@ -476,6 +476,9 @@ class ChamadosRepo:
     async def avaliacao_pendente(self, claims: dict) -> dict[str, Any] | None:
         return await self._atendimento.avaliacao_pendente(claims)
 
+    async def formulario_pendente(self, claims: dict, chamado_id: str):
+        return await self._atendimento.formulario_pendente(claims, chamado_id)
+
     async def alterar_status(
         self, claims: dict, chamado_id: str, novo_status: str
     ) -> dict[str, Any] | None:

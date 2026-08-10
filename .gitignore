@@ -31,6 +31,10 @@ supabase/.temp/
 # Documentos de origem em Word — citados pelo nome nos MDs (plano mestre/plano de
 # melhorias), não versionados (mesmo precedente do docx de spec v2.0).
 *.docx
+# Exceção: modelos de formulário do RH servidos como estático em produção
+# (app/domain/formularios_rh.py) — são asset da aplicação, não documento de
+# origem/spec, e precisam estar no repo para o link de download funcionar.
+!app/static/formularios/**/*.docx
 ~$*
 
 # Claude Agent Workspace

@@ -147,6 +147,9 @@ class FakeRepo:
     async def departamentos_destino_ativos(self, claims):
         return [d for d in await self.departamentos_ativos(claims) if d["recebe_chamados"]]
 
+    async def formulario_pendente(self, claims, cid):
+        return None
+
     async def alterar_status(self, claims, cid, novo):
         self.acoes.append(("status", cid, novo)); return {"id": cid, "status": novo}
 

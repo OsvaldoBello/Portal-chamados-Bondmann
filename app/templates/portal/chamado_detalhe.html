@@ -51,6 +51,21 @@
   <p class="mt-4 text-sm text-ink whitespace-pre-line">{{ chamado.descricao }}</p>
 </div>
 
+{# Formulário obrigatório do RH (2026-08-10): a subcategoria exige um FB
+   preenchido anexado antes que o chamado possa ser concluído. #}
+{% if formulario_pendente %}
+<div class="mb-5 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+  <strong>Formulário obrigatório pendente:</strong> esta solicitação exige o anexo do formulário
+  <strong>{{ formulario_pendente.label }}</strong> preenchido — o chamado só será concluído depois disso.
+  Baixe o modelo, preencha e anexe o arquivo numa resposta abaixo.
+  <span class="block mt-1">
+    {% for arq in formulario_pendente.arquivos %}
+    <a href="{{ arq.url }}" target="_blank" rel="noopener" class="font-semibold underline">{{ arq.nome }}</a>{% if not loop.last %} &middot; {% endif %}
+    {% endfor %}
+  </span>
+</div>
+{% endif %}
+
 {# Dados do formulário (categorias com layout dinâmico — ex.: Químico). #}
 {% if dados_formulario %}
 <div class="bg-white rounded-xl shadow-card border border-line/60 p-6 mb-5">

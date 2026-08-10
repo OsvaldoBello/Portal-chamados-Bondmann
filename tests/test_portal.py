@@ -163,6 +163,9 @@ class FakeRepo:
     async def mensagens_assinatura(self, claims, chamado_id):
         return (0, None)
 
+    async def formulario_pendente(self, claims, chamado_id):
+        return None
+
     async def categorias_ativas(self, claims, departamento_id=None, *, filtrar_publico=False):
         return self._categorias
 

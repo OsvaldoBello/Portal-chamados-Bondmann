@@ -104,6 +104,26 @@
         </select>
       </label>
 
+      {# Formulário obrigatório do RH (2026-08-10, endurecido 2026-08-10): um
+         bloco oculto por subcategoria que exige anexo — novo_chamado.js mostra
+         o que casa com a subcategoria escolhida (pelo texto da <option>, igual
+         ao nome). O servidor recusa a abertura sem esse anexo (`criar_chamado`,
+         app/routes/portal.py) e também bloqueia a conclusão depois (Workspace). #}
+      <div id="formularios-rh-avisos">
+        {% for nome, fo in FORMULARIOS_RH.items() %}
+        <div class="formulario-rh-aviso rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-xs text-amber-800"
+          data-subcategoria="{{ nome }}" hidden>
+          <strong>Formulário obrigatório:</strong> baixe o modelo, preencha e anexe o arquivo preenchido nos
+          <strong>Anexos</strong> abaixo — sem ele o chamado não pode ser aberto.
+          <span class="block mt-1">
+            {% for arq in fo.arquivos %}
+            <a href="{{ arq.url }}" target="_blank" rel="noopener" class="font-semibold underline">{{ arq.nome }}</a>{% if not loop.last %} &middot; {% endif %}
+            {% endfor %}
+          </span>
+        </div>
+        {% endfor %}
+      </div>
+
       {# Campos dinâmicos por categoria (Químico). Recarregados via HTMX ao trocar
          a categoria (evento `change` vindo do #categoria-select). Visibilidade
          controlada por novo_chamado.js conforme o departamento de destino. #}

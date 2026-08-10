@@ -275,6 +275,23 @@
         Descreva a <strong>solução aplicada</strong>. Ela é enviada ao solicitante como resposta e o
         chamado é marcado como <strong>Resolvido</strong> — ele poderá então avaliar o atendimento.
       </p>
+      {% if formulario_pendente %}
+      {# Formulário obrigatório do RH (2026-08-10): a subcategoria exige um FB
+         anexado antes de concluir — o servidor bloqueia o encerramento/troca de
+         status pra RESOLVIDO enquanto nenhum anexo existir (qualquer mensagem
+         do chamado). #}
+      <div class="mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-xs text-amber-800">
+        <strong>Formulário obrigatório pendente:</strong> esta subcategoria exige o anexo do
+        formulário <strong>{{ formulario_pendente.label }}</strong> preenchido antes da conclusão.
+        Anexe-o na resposta acima.
+        <span class="block mt-1">
+          Modelo em branco:
+          {% for arq in formulario_pendente.arquivos %}
+          <a href="{{ arq.url }}" target="_blank" rel="noopener" class="font-semibold underline">{{ arq.nome }}</a>{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </span>
+      </div>
+      {% endif %}
       <form method="post" action="/workspace/chamados/{{ chamado.id }}/encerrar{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-3">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <textarea name="resolucao" rows="3"

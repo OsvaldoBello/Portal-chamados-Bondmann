@@ -14,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from app.anexos import MAX_ANEXOS
 from app.avatar_storage import avatar_public_url
 from app.config import get_settings
+from app.domain.formularios_rh import FORMULARIOS_POR_SUBCATEGORIA
 from app.domain.sla_visual import barra_sla, estado_sla
 from app.security.csrf import CSRF_HEADER, get_csrf
 
@@ -178,6 +179,7 @@ templates.env.globals.update(
     avatar_url=avatar_public_url,  # bolinha de avatar nos cards (Fase 7)
     paragrafos_mensagem=paragrafos_mensagem,  # quebra de parágrafo consistente no chat
     static_url=static_url,  # cache-busting de js/css próprio (2026-07-23)
+    FORMULARIOS_RH=FORMULARIOS_POR_SUBCATEGORIA,  # FBs obrigatórios por subcategoria (2026-08-10)
 )
 
 

@@ -26,6 +26,7 @@
   var semPrazoCheckbox = document.getElementById("sem-prazo-checkbox");
   var dataEntregaInput = document.getElementById("data-entrega-input");
   var anexosHint = document.getElementById("anexos-limite-hint");
+  var subcategoriaSelect = document.getElementById("subcategoria-select");
 
   function ehMarketing() {
     return marketingId !== "" && depSelect && depSelect.value === marketingId;
@@ -77,6 +78,21 @@
     }
   }
 
+  // Formulário obrigatório do RH (2026-08-10): mostra o aviso/link de download
+  // do bloco oculto (novo_chamado.html) cujo `data-subcategoria` casa com o
+  // texto da <option> selecionada — mesmo formato de nome usado no banco
+  // (`subcategorias.nome`), sem precisar de mais uma chamada ao servidor.
+  function aplicarFormularioObrigatorio() {
+    if (!subcategoriaSelect) return;
+    var opt = subcategoriaSelect.options[subcategoriaSelect.selectedIndex];
+    var nomeSelecionado = opt ? (opt.textContent || "").trim() : "";
+    var avisos = document.querySelectorAll(".formulario-rh-aviso");
+    for (var i = 0; i < avisos.length; i++) {
+      var bate = avisos[i].getAttribute("data-subcategoria") === nomeSelecionado;
+      avisos[i].hidden = !bate;
+    }
+  }
+
   // "Sem data limite": desabilita (e limpa) o campo de data enquanto marcado,
   // pra não submeter um valor de data junto com a demanda sem prazo (0040).
   function aplicarSemPrazo() {
@@ -109,8 +125,10 @@
     dataEntregaInput.addEventListener("input", validarDataEntrega);
     dataEntregaInput.addEventListener("change", validarDataEntrega);
   }
+  if (subcategoriaSelect) subcategoriaSelect.addEventListener("change", aplicarFormularioObrigatorio);
   aplicar(); // estado inicial (ex.: re-render de erro com Marketing já selecionado)
   aplicarSemPrazo();
+  aplicarFormularioObrigatorio(); // estado inicial (re-render de erro com subcategoria já selecionada)
 
   // Categoria "Outros": ao trocar a categoria, o HTMX recarrega as <option>s de
   // subcategoria (fetch em /portal/chamados/subcategorias). Quando a categoria
@@ -131,5 +149,13 @@
         break;
       }
     }
+  });
+
+  // A recarga das <option>s de subcategoria (cascade da categoria) muda a
+  // seleção — reavalia o aviso de formulário obrigatório depois de qualquer
+  // swap do select (inclui o pré-select de "Outros" acima).
+  document.body.addEventListener("htmx:afterSwap", function (evt) {
+    var alvo = evt.detail && evt.detail.target;
+    if (alvo && alvo.id === "subcategoria-select") aplicarFormularioObrigatorio();
   });
 })();

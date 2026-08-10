@@ -16,6 +16,7 @@ from asyncpg import PostgresError
 
 from app.db import admin_connection, rls_connection
 from app.domain.combinacao import anexos_combinacao, texto_combinacao
+from app.domain.formularios_rh import FormularioObrigatorio, formulario_da_subcategoria
 
 log = logging.getLogger("app.repositories.atendimento")
 
@@ -658,6 +659,35 @@ class AtendimentoRepo:
             acao,
             json.dumps(detalhes),
         )
+
+    async def formulario_pendente(
+        self, claims: dict, chamado_id: str
+    ) -> FormularioObrigatorio | None:
+        """A subcategoria do chamado exige um formulário (`app/domain/formularios_rh.py`)
+        e nenhum anexo foi enviado ainda? Retorna o formulário pendente (para
+        mostrar o link de download/nome) ou ``None`` (nada exigido, ou já
+        anexado — em qualquer mensagem, pública ou nota interna, de quem for).
+
+        Usado tanto para exibir o aviso na tela (Portal e Workspace) quanto
+        para bloquear a conclusão do chamado (`alterar_status`, chamado a
+        partir de `app/routes/workspace.py::mudar_status`/`encerrar`)."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT sub.nome AS subcategoria,
+                       EXISTS(
+                         SELECT 1 FROM mensagens m
+                          WHERE m.chamado_id = c.id AND jsonb_array_length(m.anexos) > 0
+                       ) AS tem_anexo
+                  FROM chamados c
+                  LEFT JOIN subcategorias sub ON sub.id = c.subcategoria_id
+                 WHERE c.id = $1::uuid
+                """,
+                chamado_id,
+            )
+        if row is None or row["tem_anexo"]:
+            return None
+        return formulario_da_subcategoria(row["subcategoria"])
 
     async def alterar_status(
         self, claims: dict, chamado_id: str, novo_status: str

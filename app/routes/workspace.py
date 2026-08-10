@@ -516,6 +516,14 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         if pode_atender and not eh_duplicado
         else []
     )
+    # Formulário obrigatório do RH (2026-08-10): algumas subcategorias só
+    # deixam concluir o chamado depois de um anexo (o FB preenchido). None
+    # quando a subcategoria não exige nada, ou já foi anexado.
+    formulario_pendente = (
+        await repo.formulario_pendente(ctx.user.claims, chamado_id)
+        if chamado.get("status") != "RESOLVIDO"
+        else None
+    )
     settings = get_settings()
     ctx_render = {
         "perfil": ctx.perfil,
@@ -547,6 +555,7 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         "access_token": _access_token(request),
         "origem": origem,
         "ia_triagem": ia_triagem,
+        "formulario_pendente": formulario_pendente,
     }
     ctx_render.update(extra)
     return render(request, "workspace/atendimento.html", ctx_render)
@@ -624,19 +633,32 @@ async def mudar_status(
     ``iniciar_atendimento`` é um no-op e cai no fallback de troca simples.
     """
     resultado: dict | None = None
+    bloqueio = None
     if novo_status in STATUS_VALIDOS:
-        if novo_status not in ("NOVO", "A_FAZER"):
-            resultado = await repo.iniciar_atendimento(
-                ctx.user.claims, chamado_id, operador_id=ctx.user.id, novo_status=novo_status
-            )
-        if resultado is None:
-            resultado = await repo.alterar_status(ctx.user.claims, chamado_id, novo_status)
+        # Concluir (RESOLVIDO) exige o formulário do RH anexado, quando a
+        # subcategoria do chamado exigir um (2026-08-10, app/domain/formularios_rh.py).
+        if novo_status == "RESOLVIDO":
+            bloqueio = await repo.formulario_pendente(ctx.user.claims, chamado_id)
+        if bloqueio is None:
+            if novo_status not in ("NOVO", "A_FAZER"):
+                resultado = await repo.iniciar_atendimento(
+                    ctx.user.claims, chamado_id, operador_id=ctx.user.id, novo_status=novo_status
+                )
+            if resultado is None:
+                resultado = await repo.alterar_status(ctx.user.claims, chamado_id, novo_status)
 
     # O drag do Kanban chama via fetch (header X-Kanban-Drag) e precisa saber se
     # a mudança realmente aconteceu para poder desfazer o arraste na tela; o
     # form clássico da tela de detalhe continua recebendo o redirect de sempre.
     if request.headers.get("X-Kanban-Drag"):
+        if bloqueio is not None:
+            return JSONResponse({
+                "ok": False,
+                "erro": f'Anexe o formulário "{bloqueio.label}" preenchido antes de concluir este chamado.',
+            })
         return JSONResponse({"ok": resultado is not None})
+    if bloqueio is not None:
+        return await _carregar_atendimento(request, chamado_id, ctx, repo, origem=origem)
     return _voltar(chamado_id, origem)
 
 
@@ -986,7 +1008,12 @@ async def encerrar(
 ):
     """Encerra o chamado (→ RESOLVIDO). A **nota de solução** (opcional) vira uma
     mensagem **pública** — visível ao solicitante, que então pode avaliar. Ação
-    de staff no escopo (RLS); as duas escritas rodam na mesma transação do request."""
+    de staff no escopo (RLS); as duas escritas rodam na mesma transação do request.
+
+    Bloqueada se a subcategoria exigir um formulário do RH ainda não anexado
+    (2026-08-10, app/domain/formularios_rh.py) — reexibe a tela com o aviso."""
+    if await repo.formulario_pendente(ctx.user.claims, chamado_id) is not None:
+        return await _carregar_atendimento(request, chamado_id, ctx, repo, origem=origem)
     resolucao = resolucao.strip()
     if resolucao:
         await repo.responder_staff(

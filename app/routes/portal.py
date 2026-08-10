@@ -46,6 +46,7 @@ from app.domain.formularios_quimico import (
     validar_payload,
     valores_para_template,
 )
+from app.domain.formularios_rh import formulario_da_subcategoria
 from app.domain.periodo import periodo_invertido
 from app.ia import triagem
 from app.ratelimit import limiter
@@ -564,6 +565,23 @@ async def criar_chamado(
     # não resolve ``list[UploadFile]`` e quebra na introspecção.
     arquivos = [f for f in form_data.getlist("arquivos") if getattr(f, "filename", "")]
 
+    # Formulário obrigatório do RH (2026-08-10): algumas subcategorias (ver
+    # `app/domain/formularios_rh.py`) exigem o FB preenchido já na ABERTURA —
+    # não basta avisar e deixar concluir sem ele depois (pedido do gestor,
+    # após testar sem anexo e o chamado abrir normalmente). `subs_da_categoria`
+    # já foi carregado acima para validar `subcategoria_id`; reaproveita para
+    # resolver o nome sem outra consulta.
+    nome_subcategoria_val = next(
+        (s["nome"] for s in subs_da_categoria if str(s["id"]) == str(subcategoria_id)),
+        None,
+    ) if subcategoria_id else None
+    formulario_obrigatorio = formulario_da_subcategoria(nome_subcategoria_val)
+    if formulario_obrigatorio and not arquivos:
+        return await _erro(
+            f'Esta subcategoria exige o anexo do formulário "{formulario_obrigatorio.label}" '
+            "preenchido — baixe o modelo, preencha e anexe-o antes de abrir o chamado."
+        )
+
     volume_str = form_data.get("volume") or "1"
     try:
         volume_val = int(volume_str)
@@ -728,6 +746,13 @@ async def detalhe_chamado(
         u for u in await repo.usuarios_para_copia(ctx.user.claims, excluir_id=ctx.user.id)
         if str(u["id"]) not in ja_observadores
     ]
+    # Formulário obrigatório do RH (2026-08-10): avisa o autor que falta anexar
+    # o FB da subcategoria — None quando não exige nada, ou já foi anexado.
+    formulario_pendente = (
+        await repo.formulario_pendente(ctx.user.claims, chamado_id)
+        if chamado.get("status") != "RESOLVIDO"
+        else None
+    )
     return render(
         request,
         "portal/chamado_detalhe.html",
@@ -736,6 +761,7 @@ async def detalhe_chamado(
             "chamado": chamado,
             "mensagens": mensagens,
             "dados_formulario": rotular(chamado.get("categoria"), chamado.get("dados_formulario") or {}),
+            "formulario_pendente": formulario_pendente,
             "pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id),
             "pode_reabrir": PortalService.pode_reabrir(chamado, ctx.user.id),
             "avaliar_pendente": bool(avaliar_pendente),

@@ -61,11 +61,14 @@
             .then(function (data) {
               if (!data.ok) {
                 // A mudança não teve efeito no servidor (ex.: alguém já assumiu o
-                // chamado). Sem isso, o card "voltava" pra coluna antiga sem
-                // nenhuma explicação — parecia que o Kanban tinha travado.
+                // chamado, ou falta anexar o formulário obrigatório da
+                // subcategoria — `data.erro`). Sem isso, o card "voltava" pra
+                // coluna antiga sem nenhuma explicação — parecia que o Kanban
+                // tinha travado.
                 window.alert(
-                  "Não foi possível mover o chamado para \"" + destino +
-                  "\". Ele pode já ter sido assumido por outra pessoa. A tela vai recarregar."
+                  data.erro ||
+                  ("Não foi possível mover o chamado para \"" + destino +
+                  "\". Ele pode já ter sido assumido por outra pessoa. A tela vai recarregar.")
                 );
               }
               window.location.reload();

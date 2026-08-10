@@ -58,6 +58,9 @@ class FakeRepo:
     async def usuarios_para_copia(self, claims, *, excluir_id=None):
         return []
 
+    async def formulario_pendente(self, claims, chamado_id):
+        return None
+
     async def adicionar_mensagem(self, claims, chamado_id, *, remetente_id, conteudo, anexos=None):
         self._msgs.append(
             {
