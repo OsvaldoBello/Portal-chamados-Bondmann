@@ -87,12 +87,26 @@ class FilaRepo:
         Filtros opcionais: ``status``, ``categoria_id``, ``prioridade``,
         ``operador_id``, ``setor`` (setor solicitante, texto livre), ``busca``
         (texto livre casado contra **assunto/título e descrição**, case-insensitive)
-        e o período ``data_de``/``data_ate`` (sobre `created_at`, inclusive nas duas
-        pontas — o filtro de SLA é aplicado na camada de rota, pois depende do
-        cálculo de estado do domínio). O período é convertido para a janela UTC
-        correspondente ao **dia em Brasília** (``app.domain.periodo.janela_utc``),
-        que é o dia mostrado no cartão — comparar `timestamptz` com `::date` cru
-        usava o fuso da sessão do Postgres (UTC) e deslocava as bordas em 3h.
+        e o período ``data_de``/``data_ate`` (inclusive nas duas pontas — o filtro
+        de SLA é aplicado na camada de rota, pois depende do cálculo de estado do
+        domínio). O período é convertido para a janela UTC correspondente ao
+        **dia em Brasília** (``app.domain.periodo.janela_utc``), que é o dia
+        mostrado no cartão — comparar `timestamptz` com `::date` cru usava o fuso
+        da sessão do Postgres (UTC) e deslocava as bordas em 3h.
+
+        🔁 **`[2026-08-10]`** — o período casa com `created_at` **OU**
+        `resolvido_em` (bug real reportado pelo usuário: filtrar 01/08–10/08 no
+        Kanban do Marketing não trazia chamados abertos em julho e concluídos
+        dentro da janela — sumiam do quadro inteiro, inclusive da coluna
+        "Concluídos", porque só `created_at` era comparado e ele caía fora do
+        filtro). Um chamado agora entra no recorte se foi ABERTO no período OU
+        CONCLUÍDO no período — o mesmo raciocínio de dois cohorts que já vale
+        para `vw_marketing_volume_mensal` (`concluidas`/`volume`, migrations
+        `0041`/`0080`): quem filtra um período no Kanban quer ver tanto o que
+        entrou quanto o que foi entregue nele, não só o que entrou. Chamado sem
+        `resolvido_em` (ainda não concluído) só pode casar pelo `created_at`, como
+        sempre — sem mudança de comportamento para ele.
+
         **Ordenação padrão: data de entrega (mais próxima primeiro); sem data de
         entrega fica por último, por data de abertura (mais recentes primeiro).**
         """
@@ -113,8 +127,17 @@ class FilaRepo:
                    AND ($4::prioridade_chamado IS NULL OR c.prioridade = $4::prioridade_chamado)
                    AND ($5::uuid IS NULL OR c.operador_id = $5::uuid)
                    AND ($7::text IS NULL OR c.setor = $7::text)
-                   AND ($8::timestamptz IS NULL OR c.created_at >= $8::timestamptz)
-                   AND ($9::timestamptz IS NULL OR c.created_at < $9::timestamptz)
+                   AND (
+                     (
+                       ($8::timestamptz IS NULL OR c.created_at >= $8::timestamptz)
+                       AND ($9::timestamptz IS NULL OR c.created_at < $9::timestamptz)
+                     )
+                     OR (
+                       c.resolvido_em IS NOT NULL
+                       AND ($8::timestamptz IS NULL OR c.resolvido_em >= $8::timestamptz)
+                       AND ($9::timestamptz IS NULL OR c.resolvido_em < $9::timestamptz)
+                     )
+                   )
                    AND ($10::text IS NULL OR c.titulo ILIKE $10 OR c.descricao ILIKE $10)
                  ORDER BY c.data_entrega ASC NULLS LAST, c.created_at DESC
                  LIMIT $2
