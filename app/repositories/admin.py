@@ -746,10 +746,24 @@ class AdminRepo:
         midia_list = [dict(r) for r in midia_rows]
         baseline_por_mes = {r["mes"]: dict(r) for r in baseline_rows}
 
-        # Todo mês com chamado, registro de mídia regional OU baseline histórico
-        # entra na série (mesmo sem chamado nenhum — mês futuro cadastrado com
-        # antecedência, mês pré-sistema só com baseline, etc.).
-        todos_meses = sorted(set(volume_por_mes) | {m["mes"] for m in midia_list} | set(baseline_por_mes))
+        # Todo mês com chamado OU baseline histórico entra na série (mesmo sem
+        # chamado nenhum — mês pré-sistema só com baseline, etc.).
+        #
+        # 🔁 `[2026-08-10]` — `marketing_midia_regional` NÃO entra mais nessa
+        # união (bug real reportado pelo usuário): o upload em massa da
+        # planilha "Investimento por Região" (`ingestao_marketing_midia.py`)
+        # trouxe uma aba por mês desde nov/2024, e cada mês reconhecido virou
+        # linha na tabela — inclusive anos sem chamado nenhum no Portal. Como
+        # a união incluía `marketing_midia_regional`, TODOS os indicadores
+        # baseados em `todos_meses` (Status das Demandas, ranking por setor,
+        # por operador, órfãos) passaram a "esticar" o eixo até nov/2024 com
+        # meses vazios, mesmo não tendo relação nenhuma com mídia regional. O
+        # indicador de Mídia Regional em si (Investimento BD, Regiões Ativas,
+        # Descontinuidades, Aderências — `midia_final` abaixo) **não** usa
+        # `todos_meses`: ele monta o próprio eixo direto de `midia_list`,
+        # então continua mostrando o histórico completo (correto, pedido do
+        # usuário) sem qualquer mudança.
+        todos_meses = sorted(set(volume_por_mes) | set(baseline_por_mes))
 
         monthly_list = []
         dept_by_month: dict[str, dict[str, int]] = {}
