@@ -72,6 +72,7 @@ class FakeRepo:
 class FakeStorage:
     def __init__(self):
         self.uploads: list[tuple] = []
+        self._conteudos: dict[str, bytes] = {}
 
     @staticmethod
     def path(empresa_id, chamado_id, nome_objeto):
@@ -79,9 +80,13 @@ class FakeStorage:
 
     async def upload(self, token, path, conteudo, mime):
         self.uploads.append((path, mime, len(conteudo)))
+        self._conteudos[path] = conteudo
 
     async def signed_url(self, token, path):
         return f"https://signed.example/{path}?tok=abc"
+
+    async def download(self, token, path):
+        return self._conteudos.get(path)
 
 
 @contextmanager
@@ -132,7 +137,7 @@ def test_mensagem_vazia_sem_anexo_rejeitada():
     assert repo._msgs == []
 
 
-def test_upload_valido_persiste_e_gera_signed_url():
+def test_upload_valido_persiste_e_renderiza_link_de_download():
     repo = FakeRepo()
     storage = FakeStorage()
     with portal_client(repo, storage) as client:
@@ -149,9 +154,41 @@ def test_upload_valido_persiste_e_gera_signed_url():
     path, mime, _ = storage.uploads[0]
     assert path.startswith(f"{EMPRESA}/aaa/")
     assert mime == "application/pdf"
-    # Metadado persistido + signed URL renderizada no detalhe.
+    # Metadado persistido + link para a rota de download do próprio backend no
+    # detalhe (nunca a signed URL/token do Supabase — ver app/anexos.py).
     assert repo._msgs[0]["anexos"][0]["nome"] == "relatorio.pdf"
-    assert "signed.example" in resp.text
+    assert "signed.example" not in resp.text
+    nome_objeto = repo._msgs[0]["anexos"][0]["path"].rsplit("/", 1)[-1]
+    assert f"/anexos/aaa/{nome_objeto}" in resp.text
+
+
+def test_download_anexo_serve_conteudo_sem_expor_url_do_supabase():
+    repo = FakeRepo()
+    storage = FakeStorage()
+    with portal_client(repo, storage) as client:
+        token = _csrf(client)
+        client.post(
+            "/portal/chamados/aaa/mensagens",
+            data={"conteudo": "Veja o anexo"},
+            files={"arquivos": ("relatorio.pdf", PDF, "application/pdf")},
+            headers={"X-CSRF-Token": token},
+        )
+        path = repo._msgs[0]["anexos"][0]["path"]
+        nome_objeto = path.rsplit("/", 1)[-1]
+        resp = client.get(f"/anexos/aaa/{nome_objeto}")
+    assert resp.status_code == 200
+    assert resp.content == PDF
+    assert resp.headers["content-type"].startswith("application/pdf")
+    assert "signed.example" not in resp.text
+    assert "supabase" not in resp.headers.get("content-disposition", "").lower()
+
+
+def test_download_anexo_inexistente_retorna_404():
+    repo = FakeRepo()
+    storage = FakeStorage()
+    with portal_client(repo, storage) as client:
+        resp = client.get("/anexos/aaa/nao-existe.pdf")
+    assert resp.status_code == 404
 
 
 def test_upload_tipo_invalido_retorna_422():

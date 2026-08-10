@@ -16,9 +16,10 @@ import json
 import logging
 import re
 from email.utils import parseaddr
+from urllib.parse import quote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse, Response
 
 from app.anexos import MAX_ANEXOS
 from app.auth.dependencies import CurrentUser, get_current_user
@@ -69,6 +70,70 @@ async def realtime_config(
             "uid": user.id,
         },
         headers={"Cache-Control": "no-store"},
+    )
+
+
+def _content_disposition(nome: str) -> str:
+    """Cabeçalho ``Content-Disposition`` seguro para o nome original do anexo
+    (``app/security/uploads.py::sanitizar_nome_exibicao`` já limpa o valor
+    persistido, mas o header ainda precisa do encoding RFC 5987 para acentos)."""
+    nome = (nome or "arquivo").replace("\r", "").replace("\n", "").replace('"', "")
+    ascii_fallback = nome.encode("ascii", "replace").decode("ascii")
+    return f'inline; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quote(nome)}'
+
+
+@router.get("/anexos/{chamado_id}/{nome_objeto}")
+async def baixar_anexo(
+    request: Request,
+    chamado_id: str,
+    nome_objeto: str,
+    user: CurrentUser = Depends(get_current_user),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+):
+    """Serve o conteúdo de um anexo através do próprio backend.
+
+    Hardening 2026-08-10: antes o link do anexo era a *signed URL* do Supabase
+    Storage, com o token de acesso exposto na barra de endereço/histórico do
+    navegador (e sujeito a expirar "atrás das costas" numa aba aberta há muito
+    tempo — ver ``app/anexos.py::assinar_anexos``). Aqui a assinatura é gerada
+    server-side a cada request e o conteúdo é repassado direto, sem nunca expor
+    a URL nem o token do Supabase ao cliente.
+
+    Autorização via ``repo.mensagens`` — mesma RLS/recorte usado pelo chat (nota
+    interna não vaza pro autor); rota única para portal/workspace, igual a
+    ``/notificacoes`` acima.
+    """
+    mensagens = await repo.mensagens(user.claims, chamado_id)
+    anexo = next(
+        (
+            a
+            for m in mensagens
+            for a in (m.get("anexos") or [])
+            if (a.get("path") or "").rsplit("/", 1)[-1] == nome_objeto
+        ),
+        None,
+    )
+    if anexo is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Anexo não encontrado.")
+
+    storage = await ensure_storage()
+    token = current_access_token(request)
+    if storage is None or token is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Storage indisponível."
+        )
+    conteudo = await storage.download(token, anexo["path"])
+    if conteudo is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Anexo não encontrado.")
+
+    return Response(
+        content=conteudo,
+        media_type=anexo.get("mime") or "application/octet-stream",
+        headers={
+            "Content-Disposition": _content_disposition(anexo.get("nome") or nome_objeto),
+            # Privado (por sessão) e curto — não é CDN-cacheável (RLS por usuário).
+            "Cache-Control": "private, max-age=300",
+        },
     )
 
 

@@ -1,8 +1,10 @@
 """Fluxo de anexos compartilhado entre Portal e Workspace (Seção 3.9 / C2).
 
 Validação server-side (tamanho/allow-list/magic bytes), envio ao Storage privado
-e geração *on-demand* de signed URLs (TTL 1h, nunca cacheadas). Portal (cliente)
-e Workspace (staff) reutilizam estas funções para não duplicar a lógica de upload.
+e resolução do link de cada anexo para a rota de download do próprio backend
+(``/anexos/{chamado_id}/{nome_objeto}``, ``app/routes/common.py``). Portal
+(cliente) e Workspace (staff) reutilizam estas funções para não duplicar a
+lógica de upload.
 """
 
 from __future__ import annotations
@@ -30,19 +32,31 @@ def access_token(request: Request) -> str | None:
 
 
 async def assinar_anexos(request: Request, mensagens: list[dict]) -> None:
-    """Gera signed URLs (TTL 1h) *on-demand* para cada anexo (C2 — nunca cacheado).
+    """Resolve a URL de cada anexo para a rota de download do próprio backend.
 
-    Muta as mensagens in-place adicionando ``url`` a cada anexo. Falha graciosa:
-    sem Storage/token, ``url`` fica ``None`` e o template mostra 'indisponível'.
+    **Hardening 2026-08-10:** antes gerava uma *signed URL* do Supabase Storage
+    (token de acesso visível na barra de endereço/histórico do navegador) a cada
+    render. Isso trazia dois problemas: (1) o token do Storage ficava exposto
+    fora da aplicação; (2) o fragmento de mensagens (``mensagens_fragmento``) usa
+    ETag/304 no polling (Seção 2.2) — quando nada muda no chat, o servidor
+    responde 304 e **não** re-renderiza, então a signed URL embutida no HTML
+    nunca era renovada; numa aba aberta por mais de ``signed_url_ttl`` (1h) sem
+    mensagem nova, o clique no anexo passava a falhar com "exp claim timestamp
+    check failed" mesmo tendo funcionado minutos antes.
+
+    Agora o ``href``/``src`` aponta para ``/anexos/{chamado_id}/{nome_objeto}``
+    (``app/routes/common.py``), que busca o conteúdo no Storage sob RLS **no
+    momento do clique** e o serve diretamente — sem nunca expor a URL nem o
+    token do Supabase ao navegador, e sem depender de o HTML ter sido
+    re-renderizado recentemente. Muta as mensagens in-place.
     """
-    storage = await ensure_storage()
-    token = access_token(request)
     for m in mensagens:
         for anexo in m.get("anexos") or []:
             anexo["url"] = None
-            path = anexo.get("path")
-            if storage and token and path:
-                anexo["url"] = await storage.signed_url(token, path)
+            path = anexo.get("path") or ""
+            partes = path.split("/")
+            if len(partes) >= 2 and all(partes[-2:]):
+                anexo["url"] = f"/anexos/{partes[-2]}/{partes[-1]}"
 
 
 async def validar_uploads(arquivos: list[UploadFile], *, max_bytes: int) -> list:
