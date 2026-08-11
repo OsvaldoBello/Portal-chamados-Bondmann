@@ -45,6 +45,16 @@
     return valor!=null ? valor.toFixed(1).replace(".",",")+" d" : "—";
   }
 
+  // Demandas ABERTAS no mês (âncora `created_at`) — denominador do card de
+  // atrasos, a única quebra que não está no cohort do mês (a lista
+  // `atrasosData` vem por mês de abertura). O `total` é outro conjunto desde
+  // as migrations `0081`/`0082` (entregue no mês + entrou e ainda em pé, ver
+  // `AdminRepo.mkt_dashboard_data`). Fallback em `total` para os meses de
+  // baseline e para payload antigo (ex. relatório .html já exportado).
+  function aberturasDe(m){
+    return m.aberturas != null ? m.aberturas : m.total;
+  }
+
   // Rótulo do mês corrente no MESMO formato do backend ("AGO/26" — ver
   // `AdminRepo._mes_label`). Serve pra reconhecer o mês ainda em andamento na
   // série e não compará-lo com meses fechados.
@@ -101,6 +111,9 @@
     const pend=d.reduce((s,x)=>s+x.em_andamento+x.abertas,0);
     const pctConc=total?(conc/total*100).toFixed(1):"0";
     const pctMkt=total?(mkt/total*100).toFixed(1):"0";
+    // Atrasos são do cohort de ABERTURA (`created_at`), não do cohort do mês
+    // — ver `aberturasDe`.
+    const abert=d.reduce((s,x)=>s+aberturasDe(x),0);
     const razao=total?(vol/total).toFixed(1):"0";
     const tempoW=mediaTempoPonderada(d);
     const filtLabels=d.map(x=>x.label);
@@ -108,7 +121,7 @@
     filtLabels.forEach(l=>Object.entries(deptByMonth[l]||{}).forEach(([k,v])=>{agg[k]=(agg[k]||0)+v;}));
     const top=Object.entries(agg).sort((a,b)=>b[1]-a[1])[0]||["—",0];
     const nAtr=atrasosData.filter(a=>filtLabels.includes(a.mes)).length;
-    const pctAtr=total?(nAtr/total*100).toFixed(1):"0";
+    const pctAtr=abert?(nAtr/abert*100).toFixed(1):"0";
 
     document.getElementById("sum-left").innerHTML=`
       <div class="text-[10px] font-bold uppercase tracking-wider text-muted mb-3">📅 ${d.length===1?last.label:"Último mês — "+last.label}</div>
@@ -341,14 +354,18 @@
       // o que gerou o report de "não bate". Aqui os dois ficam lado a lado
       // (decisão do usuário 2026-08-03): esta aba conta o setor PARA QUEM a
       // demanda foi feita; a aba 3 conta de quem partiu a INICIATIVA. São
-      // colunas diferentes do controle do Marketing e divergem de verdade.
+      // colunas diferentes do controle do Marketing e divergem de verdade —
+      // agora sobre o MESMO cohort de demandas (migration `0082`), então cada
+      // uma das duas abas soma exatamente o "Total" do período.
       const destino=agg["Marketing"]||0;
       const iniciativa=filteredMonthly().reduce((s,m)=>s+m.mkt_orig,0);
+      const totalPeriodo=filteredMonthly().reduce((s,m)=>s+m.total,0);
       aviso.textContent="Marketing: "+destino+" como setor de destino da demanda (este gráfico)"
         +" · "+iniciativa+" como origem da iniciativa (aba \"3. Origem da Demanda\")."
         +(destino!==iniciativa
           ? " A diferença são peças feitas para outros setores por iniciativa do próprio Marketing."
-          : "");
+          : "")
+        +" As barras somam "+totalPeriodo+", o total de demandas do período.";
     }
     mkChart("chartDept",{type:"bar",data:{labels:keys,datasets:[{label:"Demandas",data:vals,backgroundColor:colors,borderRadius:5}]},
       options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},pill:{}},
@@ -509,12 +526,14 @@
     document.getElementById("tempo-media-acumulado").textContent = fmtDias(tempoW);
     
     const filtLabels = d.map(x => x.label);
-    const total = d.reduce((s,x)=>s+x.total, 0);
+    // Denominador = demandas ABERTAS no período, o mesmo cohort da lista de
+    // atrasos (que é ancorada em `created_at`) — ver `aberturasDe`.
+    const abert = d.reduce((s,x)=>s+aberturasDe(x), 0);
     const rows = atrasosData.filter(a => filtLabels.includes(a.mes));
     const nAtr = rows.length;
-    const pctAtr = total ? ((nAtr / total) * 100).toFixed(1) : "0";
+    const pctAtr = abert ? ((nAtr / abert) * 100).toFixed(1) : "0";
     document.getElementById("tempo-atrasos-qtd").textContent = nAtr;
-    document.getElementById("tempo-atrasos-pct").textContent = pctAtr.replace(".",",") + "% do total";
+    document.getElementById("tempo-atrasos-pct").textContent = pctAtr.replace(".",",") + "% das abertas no período";
     
     let maxAtr = 0;
     let maxAtrNome = "—";

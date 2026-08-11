@@ -102,6 +102,10 @@ def _aba_resumo(wb: Workbook, dados: dict[str, Any], periodo: str) -> None:
     abertas = sum(m["abertas"] for m in monthly)
     volume = sum(m["volume"] for m in monthly)
     mkt_orig = sum(m["mkt_orig"] for m in monthly)
+    # Demandas ABERTAS no período (`created_at`) — denominador dos atrasos, a
+    # única quebra fora do cohort do mês (`total`, migrations `0081`/`0082`);
+    # ver `AdminRepo.mkt_dashboard_data`.
+    aberturas = sum(m.get("aberturas", m["total"]) for m in monthly)
     atrasos = len(dados["atrasosData"])
     tempo_medio = (
         sum(m["tempo_medio"] * m["concluidas"] for m in monthly) / conc if conc else 0.0
@@ -121,7 +125,8 @@ def _aba_resumo(wb: Workbook, dados: dict[str, Any], periodo: str) -> None:
         ("Volume produzido (peças/cards)", volume),
         ("Tempo médio de entrega (dias, só concluídas)", round(tempo_medio, 1)),
         ("Atrasos > 5 dias", atrasos),
-        ("% atrasos sobre o total", round(100 * atrasos / total, 1) if total else 0.0),
+        ("% atrasos sobre as demandas abertas", round(100 * atrasos / aberturas, 1) if aberturas else 0.0),
+        ("Demandas abertas no período", aberturas),
         ("Demandas com origem Marketing", mkt_orig),
         ("% origem Marketing", round(100 * mkt_orig / total, 1) if total else 0.0),
         ("Maior setor solicitante", top_setor[0]),

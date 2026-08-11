@@ -629,11 +629,25 @@ class AdminRepo:
         essa informação (o agregado pré-sistema não guarda quem atendeu), então
         vêm vazios de propósito e a aba avisa isso.
         ``resolvidosSemOperadorByMonth`` acompanha, para a soma das barras mais
-        os órfãos fechar com as "Concluídas" do mês."""
+        os órfãos fechar com as "Concluídas" do mês.
+
+        **Cohort do mês** (migrations `0081`/`0082`, bug reportado 2026-08-11 —
+        a barra "Total" de ago/26 dava 16 contra 21 somando as barras
+        coloridas). O mês de um chamado é o mês em que ele foi ENTREGUE
+        (``resolvido_em``) ou, se ainda está em pé, o mês em que ENTROU
+        (``created_at``). Disso saem, todos fechando com o mesmo número::
+
+            total = concluidas + em_andamento + abertas   (aba 1)
+                  = mkt_orig + sol_orig                   (aba 3)
+                  = soma de ``deptByMonth[mes]``          (aba 4)
+
+        Fora do cohort ficam ``atrasos`` e ``tempo_medio``, ancorados em
+        ``created_at`` junto com a lista ``atrasosData`` (que é por mês de
+        abertura) — o denominador deles é ``aberturas``, não ``total``."""
         async with rls_connection(claims) as conn:
             volume_rows = await conn.fetch(
                 """SELECT mes, total, concluidas, abertas, em_andamento, volume,
-                          mkt_orig, sol_orig, atrasos, tempo_medio
+                          mkt_orig, sol_orig, atrasos, tempo_medio, aberturas
                      FROM vw_marketing_volume_mensal ORDER BY mes"""
             )
             setor_rows = await conn.fetch(
@@ -776,6 +790,14 @@ class AdminRepo:
             total = v["total"] if v else 0
             concluidas = v["concluidas"] if v else 0
             mkt_orig = v["mkt_orig"] if v else 0
+            sol_orig = v["sol_orig"] if v else 0
+            # Quantas demandas ENTRARAM no mês (`created_at`) — o que era o
+            # `total` até a migration `0081`. Serve de denominador para o card
+            # de atrasos, a única quebra que ficou no cohort de abertura (a
+            # lista `atrasosData` é montada por mês de abertura). O baseline
+            # não separa os dois cohorts — a planilha do time traz um número
+            # só por mês —, então lá `aberturas` é o próprio `total`.
+            aberturas = v.get("aberturas", total) if v else 0
             monthly_list.append({
                 "label": label,
                 "total": total,
@@ -784,7 +806,8 @@ class AdminRepo:
                 "abertas": v["abertas"] if v else 0,
                 "volume": v["volume"] if v else 0,
                 "mkt_orig": mkt_orig,
-                "sol_orig": v["sol_orig"] if v else 0,
+                "sol_orig": sol_orig,
+                "aberturas": aberturas,
                 # None (não 0.0) quando não há concluída nesse mês: "0 dias" é um
                 # dado real diferente de "sem dado" — 0.0 fazia o gráfico de linha
                 # cair pra zero em vez de mostrar a lacuna (o front trata null como

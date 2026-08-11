@@ -81,7 +81,11 @@
 <div id="tab-entrega" class="tab-panel active">
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Status das Demandas — Histórico Mensal</h4>
-    <p class="text-xs text-muted mb-4">Total de demandas recebidas por mês e status</p>
+    {# `Total` = soma exata das três barras coloridas (migration 0081): o que foi
+       concluído no mês + o que foi aberto no mês e ainda está em pé. #}
+    <p class="text-xs text-muted mb-4">
+      Demandas por mês e status · <strong>Total</strong> = concluídas no mês + em andamento + abertas
+    </p>
     <div class="chart-box-md"><canvas id="chartEntrega"></canvas></div>
   </div>
 </div>
@@ -122,7 +126,10 @@
 <div id="tab-origem" class="tab-panel">
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Origem da Demanda — Evolução Mensal</h4>
-    <p class="text-xs text-muted mb-4">Comparativo de demandas criadas pelo próprio Marketing vs Solicitações de outros setores</p>
+    <p class="text-xs text-muted mb-4">
+      Demandas por iniciativa do próprio Marketing vs Solicitações de outros setores ·
+      as duas barras somam o <strong>Total</strong> do mês
+    </p>
     <div class="chart-box-md"><canvas id="chartOrigem"></canvas></div>
   </div>
 </div>
@@ -130,7 +137,9 @@
 <div id="tab-dept" class="tab-panel">
   <div class="chart-card bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h4 class="font-display font-bold text-navy text-sm">Demandas por Setor Solicitante — Ranking Acumulado</h4>
-    <p class="text-xs text-muted mb-4">Ordenado do maior para o menor setor solicitante</p>
+    <p class="text-xs text-muted mb-4">
+      Ordenado do maior para o menor setor solicitante · as barras somam o <strong>Total</strong> do período
+    </p>
     <div class="chart-box-lg"><canvas id="chartDept"></canvas></div>
     <p id="dept-aviso" class="text-[11px] text-muted mt-3"></p>
   </div>
@@ -146,7 +155,7 @@
     <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
       <div id="tempo-atrasos-qtd" class="text-lg font-bold text-red-600">0</div>
       <div class="text-[10px] uppercase font-bold tracking-wider text-muted mt-1">Atrasos >5 dias</div>
-      <div id="tempo-atrasos-pct" class="text-[11px] text-muted mt-0.5">0.0% do total</div>
+      <div id="tempo-atrasos-pct" class="text-[11px] text-muted mt-0.5">0,0% das abertas no período</div>
     </div>
     <div class="insight-card bg-surface2 rounded-xl p-4 border border-line/60">
       <div id="tempo-maior-atraso" class="text-lg font-bold text-red-600">0 d</div>
