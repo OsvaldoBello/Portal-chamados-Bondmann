@@ -330,7 +330,7 @@ class FilaRepo:
         async with rls_connection(claims) as conn:
             rows = await conn.fetch(
                 """
-                SELECT p.id, p.nome, d.nome AS departamento
+                SELECT p.id, p.nome, p.role, d.nome AS departamento
                   FROM perfis p LEFT JOIN departamentos d ON d.id = p.departamento_id
                  WHERE p.role IN ('OPERADOR','ADMIN') AND p.ativo
                    AND ($1::uuid IS NULL OR p.departamento_id = $1::uuid)

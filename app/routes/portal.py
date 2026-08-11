@@ -682,15 +682,19 @@ async def criar_chamado(
     # ninguém era notificado por e-mail da entrada de um chamado NOVO na
     # fila (relatado pelo TI). Mesma lista de quem pode ser designado
     # responsável (``FilaRepo.operadores``), exclui o próprio autor.
+    # Só role OPERADOR recebe o aviso: os ADMIN do setor (ex.: ti@bondmann.com.br,
+    # rh@bondmann.com.br) são caixas de grupo que já espalham a mensagem para a
+    # própria equipe por fora do Portal — incluí-los aqui duplicava o aviso.
     equipe_destino = await repo.operadores(
         ctx.user.claims, departamento_id=departamento_id, excluir_id=ctx.user.id
     )
-    if equipe_destino:
+    operadores_destino = [o for o in equipe_destino if o.get("role") == "OPERADOR"]
+    if operadores_destino:
         from app.notification import agendar_notificacao_novo_chamado
         await agendar_notificacao_novo_chamado(
             tarefa_ia,
             {"id": str(novo["id"]), "codigo": novo["codigo"], "titulo": titulo, "departamento_nome": dep_destino_nome},
-            [str(o["id"]) for o in equipe_destino],
+            [str(o["id"]) for o in operadores_destino],
         )
 
     # "Em cópia" (Fase 8): observadores escolhidos já na abertura — multi-setorial,
