@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import RedirectResponse
 from slowapi import Limiter
 
-from app.auth import mfa_remember
+from app.auth import mfa_email_stepup, mfa_remember
 from app.auth.dependencies import CurrentUser, get_optional_user
 from app.auth.session import REFRESH_COOKIE, SessionTokens, clear_session, set_session
 from app.auth.supabase_client import create_isolated_client, ensure_supabase
@@ -93,11 +93,16 @@ def register_auth_routes(app, limiter: Limiter) -> None:
         # chegava lá sem passar por aqui primeiro). A sessão segue aal1 (só o
         # código real eleva a aal2); é o gate do `/admin` que trata o cookie
         # como equivalente ao step-up.
-        tem_fator = _tem_fator_verificado(user)
-        dispositivo_ok = tem_fator and mfa_remember.dispositivo_confiavel(
+        #
+        # MFA por e-mail não tem fator no GoTrue (`app/auth/mfa_email.py`), então
+        # `user.factors` nunca o enxerga — sem checar `mfa_email_enabled` aqui,
+        # quem só tivesse o e-mail ativo passaria direto pela senha e NUNCA
+        # seria mandado ao segundo fator. `_precisa_step_up` cobre os dois.
+        precisa = _precisa_step_up(user)
+        dispositivo_ok = precisa and mfa_remember.dispositivo_confiavel(
             request, get_settings(), user.id
         )
-        destino = "/mfa/verify" if (tem_fator and not dispositivo_ok) else home_for(role)
+        destino = "/mfa/verify" if (precisa and not dispositivo_ok) else home_for(role)
         response = RedirectResponse(destino, status_code=status.HTTP_303_SEE_OTHER)
         set_session(
             response,
@@ -225,6 +230,10 @@ def register_auth_routes(app, limiter: Limiter) -> None:
                 pass
         response = RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
         clear_session(response)
+        # Ao contrário do cookie de "lembrar dispositivo" (30 dias, sobrevive
+        # de propósito), o de step-up por e-mail é desta sessão de login —
+        # some no logout (ver app/auth/mfa_email_stepup.py).
+        response.delete_cookie(mfa_email_stepup.EMAIL_STEPUP_COOKIE, path="/")
         return response
 
     @router.get("/")
@@ -247,10 +256,21 @@ def _role_from_user(user) -> str:
 
 
 def _tem_fator_verificado(user) -> bool:
-    """Se o usuário tem um fator MFA já ativado (item 3.3).
+    """Se o usuário tem um fator MFA (TOTP/phone) já ativado no GoTrue (item 3.3).
 
     Lê os ``factors`` que o GoTrue devolve no próprio login — fator ``unverified``
     (enroll começado e abandonado) não conta: só quem concluiu a ativação é levado
     ao step-up."""
     fatores = getattr(user, "factors", None) or []
     return any(getattr(f, "status", None) == "verified" for f in fatores)
+
+
+def _precisa_step_up(user) -> bool:
+    """Se esta sessão precisa passar por `/mfa/verify` — por TOTP ou e-mail.
+
+    MFA por e-mail não é um fator GoTrue (`app/auth/mfa_email.py`), então não
+    aparece em ``user.factors``; a única fonte de verdade é o espelho
+    ``app_metadata.mfa_email_enabled`` (mesmo que o GoTrue já devolve no login,
+    sem chamada extra)."""
+    meta = getattr(user, "app_metadata", None) or {}
+    return _tem_fator_verificado(user) or bool(meta.get("mfa_email_enabled"))

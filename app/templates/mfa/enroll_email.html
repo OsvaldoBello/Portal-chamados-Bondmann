@@ -1,0 +1,37 @@
+{# Ativação do MFA por e-mail: código de 6 dígitos, sem QR/segredo (não há
+   fator no GoTrue — ver app/auth/mfa_email.py). #}
+{% extends "mfa/_mfa_base.html" %}
+
+{% block title %}Ativar verificação por e-mail — Portal de Chamados Bondmann{% endblock %}
+
+{% block conteudo %}
+  <h1 class="font-display font-bold text-xl text-navy">Ativar verificação por e-mail</h1>
+  <p class="text-muted text-sm mt-1.5">Enviamos um código de 6 dígitos para <strong class="text-navy">{{ email }}</strong>. Ele expira em 10 minutos.</p>
+
+  <form method="post" action="/mfa/enroll-email/confirmar" class="mt-6 space-y-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="block">
+      <span class="block text-[13px] font-semibold text-navy mb-1.5">Código recebido por e-mail</span>
+      <input id="codigo" name="codigo" type="text" required autofocus
+             inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*"
+             maxlength="7" placeholder="000000"
+             class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-center text-lg tracking-[0.4em] font-semibold placeholder:text-faint placeholder:tracking-[0.4em]">
+    </label>
+    <label class="flex items-center gap-2 text-sm text-navy cursor-pointer">
+      <input type="checkbox" name="lembrar_dispositivo" value="true"
+             class="rounded ring-1 ring-line text-navy-900 focus:ring-2 focus:ring-navy-500">
+      Lembrar este dispositivo por 30 dias
+    </label>
+    <button type="submit"
+            class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-navy-900 text-white hover:bg-navy-700 shadow-soft w-full">
+      Ativar MFA
+    </button>
+  </form>
+
+  <form method="post" action="/mfa/enroll-email" class="mt-4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="text-xs font-medium text-muted hover:text-navy">Reenviar código</button>
+  </form>
+
+  <a href="/mfa" class="mt-4 inline-block text-xs font-medium text-muted hover:text-navy">Cancelar</a>
+{% endblock %}

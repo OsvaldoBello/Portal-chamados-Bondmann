@@ -17,14 +17,15 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app.auth import mfa, mfa_remember, routes as auth_routes
+from app.auth import mfa, mfa_email, mfa_email_stepup, mfa_remember, routes as auth_routes
 from app.auth.dependencies import (
     CurrentUser,
     MfaChallengeRequired,
     enforce_admin_mfa,
     get_current_user,
+    sessao_mfa_satisfeita,
 )
-from app.auth.routes import _tem_fator_verificado
+from app.auth.routes import _precisa_step_up, _tem_fator_verificado
 from app.auth.session import SessionTokens
 from app.config import get_settings
 from app.main import app
@@ -34,10 +35,12 @@ from app.repositories.chamados import get_chamados_repo
 UID = "88888888-8888-8888-8888-888888888888"
 
 
-def _user(role="ADMIN", *, aal=None, mfa_enabled=None) -> CurrentUser:
+def _user(role="ADMIN", *, aal=None, mfa_enabled=None, mfa_email_enabled=None) -> CurrentUser:
     app_meta: dict = {"role": role}
     if mfa_enabled is not None:
         app_meta["mfa_enabled"] = mfa_enabled
+    if mfa_email_enabled is not None:
+        app_meta["mfa_email_enabled"] = mfa_email_enabled
     claims: dict = {"sub": UID, "app_metadata": app_meta}
     if aal is not None:
         claims["aal"] = aal
@@ -547,3 +550,264 @@ def test_login_sem_mfa_vai_direto_para_home_independente_do_cookie(monkeypatch):
         )
         assert r.status_code == 303
         assert r.headers["location"] == "/workspace"
+
+
+# ---------------------------------------------------------------------------
+# MFA por e-mail — GoTrue não tem fator "email" (item 3.3, extensão): a
+# "sessão verificada" é um cookie próprio (app/auth/mfa_email_stepup.py), não
+# a claim `aal` real. Estes testes cobrem exatamente o gap descrito na
+# docstring de app/auth/mfa_email.py: sem eles, um usuário só-com-e-mail
+# nunca seria mandado ao step-up nem barrado no /admin.
+# ---------------------------------------------------------------------------
+
+def _email_stepup_token_para(user_id: str) -> str:
+    return mfa_email_stepup._serializer(get_settings()).dumps(user_id)
+
+
+def test_email_verificado_aceita_cookie_valido_do_mesmo_usuario():
+    token = _email_stepup_token_para(UID)
+    request = _cookie_request(None)
+    request.cookies = {mfa_email_stepup.EMAIL_STEPUP_COOKIE: token}
+    assert mfa_email_stepup.email_verificado(request, get_settings(), UID) is True
+
+
+def test_email_verificado_rejeita_cookie_de_outro_usuario():
+    token = _email_stepup_token_para("11111111-1111-1111-1111-111111111111")
+    request = _cookie_request(None)
+    request.cookies = {mfa_email_stepup.EMAIL_STEPUP_COOKIE: token}
+    assert mfa_email_stepup.email_verificado(request, get_settings(), UID) is False
+
+
+def test_email_verificado_sem_cookie():
+    assert mfa_email_stepup.email_verificado(_cookie_request(None), get_settings(), UID) is False
+
+
+def test_sessao_mfa_satisfeita_aceita_aal2_sem_precisar_de_cookie():
+    assert sessao_mfa_satisfeita(None, _user("ADMIN", aal="aal2")) is True
+
+
+def test_sessao_mfa_satisfeita_aceita_cookie_de_email_em_aal1():
+    request = _cookie_request(None)
+    request.cookies = {mfa_email_stepup.EMAIL_STEPUP_COOKIE: _email_stepup_token_para(UID)}
+    assert sessao_mfa_satisfeita(request, _user("ADMIN", aal="aal1")) is True
+
+
+def test_sessao_mfa_satisfeita_sem_aal2_nem_cookie_e_falsa():
+    assert sessao_mfa_satisfeita(_cookie_request(None), _user("ADMIN", aal="aal1")) is False
+
+
+def test_enforce_admin_mfa_com_so_email_habilitado_exige_step_up():
+    # ADMIN que só ativou o e-mail (sem TOTP) também precisa do gate.
+    with pytest.raises(MfaChallengeRequired):
+        enforce_admin_mfa(_user("ADMIN", aal="aal1", mfa_email_enabled=True))
+
+
+def test_enforce_admin_mfa_com_cookie_de_email_libera_sem_nudge():
+    request = _cookie_request(None)
+    request.cookies = {mfa_email_stepup.EMAIL_STEPUP_COOKIE: _email_stepup_token_para(UID)}
+    assert enforce_admin_mfa(_user("ADMIN", aal="aal1", mfa_email_enabled=True), request) is False
+
+
+def test_precisa_step_up_considera_metodo_email_mesmo_sem_fator_gotrue():
+    # O bug que motivou o plano: sem checar mfa_email_enabled, este usuário
+    # (sem fatores no GoTrue) nunca seria mandado ao /mfa/verify.
+    class _U:
+        factors = []
+        app_metadata = {"mfa_email_enabled": True}
+
+    assert _precisa_step_up(_U()) is True
+
+
+def test_precisa_step_up_falso_sem_nenhum_metodo():
+    class _U:
+        factors = []
+        app_metadata = {}
+
+    assert _precisa_step_up(_U()) is False
+
+
+def test_login_com_so_email_habilitado_vai_para_step_up(monkeypatch):
+    user = _FakeGoTrueUser(UID, fatores=[])
+    user.app_metadata["mfa_email_enabled"] = True
+    _fake_login(monkeypatch, user)
+    with _client() as c:
+        t = _csrf(c)
+        r = c.post(
+            "/login", data={"email": "a@b.com", "password": "x"},
+            headers={"X-CSRF-Token": t}, follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/mfa/verify"
+
+
+# ---------------------------------------------------------------------------
+# Rotas de enrollment/verificação por e-mail
+# ---------------------------------------------------------------------------
+
+def test_enroll_email_envia_codigo_e_mostra_form(monkeypatch):
+    vistos = {}
+
+    async def fake_enviar(user_id, email):
+        vistos["enviar"] = (user_id, email)
+
+    monkeypatch.setattr(mfa_email, "enviar_codigo", fake_enviar)
+    with _client() as c:
+        t = _csrf(c)
+        r = c.post("/mfa/enroll-email", headers={"X-CSRF-Token": t})
+        assert r.status_code == 200
+        assert vistos["enviar"] == (UID, "admin@bond.com")
+        assert "admin@bond.com" in r.text
+
+
+def test_enroll_email_confirmar_ativa_e_marca_cookie_de_sessao(monkeypatch):
+    vistos = {}
+
+    async def fake_verificar(user_id, codigo):
+        vistos["verificar"] = (user_id, codigo)
+        return True
+
+    async def fake_marcar(user_id, habilitado):
+        vistos["marcar"] = (user_id, habilitado)
+
+    monkeypatch.setattr(mfa_email, "verificar_codigo", fake_verificar)
+    monkeypatch.setattr(mfa, "marcar_email_mfa_habilitado", fake_marcar)
+    with _client() as c:
+        t = _csrf(c)
+        r = c.post(
+            "/mfa/enroll-email/confirmar",
+            data={"codigo": "123 456"},
+            headers={"X-CSRF-Token": t},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/mfa?ok=1"
+        assert vistos["verificar"] == (UID, "123456")
+        assert vistos["marcar"] == (UID, True)
+        assert mfa_email_stepup.EMAIL_STEPUP_COOKIE in c.cookies
+
+
+def test_enroll_email_confirmar_com_codigo_invalido_nao_ativa(monkeypatch):
+    async def fake_verificar(user_id, codigo):
+        raise mfa_email.MfaErro("código inválido")
+
+    marcou = []
+
+    async def fake_marcar(user_id, habilitado):
+        marcou.append(user_id)
+
+    monkeypatch.setattr(mfa_email, "verificar_codigo", fake_verificar)
+    monkeypatch.setattr(mfa, "marcar_email_mfa_habilitado", fake_marcar)
+    with _client() as c:
+        t = _csrf(c)
+        r = c.post(
+            "/mfa/enroll-email/confirmar",
+            data={"codigo": "000000"},
+            headers={"X-CSRF-Token": t},
+            follow_redirects=False,
+        )
+        assert r.status_code == 400
+        assert "Código inválido" in r.text
+        assert marcou == []
+
+
+def test_verify_email_enviar_mostra_form_de_codigo(monkeypatch):
+    async def fake_enviar(user_id, email):
+        return None
+
+    async def fake_fator(tokens):
+        return None  # sem TOTP — só e-mail ativo
+
+    monkeypatch.setattr(mfa_email, "enviar_codigo", fake_enviar)
+    monkeypatch.setattr(mfa, "fator_verificado_id", fake_fator)
+    with _client(_user("ADMIN", aal="aal1", mfa_email_enabled=True)) as c:
+        t = _csrf(c)
+        r = c.post("/mfa/verify/email/enviar", headers={"X-CSRF-Token": t})
+        assert r.status_code == 200
+        assert "admin@bond.com" in r.text
+
+
+def test_verify_email_com_codigo_valido_marca_cookie_e_vai_para_home(monkeypatch):
+    async def fake_verificar(user_id, codigo):
+        return True
+
+    monkeypatch.setattr(mfa_email, "verificar_codigo", fake_verificar)
+    with _client(_user("ADMIN", aal="aal1", mfa_email_enabled=True)) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/mfa/verify/email", data={"codigo": "123456"},
+            headers={"X-CSRF-Token": t}, follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/workspace"
+        assert mfa_email_stepup.EMAIL_STEPUP_COOKIE in c.cookies
+
+
+def test_verify_email_com_codigo_invalido_reexibe_o_form(monkeypatch):
+    async def fake_verificar(user_id, codigo):
+        raise mfa_email.MfaErro("código inválido")
+
+    async def fake_fator(tokens):
+        return None  # sem TOTP — só e-mail ativo
+
+    monkeypatch.setattr(mfa_email, "verificar_codigo", fake_verificar)
+    monkeypatch.setattr(mfa, "fator_verificado_id", fake_fator)
+    with _client(_user("ADMIN", aal="aal1", mfa_email_enabled=True)) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/mfa/verify/email", data={"codigo": "000000"},
+            headers={"X-CSRF-Token": t}, follow_redirects=False,
+        )
+        assert r.status_code == 400
+        assert "Código inválido" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Reset por TI limpa os dois métodos (não só TOTP)
+# ---------------------------------------------------------------------------
+
+def test_resetar_mfa_limpa_metodo_email_tambem(monkeypatch):
+    vistos = {}
+
+    class _FakeAdminClient:
+        class auth:
+            class admin:
+                @staticmethod
+                async def update_user_by_id(user_id, patch):
+                    vistos.setdefault("app_metadata_patches", []).append((user_id, patch))
+
+                class mfa:
+                    @staticmethod
+                    async def delete_factor(params):
+                        vistos.setdefault("delete_factor", []).append(params)
+
+    async def fake_ensure_admin_client():
+        return _FakeAdminClient()
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def fake_admin_connection():
+        class _Conn:
+            async def fetch(self, query, *args):
+                return []  # sem fatores TOTP pendentes
+
+        yield _Conn()
+
+    async def fake_limpar_pendentes(user_id):
+        vistos["limpar_pendentes"] = user_id
+
+    monkeypatch.setattr(mfa, "ensure_admin_client", fake_ensure_admin_client)
+    monkeypatch.setattr("app.db.admin_connection", fake_admin_connection)
+    monkeypatch.setattr(mfa_email, "limpar_pendentes", fake_limpar_pendentes)
+
+    import asyncio
+
+    asyncio.run(mfa.resetar_mfa(UID))
+
+    assert vistos["limpar_pendentes"] == UID
+    # Duas gravações de app_metadata: mfa_enabled=False e mfa_email_enabled=False.
+    patches: dict = {}
+    for _, patch in vistos["app_metadata_patches"]:
+        patches.update(patch.get("app_metadata", {}))
+    assert patches.get("mfa_enabled") is False
+    assert patches.get("mfa_email_enabled") is False

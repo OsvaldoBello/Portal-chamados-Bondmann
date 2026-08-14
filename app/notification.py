@@ -608,6 +608,107 @@ async def notificar_novo_usuario_email(nome: str, email: str) -> None:
     await enviar_email(email, assunto, corpo_texto, corpo_html)
 
 
+async def enviar_codigo_mfa_email(email: str, codigo: str) -> bool:
+    """Código de 6 dígitos da verificação em duas etapas por e-mail
+    (``app/auth/mfa_email.py``). Enviado com ``await`` direto (sem
+    ``BackgroundTasks``) — ao contrário das notificações abaixo, o usuário
+    precisa do código na hora, não "eventualmente"."""
+    assunto = "[Portal Bondmann] Seu código de verificação"
+
+    corpo_texto = (
+        f"Seu código de verificação em duas etapas é: {codigo}\n\n"
+        f"Ele expira em 10 minutos e serve só para confirmar o acesso à sua "
+        f"conta no Portal de Chamados Bondmann Química. Não compartilhe este "
+        f"código com ninguém.\n\n"
+        f"Se você não pediu este código, ignore este e-mail.\n\n"
+        f"Atenciosamente,\n"
+        f"Portal de Chamados Bondmann Química\n"
+    )
+
+    corpo_html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f8fafc;
+      color: #334155;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }}
+    .wrapper {{ width: 100%; background-color: #f8fafc; padding: 30px 15px; }}
+    .container {{
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+      border: 1px solid #e2e8f0;
+    }}
+    .header {{ background-color: #1e293b; padding: 24px; text-align: center; }}
+    .header-logo {{ color: #ffffff; font-weight: 800; font-size: 20px; letter-spacing: 0.05em; }}
+    .header-sub {{ color: #1d9e75; font-size: 10px; font-weight: bold; letter-spacing: 0.3em; margin-top: 4px; }}
+    .content {{ padding: 32px 24px; }}
+    .title {{ font-size: 18px; font-weight: 700; color: #0f172a; margin-top: 0; margin-bottom: 8px; }}
+    .codigo-box {{
+      background-color: #f1f5f9;
+      border-left: 4px solid #1d9e75;
+      border-radius: 4px;
+      padding: 20px;
+      margin-bottom: 24px;
+      text-align: center;
+    }}
+    .codigo {{
+      font-family: "SF Mono", "Courier New", monospace;
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: 0.3em;
+      color: #0f172a;
+    }}
+    .aviso {{ font-size: 12px; color: #94a3b8; margin-top: 8px; }}
+    .footer {{
+      background-color: #f8fafc;
+      padding: 24px;
+      text-align: center;
+      font-size: 11px;
+      color: #94a3b8;
+      border-top: 1px solid #e2e8f0;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <div class="header-logo">BONDMANN</div>
+        <div class="header-sub">PORTAL DE CHAMADOS</div>
+      </div>
+      <div class="content">
+        <h2 class="title">Seu código de verificação</h2>
+        <p style="margin-top:0; font-size:14px; color: #475569;">Use o código abaixo para confirmar o acesso à sua conta:</p>
+        <div class="codigo-box">
+          <div class="codigo">{codigo}</div>
+          <p class="aviso">Expira em 10 minutos. Não compartilhe este código com ninguém.</p>
+        </div>
+        <p style="font-size: 12px; color: #94a3b8; margin-bottom: 0;">Se você não pediu este código, pode ignorar este e-mail com segurança.</p>
+      </div>
+      <div class="footer">
+        Este é um e-mail automático enviado pelo Portal de Chamados Bondmann Química.<br>
+        Por favor, não responda diretamente a este endereço de e-mail.
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+    return await enviar_email(email, assunto, corpo_texto, corpo_html)
+
+
 async def agendar_notificacao_email(
     background_tasks: BackgroundTasks,
     chamado: dict,

@@ -44,7 +44,7 @@ def aal(claims: dict) -> str:
 
 
 def mfa_habilitado(claims: dict) -> bool:
-    """Se o usuário tem MFA ativo, lido do espelho ``app_metadata.mfa_enabled``.
+    """Se o usuário tem MFA (TOTP) ativo, lido do espelho ``app_metadata.mfa_enabled``.
 
     O espelho é gravado por ``app/auth/mfa.py`` no enroll/reset (mesmo dual-write
     do papel, item 1.5) justamente para esta leitura ser **local** — sem uma
@@ -52,6 +52,32 @@ def mfa_habilitado(claims: dict) -> bool:
     transição: quem nunca enrolou não é bloqueado).
     """
     return bool((claims.get("app_metadata") or {}).get("mfa_enabled"))
+
+
+def mfa_email_habilitado(claims: dict) -> bool:
+    """Se o usuário tem MFA por e-mail ativo, lido de ``app_metadata.mfa_email_enabled``
+    (mesmo espelho local de ``mfa_habilitado``, gravado por
+    ``app/auth/mfa.py::marcar_email_mfa_habilitado``). Método sem fator no
+    GoTrue — este claim é a ÚNICA fonte de verdade de que o método existe."""
+    return bool((claims.get("app_metadata") or {}).get("mfa_email_enabled"))
+
+
+def sessao_mfa_satisfeita(request: Request | None, user: "CurrentUser") -> bool:
+    """Se esta sessão já passou pelo segundo fator — por QUALQUER método.
+
+    TOTP eleva a claim ``aal`` de verdade (GoTrue). E-mail não tem fator no
+    GoTrue, então usa um cookie de sessão próprio
+    (``app/auth/mfa_email_stepup.py``) como sinal equivalente — mesma ideia já
+    aceita do cookie de "lembrar dispositivo", só que escopado a esta sessão de
+    login (não sobrevive ao logout)."""
+    if aal(user.claims) == AAL_MFA:
+        return True
+    if request is not None:
+        from app.auth import mfa_email_stepup
+
+        if mfa_email_stepup.email_verificado(request, get_settings(), user.id):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -81,9 +107,9 @@ def enforce_admin_mfa(user: CurrentUser, request: Request | None = None) -> bool
     """
     if user.role != "ADMIN":
         return False
-    if aal(user.claims) == AAL_MFA:
+    if sessao_mfa_satisfeita(request, user):
         return False
-    if mfa_habilitado(user.claims):
+    if mfa_habilitado(user.claims) or mfa_email_habilitado(user.claims):
         if request is not None and mfa_remember.dispositivo_confiavel(
             request, get_settings(), user.id
         ):

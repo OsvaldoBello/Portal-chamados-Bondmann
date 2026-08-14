@@ -156,12 +156,39 @@ async def marcar_mfa_habilitado(user_id: str, habilitado: bool) -> None:
         )
 
 
+async def marcar_email_mfa_habilitado(user_id: str, habilitado: bool) -> None:
+    """Espelha ``app_metadata.mfa_email_enabled`` no JWT via Admin API.
+
+    Mesmo dual-write de :func:`marcar_mfa_habilitado`, para o método por
+    e-mail (``app/auth/mfa_email.py``) — sem fator no GoTrue, este claim é a
+    ÚNICA fonte de verdade de que o método está ativo (usada tanto pelo
+    enforcement quanto pelo redirect de `/login`, ``app/auth/routes.py``)."""
+    client = await ensure_admin_client()
+    if client is None:
+        log.warning(
+            "MFA: service_role ausente — app_metadata.mfa_email_enabled não espelhado (user=%s)",
+            user_id,
+        )
+        return
+    try:
+        await client.auth.admin.update_user_by_id(
+            user_id, {"app_metadata": {"mfa_email_enabled": habilitado}}
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.error(
+            "MFA: falha ao espelhar app_metadata.mfa_email_enabled (user=%s habilitado=%s): %s",
+            user_id, habilitado, type(exc).__name__,
+        )
+
+
 async def resetar_mfa(user_id: str) -> int:
-    """Remove TODOS os fatores MFA do usuário via Admin API e limpa a flag.
+    """Remove TODOS os métodos MFA do usuário (TOTP + e-mail) e limpa as flags.
 
     Recovery por admin/TI (decisão do gestor). Deslogar o usuário de todas as
     sessões é efeito do próprio GoTrue ao remover um fator verificado. Retorna
-    quantos fatores foram removidos. Levanta :class:`MfaErro` sem service_role.
+    quantos fatores TOTP foram removidos (e-mail não tem "fator" para contar —
+    só um código pendente, se houver, que é descartado). Levanta
+    :class:`MfaErro` sem service_role.
 
     A listagem dos fatores lê ``auth.mfa_factors`` direto (via ``admin_connection``)
     em vez de ``client.auth.admin.mfa.list_factors`` — o endpoint GoTrue
@@ -193,4 +220,10 @@ async def resetar_mfa(user_id: str) -> int:
             log.error("MFA reset: falha ao remover fator %s (user=%s): %s",
                       factor_id, user_id, type(exc).__name__)
     await marcar_mfa_habilitado(user_id, False)
+
+    from app.auth import mfa_email
+
+    await mfa_email.limpar_pendentes(user_id)
+    await marcar_email_mfa_habilitado(user_id, False)
+
     return removidos

@@ -1,5 +1,7 @@
-{# Step-up de MFA (item 3.3): sessão aal1 de quem JÁ tem fator verificado.
-   Destino do redirect do enforcement (MfaChallengeRequired) e do pós-login. #}
+{# Step-up de MFA (item 3.3 + e-mail): sessão não verificada de quem JÁ tem
+   algum método ativo. Destino do redirect do enforcement (MfaChallengeRequired)
+   e do pós-login. Mostra as duas seções quando os dois métodos estão ativos —
+   o usuário escolhe qual usar nesta verificação. #}
 {% extends "mfa/_mfa_base.html" %}
 
 {% block title %}Verificação em duas etapas — Portal de Chamados Bondmann{% endblock %}
@@ -10,30 +12,76 @@
   </div>
 
   <h1 class="font-display font-bold text-xl text-navy">Verificação em duas etapas</h1>
-  <p class="text-muted text-sm mt-1.5">Abra seu aplicativo autenticador e informe o código de 6 dígitos para concluir o acesso.</p>
+  <p class="text-muted text-sm mt-1.5">Confirme o acesso com o método que preferir.</p>
 
-  <form method="post" action="/mfa/verify" class="mt-6 space-y-4">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label class="block">
-      <span class="block text-[13px] font-semibold text-navy mb-1.5">Código do autenticador</span>
-      <input id="codigo" name="codigo" type="text" required autofocus
-             inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*"
-             maxlength="7" placeholder="000000"
-             class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-center text-lg tracking-[0.4em] font-semibold placeholder:text-faint placeholder:tracking-[0.4em]">
-    </label>
-    <label class="flex items-center gap-2 text-sm text-navy cursor-pointer">
-      <input type="checkbox" name="lembrar_dispositivo" value="true"
-             class="rounded ring-1 ring-line text-navy-900 focus:ring-2 focus:ring-navy-500">
-      Lembrar este dispositivo por 30 dias
-    </label>
-    <button type="submit"
-            class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-navy-900 text-white hover:bg-navy-700 shadow-soft w-full">
-      Verificar e continuar
-    </button>
-  </form>
+  {% if totp_ativo %}
+    <div class="mt-6">
+      {% if email_ativo %}<p class="text-[13px] font-semibold text-navy mb-3">Aplicativo autenticador</p>{% endif %}
+      <form method="post" action="/mfa/verify" class="space-y-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label class="block">
+          <span class="block text-[13px] font-semibold text-navy mb-1.5">Código do autenticador</span>
+          <input name="codigo" type="text" required {% if not email_ativo %}autofocus{% endif %}
+                 inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*"
+                 maxlength="7" placeholder="000000"
+                 class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-center text-lg tracking-[0.4em] font-semibold placeholder:text-faint placeholder:tracking-[0.4em]">
+        </label>
+        <label class="flex items-center gap-2 text-sm text-navy cursor-pointer">
+          <input type="checkbox" name="lembrar_dispositivo" value="true"
+                 class="rounded ring-1 ring-line text-navy-900 focus:ring-2 focus:ring-navy-500">
+          Lembrar este dispositivo por 30 dias
+        </label>
+        <button type="submit"
+                class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-navy-900 text-white hover:bg-navy-700 shadow-soft w-full">
+          Verificar e continuar
+        </button>
+      </form>
+    </div>
+  {% endif %}
+
+  {% if email_ativo %}
+    <div class="mt-6{% if totp_ativo %} pt-6 border-t border-line{% endif %}">
+      {% if totp_ativo %}<p class="text-[13px] font-semibold text-navy mb-3">Código por e-mail</p>{% endif %}
+
+      {% if email_codigo_enviado %}
+        <p class="text-xs text-muted mb-3">Enviamos um código para <strong class="text-navy">{{ email }}</strong>. Ele expira em 10 minutos.</p>
+        <form method="post" action="/mfa/verify/email" class="space-y-4">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="block">
+            <span class="block text-[13px] font-semibold text-navy mb-1.5">Código recebido por e-mail</span>
+            <input name="codigo" type="text" required autofocus
+                   inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*"
+                   maxlength="7" placeholder="000000"
+                   class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-center text-lg tracking-[0.4em] font-semibold placeholder:text-faint placeholder:tracking-[0.4em]">
+          </label>
+          <label class="flex items-center gap-2 text-sm text-navy cursor-pointer">
+            <input type="checkbox" name="lembrar_dispositivo" value="true"
+                   class="rounded ring-1 ring-line text-navy-900 focus:ring-2 focus:ring-navy-500">
+            Lembrar este dispositivo por 30 dias
+          </label>
+          <button type="submit"
+                  class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 bg-navy-900 text-white hover:bg-navy-700 shadow-soft w-full">
+            Verificar e continuar
+          </button>
+        </form>
+        <form method="post" action="/mfa/verify/email/enviar" class="mt-3">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="text-xs font-medium text-muted hover:text-navy">Reenviar código</button>
+        </form>
+      {% else %}
+        <form method="post" action="/mfa/verify/email/enviar">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit"
+                  class="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition px-4 py-2.5 {% if totp_ativo %}ring-1 ring-line text-navy hover:bg-surface{% else %}bg-navy-900 text-white hover:bg-navy-700 shadow-soft{% endif %} w-full">
+            Enviar código por e-mail
+          </button>
+        </form>
+      {% endif %}
+    </div>
+  {% endif %}
 
   <p class="mt-6 text-xs text-muted">
-    Perdeu o acesso ao autenticador? Peça ao <strong class="text-navy">TI</strong> para
+    Perdeu o acesso aos seus métodos? Peça ao <strong class="text-navy">TI</strong> para
     resetar seu MFA — depois você poderá configurá-lo novamente.
   </p>
 
