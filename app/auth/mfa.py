@@ -161,22 +161,36 @@ async def resetar_mfa(user_id: str) -> int:
 
     Recovery por admin/TI (decisão do gestor). Deslogar o usuário de todas as
     sessões é efeito do próprio GoTrue ao remover um fator verificado. Retorna
-    quantos fatores foram removidos. Levanta :class:`MfaErro` sem service_role."""
+    quantos fatores foram removidos. Levanta :class:`MfaErro` sem service_role.
+
+    A listagem dos fatores lê ``auth.mfa_factors`` direto (via ``admin_connection``)
+    em vez de ``client.auth.admin.mfa.list_factors`` — o endpoint GoTrue
+    ``GET /admin/users/{id}/factors`` devolve um array JSON cru (`sendJSON(w, 200,
+    user.Factors)`, ver `supabase/auth`), mas o modelo de resposta do gotrue-py
+    (`AuthMFAAdminListFactorsResponse`) exige um objeto `{"factors": [...]}`; a
+    falha de parsing daí não é um `HTTPStatusError`, então o SDK a reembala como
+    `AuthRetryableError` — some 100% das vezes, retry não resolve. A remoção em si
+    (`delete_factor`) não tem esse problema, então continua pela Admin API."""
     client = await ensure_admin_client()
     if client is None:
         raise MfaErro("service_role não configurada")
+    from app.db import admin_connection
+
     try:
-        listagem = await client.auth.admin.mfa.list_factors({"user_id": user_id})
+        async with admin_connection() as conn:
+            linhas = await conn.fetch(
+                "SELECT id FROM auth.mfa_factors WHERE user_id = $1::uuid", user_id
+            )
     except Exception as exc:  # noqa: BLE001
-        raise MfaErro(f"list_factors (admin) falhou: {type(exc).__name__}") from exc
-    fatores = getattr(listagem, "factors", None) or []
+        raise MfaErro(f"list_factors (db) falhou: {type(exc).__name__}") from exc
     removidos = 0
-    for f in fatores:
+    for row in linhas:
+        factor_id = str(row["id"])
         try:
-            await client.auth.admin.mfa.delete_factor({"user_id": user_id, "id": f.id})
+            await client.auth.admin.mfa.delete_factor({"user_id": user_id, "id": factor_id})
             removidos += 1
         except Exception as exc:  # noqa: BLE001 — segue removendo os demais
             log.error("MFA reset: falha ao remover fator %s (user=%s): %s",
-                      f.id, user_id, type(exc).__name__)
+                      factor_id, user_id, type(exc).__name__)
     await marcar_mfa_habilitado(user_id, False)
     return removidos
