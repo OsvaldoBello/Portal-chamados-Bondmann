@@ -36,7 +36,23 @@ class AdminRepo:
           agregar TODOS os setores nos relatórios. Uso controlado e somente-leitura,
           liberado apenas quando a rota confirmou ``is_ti`` (ver admin_context). O
           filtro explícito de ``departamento_id`` continua permitindo focar um setor.
-        """
+
+        **``escopo_autor`` (bug real reportado pelo usuário 2026-08-14 — Compras
+        não via os chamados do Eduardo Becker/Alessandro Lodion):** ``departamento_id``
+        em ``chamados`` é o DESTINO (a fila que atende), não o setor de quem abriu.
+        Um setor "só-solicitante" (``departamentos.recebe_chamados=false`` — Compras,
+        Produção, CIPA, Representantes, Gerentes/Supervisão de Vendas, migration 0039)
+        nunca é destino de chamado nenhum, então filtrar por
+        ``chamados.departamento_id = <próprio setor>`` sempre dá zero para o ADMIN
+        desse setor, mesmo com chamados reais abertos pela equipe. Com
+        ``escopo_autor=True``, o mesmo ``departamento_id`` passa a filtrar pelo
+        DEPARTAMENTO DO AUTOR (``perfis.departamento_id`` de ``chamados.cliente_id``)
+        em vez do destino — "os chamados que minha equipe abriu", não "os chamados
+        que minha fila atende". Não precisa de migration de RLS: a policy
+        ``chamados_select`` (migration 0028, "líder de setor") já libera um ADMIN
+        com ``departamento_id`` a ler qualquer chamado cujo autor seja do mesmo
+        departamento, independente do destino — este filtro só recorta, dentro do
+        que a RLS já permite, o mesmo subconjunto."""
         return admin_connection() if todos_setores else rls_connection(claims)
 
     async def is_ti(self, claims: dict) -> bool:
@@ -47,6 +63,7 @@ class AdminRepo:
     async def kpis(
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
+        escopo_autor: bool = False,
     ) -> dict[str, Any]:
         """KPIs do mês selecionado.
 
@@ -103,7 +120,15 @@ class AdminRepo:
                            ORDER BY h.created_at DESC
                            LIMIT 1)                                   AS resolvido_de
                     FROM chamados c
-                   WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                   WHERE (
+                           $1::uuid IS NULL
+                           OR (NOT $4::boolean AND c.departamento_id = $1::uuid)
+                           OR ($4::boolean AND EXISTS (
+                                 SELECT 1 FROM perfis autor
+                                  WHERE autor.id = c.cliente_id
+                                    AND autor.departamento_id = $1::uuid
+                               ))
+                         )
                      AND c.chamado_principal_id IS NULL
                 )
                 SELECT
@@ -158,6 +183,7 @@ class AdminRepo:
                 departamento_id,
                 periodo_inicio,
                 periodo_fim,
+                escopo_autor,
             )
         d = dict(row)
         resolvidos = d["resolvidos"] or 0
@@ -173,14 +199,24 @@ class AdminRepo:
     async def por_status(
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
+        escopo_autor: bool = False,
     ) -> dict[str, int]:
         """Distribuição por status no mês. RESOLVIDO é ancorado em ``resolvido_em``
         (fechado no mês conta pro mês, mesmo aberto antes — mesma correção da
-        Seção `kpis`); os demais status (ainda abertos) usam ``created_at``."""
+        Seção `kpis`); os demais status (ainda abertos) usam ``created_at``.
+        ``escopo_autor`` — ver docstring de :meth:`_kpi_scope`."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
-                """SELECT status, count(*) n FROM chamados
-                    WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                """SELECT status, count(*) n FROM chamados c
+                    WHERE (
+                            $1::uuid IS NULL
+                            OR (NOT $4::boolean AND c.departamento_id = $1::uuid)
+                            OR ($4::boolean AND EXISTS (
+                                  SELECT 1 FROM perfis autor
+                                   WHERE autor.id = c.cliente_id
+                                     AND autor.departamento_id = $1::uuid
+                                ))
+                          )
                       AND chamado_principal_id IS NULL
                       AND (
                         CASE WHEN status = 'RESOLVIDO' THEN
@@ -195,6 +231,7 @@ class AdminRepo:
                 departamento_id,
                 periodo_inicio,
                 periodo_fim,
+                escopo_autor,
             )
         por = {r["status"]: r["n"] for r in rows}
         return {s: por.get(s, 0) for s in
@@ -203,18 +240,28 @@ class AdminRepo:
     async def csat_distribuicao(
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
+        escopo_autor: bool = False,
     ) -> dict[int, int]:
         """Distribuição de notas CSAT do mês, ancorada em ``resolvido_em`` — as
         barras somam exatamente as ``csat_respostas`` do KPI "CSAT médio"
         (:meth:`kpis`), que desde 2026-08-03 é a nota dos chamados RESOLVIDOS no
         mês. Ancorar aqui em ``avaliacao_em`` faria o gráfico contar um conjunto
-        diferente do card logo acima dele."""
+        diferente do card logo acima dele. ``escopo_autor`` — ver docstring de
+        :meth:`_kpi_scope`."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
-                """SELECT avaliacao_nota n, count(*) c FROM chamados
+                """SELECT avaliacao_nota n, count(*) qtd FROM chamados c
                     WHERE avaliacao_nota IS NOT NULL
                       AND chamado_principal_id IS NULL
-                      AND ($1::uuid IS NULL OR departamento_id = $1::uuid)
+                      AND (
+                            $1::uuid IS NULL
+                            OR (NOT $4::boolean AND c.departamento_id = $1::uuid)
+                            OR ($4::boolean AND EXISTS (
+                                  SELECT 1 FROM perfis autor
+                                   WHERE autor.id = c.cliente_id
+                                     AND autor.departamento_id = $1::uuid
+                                ))
+                          )
                       AND resolvido_em IS NOT NULL
                       AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
                       AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz)
@@ -222,19 +269,22 @@ class AdminRepo:
                 departamento_id,
                 periodo_inicio,
                 periodo_fim,
+                escopo_autor,
             )
-        por = {int(r["n"]): r["c"] for r in rows}
+        por = {int(r["n"]): r["qtd"] for r in rows}
         return {i: por.get(i, 0) for i in range(1, 6)}
 
     async def produtividade(
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
+        escopo_autor: bool = False,
     ) -> list[dict[str, Any]]:
         """Chamados resolvidos por operador (produtividade) no mês.
 
         ``resolvidos`` é ancorado em ``resolvido_em`` (fechado no mês conta pro
         mês, mesmo aberto antes); ``atribuidos`` (volume atribuído ao operador,
-        independente do status) continua ancorado em ``created_at``."""
+        independente do status) continua ancorado em ``created_at``. ``escopo_autor``
+        — ver docstring de :meth:`_kpi_scope`."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
@@ -249,13 +299,22 @@ class AdminRepo:
                            AND ($3::timestamptz IS NULL OR c.created_at < $3::timestamptz))
                                                                         AS atribuidos
                   FROM chamados c LEFT JOIN perfis op ON op.id = c.operador_id
-                 WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                 WHERE (
+                         $1::uuid IS NULL
+                         OR (NOT $4::boolean AND c.departamento_id = $1::uuid)
+                         OR ($4::boolean AND EXISTS (
+                               SELECT 1 FROM perfis autor
+                                WHERE autor.id = c.cliente_id
+                                  AND autor.departamento_id = $1::uuid
+                             ))
+                       )
                    AND c.chamado_principal_id IS NULL
                  GROUP BY op.nome ORDER BY resolvidos DESC NULLS LAST LIMIT 15
                 """,
                 departamento_id,
                 periodo_inicio,
                 periodo_fim,
+                escopo_autor,
             )
             return [dict(r) for r in rows]
 
@@ -263,6 +322,7 @@ class AdminRepo:
         self, claims: dict, *, limite: int = 8, departamento_id: str | None = None,
         todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
+        escopo_autor: bool = False,
     ) -> list[dict[str, Any]]:
         """Últimas avaliações (CSAT) com comentário do solicitante, para o TI ver
         o feedback qualitativo — não só a média. Nota sempre; comentário opcional.
@@ -273,7 +333,9 @@ class AdminRepo:
         mês, então precisa listar os mesmos chamados que a média considera — uma
         nota dada em julho sobre um chamado resolvido em junho é feedback do
         atendimento de junho. A ordenação continua por ``avaliacao_em`` (mais
-        recentes primeiro), que é o que faz dela uma lista de "últimas"."""
+        recentes primeiro), que é o que faz dela uma lista de "últimas".
+        ``escopo_autor`` — ver docstring de :meth:`_kpi_scope`; reaproveita o
+        JOIN com ``autor`` que a query já faz para o nome do solicitante."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
@@ -284,7 +346,11 @@ class AdminRepo:
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                  WHERE c.avaliacao_nota IS NOT NULL
                    AND c.chamado_principal_id IS NULL
-                   AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
+                   AND (
+                         $2::uuid IS NULL
+                         OR (NOT $5::boolean AND c.departamento_id = $2::uuid)
+                         OR ($5::boolean AND autor.departamento_id = $2::uuid)
+                       )
                    AND c.resolvido_em IS NOT NULL
                    AND ($3::timestamptz IS NULL OR c.resolvido_em >= $3::timestamptz)
                    AND ($4::timestamptz IS NULL OR c.resolvido_em < $4::timestamptz)
@@ -295,6 +361,7 @@ class AdminRepo:
                 departamento_id,
                 periodo_inicio,
                 periodo_fim,
+                escopo_autor,
             )
             return [dict(r) for r in rows]
 
@@ -302,14 +369,15 @@ class AdminRepo:
         self, claims: dict, *, nota: int, departamento_id: str | None = None,
         todos_setores: bool = False, busca: str | None = None,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
-        limite: int = 300,
+        limite: int = 300, escopo_autor: bool = False,
     ) -> list[dict[str, Any]]:
         """Chamados com uma nota de CSAT específica (1-5) — alimenta o modal que
         abre ao clicar numa barra do gráfico "Distribuição do CSAT".
 
         Período ancorado em ``resolvido_em`` — mesmo critério de
         :meth:`avaliacoes_recentes`/:meth:`csat_distribuicao`, para o modal bater
-        com a barra que o usuário clicou."""
+        com a barra que o usuário clicou. ``escopo_autor`` — ver docstring de
+        :meth:`_kpi_scope`."""
         busca_norm = f"%{busca.strip()}%" if busca and busca.strip() else None
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
@@ -321,7 +389,11 @@ class AdminRepo:
                   LEFT JOIN perfis autor ON autor.id = c.cliente_id
                  WHERE c.avaliacao_nota = $1
                    AND c.chamado_principal_id IS NULL
-                   AND ($2::uuid IS NULL OR c.departamento_id = $2::uuid)
+                   AND (
+                         $2::uuid IS NULL
+                         OR (NOT $7::boolean AND c.departamento_id = $2::uuid)
+                         OR ($7::boolean AND autor.departamento_id = $2::uuid)
+                       )
                    AND c.resolvido_em IS NOT NULL
                    AND ($3::timestamptz IS NULL OR c.resolvido_em >= $3::timestamptz)
                    AND ($4::timestamptz IS NULL OR c.resolvido_em < $4::timestamptz)
@@ -336,19 +408,30 @@ class AdminRepo:
                 periodo_fim,
                 busca_norm,
                 limite,
+                escopo_autor,
             )
             return [dict(r) for r in rows]
 
     async def por_departamento(
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
+        escopo_autor: bool = False,
     ) -> list[dict[str, Any]]:
+        """``escopo_autor`` — ver docstring de :meth:`_kpi_scope`. Num setor
+        só-solicitante, o agrupamento continua pelo DESTINO (``d.nome``) — o que
+        muda é o filtro: em vez de "minha fila", "quem atendeu minha equipe"."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
                 SELECT COALESCE(d.nome, '—') AS departamento, count(*) AS total
-                  FROM chamados c LEFT JOIN departamentos d ON d.id = c.departamento_id
-                 WHERE ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                  FROM chamados c
+                  LEFT JOIN departamentos d ON d.id = c.departamento_id
+                  LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                 WHERE (
+                         $1::uuid IS NULL
+                         OR (NOT $4::boolean AND c.departamento_id = $1::uuid)
+                         OR ($4::boolean AND autor.departamento_id = $1::uuid)
+                       )
                    AND c.chamado_principal_id IS NULL
                    AND ($2::timestamptz IS NULL OR c.created_at >= $2::timestamptz)
                    AND ($3::timestamptz IS NULL OR c.created_at < $3::timestamptz)
@@ -357,27 +440,36 @@ class AdminRepo:
                 departamento_id,
                 periodo_inicio,
                 periodo_fim,
+                escopo_autor,
             )
             return [dict(r) for r in rows]
 
     async def por_setor(
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
         periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
+        escopo_autor: bool = False,
     ) -> list[dict[str, Any]]:
+        """``escopo_autor`` — ver docstring de :meth:`_kpi_scope`."""
         async with self._kpi_scope(claims, todos_setores) as conn:
             rows = await conn.fetch(
                 """
-                SELECT COALESCE(setor, 'Não informado') AS setor, count(*) AS total
-                  FROM chamados
-                 WHERE ($1::uuid IS NULL OR departamento_id = $1::uuid)
-                   AND chamado_principal_id IS NULL
-                   AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
-                   AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
-                 GROUP BY setor ORDER BY total DESC
+                SELECT COALESCE(c.setor, 'Não informado') AS setor, count(*) AS total
+                  FROM chamados c
+                  LEFT JOIN perfis autor ON autor.id = c.cliente_id
+                 WHERE (
+                         $1::uuid IS NULL
+                         OR (NOT $4::boolean AND c.departamento_id = $1::uuid)
+                         OR ($4::boolean AND autor.departamento_id = $1::uuid)
+                       )
+                   AND c.chamado_principal_id IS NULL
+                   AND ($2::timestamptz IS NULL OR c.created_at >= $2::timestamptz)
+                   AND ($3::timestamptz IS NULL OR c.created_at < $3::timestamptz)
+                 GROUP BY c.setor ORDER BY total DESC
                 """,
                 departamento_id,
                 periodo_inicio,
                 periodo_fim,
+                escopo_autor,
             )
             return [dict(r) for r in rows]
 

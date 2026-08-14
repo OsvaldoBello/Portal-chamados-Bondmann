@@ -95,6 +95,14 @@ class AdminCtx:
     # conhecimento do agente Químico (`base_quimico_*`) pelo painel de upload —
     # ver `base_quimico`/`ingerir_base_quimico`.
     pode_editar_base_quimico: bool = False
+    # Bug real reportado pelo usuário (2026-08-14): Compras é setor só-solicitante
+    # (`departamentos.recebe_chamados=false`, migration 0039) e por isso nunca é
+    # DESTINO de chamado — os indicadores do ADMIN de Compras (Alessandro Lodion)
+    # vinham sempre zerados, mesmo com chamados reais da equipe (Eduardo Becker
+    # incluso). `escopo_autor=True` sinaliza pro AdminRepo trocar o filtro de
+    # "chamados destinados ao meu setor" por "chamados abertos pela minha equipe"
+    # — ver docstring de AdminRepo._kpi_scope.
+    escopo_autor: bool = False
 
 
 async def admin_context(
@@ -159,10 +167,18 @@ async def admin_context(
         # escopado igual a qualquer Admin de departamento; "Todos os setores"
         # deixou de existir. TI segue sendo o único que GERE catálogos (_require_ti).
         escopo = perfil.get("departamento") or "—"
+        # Bug real reportado pelo usuário (2026-08-14, setor Compras — ver
+        # AdminCtx.escopo_autor): um ADMIN de setor SÓ-SOLICITANTE
+        # (`recebe_chamados=false`) nunca tem fila própria, então "meus
+        # indicadores" só faz sentido como "os chamados que minha equipe abriu"
+        # (líder de setor, migration 0028), não "os chamados destinados a mim".
+        # Só vale para is_admin_dep — TI/Marketing/Químico têm fila de verdade.
+        escopo_autor = bool(is_admin_dep and not perfil.get("recebe_chamados", True))
         yield AdminCtx(
             user=user, perfil=perfil, is_ti=is_ti, escopo=escopo, mfa_nudge=mfa_nudge,
             pode_editar_avatares=(is_ti or is_admin_dep or is_mkt_operador),
             pode_editar_base_quimico=(is_ti or is_quimico_staff),
+            escopo_autor=escopo_autor,
         )
 
 
@@ -223,6 +239,7 @@ def _base_ctx(ctx: AdminCtx) -> dict:
         "is_ti": ctx.is_ti,
         "escopo": ctx.escopo,
         "mfa_nudge": ctx.mfa_nudge,
+        "escopo_autor": ctx.escopo_autor,
     }
 
 
@@ -293,32 +310,39 @@ async def dashboard(
     kpis = await repo.kpis(
         claims, departamento_id=dep_id, todos_setores=False,
         periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+        escopo_autor=ctx.escopo_autor,
     )
     graficos = {
         "por_status": await repo.por_status(
             claims, departamento_id=dep_id, todos_setores=False,
             periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+            escopo_autor=ctx.escopo_autor,
         ),
         "csat": await repo.csat_distribuicao(
             claims, departamento_id=dep_id, todos_setores=False,
             periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+            escopo_autor=ctx.escopo_autor,
         ),
         "por_departamento": await repo.por_departamento(
             claims, departamento_id=dep_id, todos_setores=False,
             periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+            escopo_autor=ctx.escopo_autor,
         ),
         "por_setor": await repo.por_setor(
             claims, departamento_id=dep_id, todos_setores=False,
             periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+            escopo_autor=ctx.escopo_autor,
         ),
         "produtividade": await repo.produtividade(
             claims, departamento_id=dep_id, todos_setores=False,
             periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+            escopo_autor=ctx.escopo_autor,
         ),
     }
     avaliacoes = await repo.avaliacoes_recentes(
         claims, departamento_id=dep_id, todos_setores=False,
         periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+        escopo_autor=ctx.escopo_autor,
     )
 
     if escopo == "Marketing":
@@ -409,6 +433,7 @@ async def avaliacoes_por_nota(
     chamados = await repo.chamados_por_nota(
         ctx.user.claims, nota=nota, departamento_id=dep_id, todos_setores=False,
         busca=busca, periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+        escopo_autor=ctx.escopo_autor,
     )
     return render(request, "admin/_avaliacoes_lista.html", {"chamados": chamados, "nota": nota})
 
@@ -1334,6 +1359,7 @@ async def export_html(
         kwargs = {
             "departamento_id": dep_id, "todos_setores": False,
             "periodo_inicio": inicio, "periodo_fim": fim,
+            "escopo_autor": ctx.escopo_autor,
         }
         contexto = montar_relatorio_geral(
             escopo=ctx.escopo,

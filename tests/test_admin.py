@@ -26,10 +26,12 @@ class FakePerfilRepo:
     """Fake de ChamadosRepo só com ``perfil`` — usado pelo admin_context para
     resolver acesso/escopo (TI vs Admin de setor vs operador)."""
 
-    def __init__(self, *, is_ti=True, role="ADMIN", departamento="TI"):
+    def __init__(self, *, is_ti=True, role="ADMIN", departamento="TI", departamento_id=None,
+                 recebe_chamados=True):
         self._perfil = {
             "id": TI, "nome": "Fulano", "role": role,
-            "departamento": departamento, "is_ti": is_ti, "empresa_id": "e1",
+            "departamento": departamento, "departamento_id": departamento_id,
+            "is_ti": is_ti, "empresa_id": "e1", "recebe_chamados": recebe_chamados,
         }
 
     async def perfil(self, claims):
@@ -46,40 +48,41 @@ class FakeAdmin:
         return self._ti
 
     async def kpis(self, claims, *, departamento_id=None, todos_setores=False,
-                   periodo_inicio=None, periodo_fim=None):
+                   periodo_inicio=None, periodo_fim=None, escopo_autor=False):
         return {"total": 10, "abertos": 4, "resolvidos": 6, "resolvidos_no_prazo": 5,
                 "conformidade_sla": 83.3, "csat_media": 4.5, "csat_respostas": 4,
                 "tma_horas": 12.0, "tma_seg": 43200,
                 "projetos_resolvidos": 1, "tma_projetos_seg": 288000, "tma_projetos_horas": 80.0}
 
     async def por_status(self, claims, *, departamento_id=None, todos_setores=False,
-                          periodo_inicio=None, periodo_fim=None):
+                          periodo_inicio=None, periodo_fim=None, escopo_autor=False):
         return {"NOVO": 2, "PROJETOS": 1, "EM_ATENDIMENTO": 2, "AGUARDANDO": 0, "RESOLVIDO": 6}
 
     async def csat_distribuicao(self, claims, *, departamento_id=None, todos_setores=False,
-                                 periodo_inicio=None, periodo_fim=None):
+                                 periodo_inicio=None, periodo_fim=None, escopo_autor=False):
         return {1: 0, 2: 0, 3: 1, 4: 1, 5: 2}
 
     async def por_departamento(self, claims, *, departamento_id=None, todos_setores=False,
-                                periodo_inicio=None, periodo_fim=None):
+                                periodo_inicio=None, periodo_fim=None, escopo_autor=False):
         return [{"departamento": "TI", "total": 7}, {"departamento": "RH", "total": 3}]
 
     async def por_setor(self, claims, *, departamento_id=None, todos_setores=False,
-                         periodo_inicio=None, periodo_fim=None):
+                         periodo_inicio=None, periodo_fim=None, escopo_autor=False):
         return [{"setor": "Financeiro", "total": 6}, {"setor": "Vendas", "total": 4}]
 
     async def produtividade(self, claims, *, departamento_id=None, todos_setores=False,
-                             periodo_inicio=None, periodo_fim=None):
+                             periodo_inicio=None, periodo_fim=None, escopo_autor=False):
         return [{"operador": "Op TI", "resolvidos": 6, "atribuidos": 8}]
 
     async def avaliacoes_recentes(self, claims, *, limite=8, departamento_id=None, todos_setores=False,
-                                   periodo_inicio=None, periodo_fim=None):
+                                   periodo_inicio=None, periodo_fim=None, escopo_autor=False):
         return [{"id": "c1", "codigo": "BOND-2026-00001", "titulo": "Impressora", "nota": 5,
                  "comentario": "Ótimo atendimento", "solicitante": "Ana",
                  "em": datetime(2026, 7, 1, tzinfo=UTC)}]
 
     async def chamados_por_nota(self, claims, *, nota, departamento_id=None, todos_setores=False,
-                                 busca=None, periodo_inicio=None, periodo_fim=None, limite=300):
+                                 busca=None, periodo_inicio=None, periodo_fim=None, limite=300,
+                                 escopo_autor=False):
         return [{"id": "c1", "codigo": "BOND-2026-00001", "titulo": "Impressora", "status": "RESOLVIDO",
                  "nota": nota, "comentario": "Ótimo atendimento", "solicitante": "Ana",
                  "em": datetime(2026, 7, 1, tzinfo=UTC)}]
@@ -263,6 +266,45 @@ def test_admin_de_setor_ve_dashboard_mas_nao_gere_catalogos():
         # POST de gestão também barra o admin de setor.
         assert c.post("/admin/departamentos", data={"nome": "X"},
                       headers={"X-CSRF-Token": t}, follow_redirects=False).status_code == 403
+
+
+def test_admin_setor_solicitante_ve_chamados_da_equipe():
+    # Bug real reportado pelo usuário (2026-08-14): Compras é setor só-solicitante
+    # (departamentos.recebe_chamados=false, migration 0039) — nunca é DESTINO de
+    # chamado, então filtrar por departamento_id = próprio setor sempre dava zero
+    # pro ADMIN de Compras (Alessandro Lodion), mesmo com chamados reais da
+    # equipe (Eduardo Becker incluso). admin_context deve virar escopo_autor=True
+    # e repassar isso pro AdminRepo (ver AdminCtx.escopo_autor).
+    class FakeAdminEscopo(FakeAdmin):
+        def __init__(self, is_ti=False):
+            super().__init__(is_ti=is_ti)
+            self.escopos_recebidos = []
+
+        async def kpis(self, claims, *, departamento_id=None, todos_setores=False,
+                       periodo_inicio=None, periodo_fim=None, escopo_autor=False):
+            self.escopos_recebidos.append(escopo_autor)
+            return await super().kpis(
+                claims, departamento_id=departamento_id, todos_setores=todos_setores,
+                periodo_inicio=periodo_inicio, periodo_fim=periodo_fim, escopo_autor=escopo_autor,
+            )
+
+    # Compras (recebe_chamados=False) — vira "chamados abertos pela equipe".
+    perfil_compras = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Compras",
+                                     departamento_id="dcompras", recebe_chamados=False)
+    fake_compras = FakeAdminEscopo()
+    with admin_client(fake_compras, user=_user(role="ADMIN"), perfil=perfil_compras) as c:
+        r = c.get("/admin")
+        assert r.status_code == 200
+        assert "Compras" in r.text
+        assert fake_compras.escopos_recebidos == [True]
+
+    # RH (recebe_chamados=True, setor com fila) — comportamento antigo intacto.
+    perfil_rh = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH",
+                                departamento_id="drh", recebe_chamados=True)
+    fake_rh = FakeAdminEscopo()
+    with admin_client(fake_rh, user=_user(role="ADMIN"), perfil=perfil_rh) as c:
+        assert c.get("/admin").status_code == 200
+        assert fake_rh.escopos_recebidos == [False]
 
 
 def test_dashboard_mostra_kpis_e_dados_grafico():
