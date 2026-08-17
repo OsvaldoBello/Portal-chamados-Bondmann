@@ -62,7 +62,7 @@ def mfa_email_habilitado(claims: dict) -> bool:
     return bool((claims.get("app_metadata") or {}).get("mfa_email_enabled"))
 
 
-def sessao_mfa_satisfeita(request: Request | None, user: "CurrentUser") -> bool:
+def sessao_mfa_satisfeita(request: Request | None, user: CurrentUser) -> bool:
     """Se esta sessão já passou pelo segundo fator — por QUALQUER método.
 
     TOTP eleva a claim ``aal`` de verdade (GoTrue). E-mail não tem fator no

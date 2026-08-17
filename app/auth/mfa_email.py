@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.config import get_settings
 from app.db import admin_connection
@@ -49,7 +49,7 @@ async def enviar_codigo(user_id: str, email: str) -> None:
     Levanta :class:`MfaErro` se o último envio para este usuário foi há menos
     de :data:`REENVIO_COOLDOWN_SEGUNDOS` (barreira contra spam na caixa de
     entrada do próprio usuário) ou se o envio do e-mail falhar."""
-    agora = datetime.now(timezone.utc)
+    agora = datetime.now(UTC)
     async with admin_connection() as conn:
         ultimo = await conn.fetchval(
             "SELECT created_at FROM mfa_email_codes WHERE user_id = $1::uuid "
@@ -82,7 +82,7 @@ async def verificar_codigo(user_id: str, codigo: str) -> bool:
 
     Levanta :class:`MfaErro` em qualquer caso de recusa — o chamador decide a
     mensagem exibida."""
-    agora = datetime.now(timezone.utc)
+    agora = datetime.now(UTC)
     async with admin_connection() as conn:
         linha = await conn.fetchrow(
             "SELECT id, codigo_hash, tentativas, expira_em FROM mfa_email_codes "
