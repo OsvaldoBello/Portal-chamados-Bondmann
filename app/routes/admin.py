@@ -85,11 +85,13 @@ class AdminCtx:
     escopo: str  # rótulo do escopo dos indicadores (setor ou "Todos os setores")
     # Item 3.3 (Fase 1): ADMIN que ainda não habilitou MFA — a UI avisa, não bloqueia.
     mfa_nudge: bool = False
-    # 2026-07-23: TI, qualquer ADMIN de setor e o OPERADOR do Marketing podem
-    # enviar/trocar a foto de perfil de usuários já criados (ver `usuarios()`
-    # e `atualizar_avatar_usuario`) — sempre True para quem passa por
-    # `admin_context` hoje, mas mantido explícito para não acoplar o gate de
-    # avatar ao de acesso geral se este último ganhar mais grupos no futuro.
+    # 2026-07-23: TI e Marketing (ADMIN/OPERADOR do próprio setor) podem ver a
+    # tela "Contas de usuário" e enviar/trocar a foto de perfil de usuários já
+    # criados (ver `usuarios()` e `atualizar_avatar_usuario`). Restrito a esse
+    # público desde 2026-08-17 (pedido do usuário) — a tela inteira tinha
+    # ficado aberta a QUALQUER ADMIN de setor, inclusive setores sem fila
+    # (ex.: Compras), onde ela não tem nenhuma utilidade (bug real reportado
+    # pelo usuário).
     pode_editar_avatares: bool = False
     # F4 (2026-07-24): staff do Dpto Químico (e o TI) pode manter a base de
     # conhecimento do agente Químico (`base_quimico_*`) pelo painel de upload —
@@ -113,9 +115,11 @@ async def admin_context(
     """Autoriza o acesso ao painel e resolve o **escopo** dos indicadores.
 
     Entra o **TI** (acesso total), o **ADMIN de departamento** (gestor do
-    próprio setor) e, desde 2026-07-23, o **OPERADOR do Marketing** — este
-    último só para poder enviar foto de perfil de usuários já criados
-    (`_require_pode_editar_avatares`); as demais rotas seguem exigindo
+    próprio setor, indicadores) e, desde 2026-07-23, o **OPERADOR do
+    Marketing** — este último só entra pra tela "Contas de usuário"
+    (`_require_pode_editar_avatares`), restrita ao TI e ao Marketing desde
+    2026-08-17 (antes qualquer ADMIN de setor via essa tela inteira, mesmo
+    sem nenhuma ação disponível nela). As demais rotas seguem exigindo
     `_require_ti` ou `is_admin_dep`. Qualquer outro OPERADOR/CLIENTE recebe
     403. Um ADMIN sem setor não tem escopo de relatório → 403 (o único "admin
     global" é o TI).
@@ -176,7 +180,7 @@ async def admin_context(
         escopo_autor = bool(is_admin_dep and not perfil.get("recebe_chamados", True))
         yield AdminCtx(
             user=user, perfil=perfil, is_ti=is_ti, escopo=escopo, mfa_nudge=mfa_nudge,
-            pode_editar_avatares=(is_ti or is_admin_dep or is_mkt_operador),
+            pode_editar_avatares=(is_ti or escopo == "Marketing"),
             pode_editar_base_quimico=(is_ti or is_quimico_staff),
             escopo_autor=escopo_autor,
         )
@@ -192,14 +196,15 @@ def _require_ti(ctx: AdminCtx) -> None:
 
 
 def _require_pode_editar_avatares(ctx: AdminCtx) -> None:
-    """Ver/editar foto de perfil de usuários já criados: TI, ADMIN de qualquer
-    setor ou OPERADOR do Marketing (2026-07-23) — quem passou por
-    `admin_context` hoje sempre atende isso; a checagem existe para não
-    depender implicitamente do gate de acesso geral."""
+    """Ver a tela "Contas de usuário" e enviar/trocar foto de perfil de
+    usuários já criados: TI ou Marketing (ADMIN/OPERADOR do próprio setor) —
+    restrito a esse público desde 2026-08-17 (pedido do usuário; antes
+    qualquer ADMIN de setor entrava na tela inteira, ver
+    `AdminCtx.pode_editar_avatares`)."""
     if not ctx.pode_editar_avatares:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Sem permissão para alterar fotos de perfil.",
+            detail="Sem permissão para acessar contas de usuário.",
         )
 
 
@@ -1118,14 +1123,17 @@ async def atualizar_avatar_usuario(
     _: None = Depends(_csrf_guard),
 ):
     """Envia/substitui a foto de perfil de um usuário JÁ CRIADO (2026-07-23):
-    pedido do usuário — além do TI, qualquer ADMIN de setor e o OPERADOR do
-    Marketing podem fazer isso para QUALQUER usuário, não só na criação da
-    conta. `_require_pode_editar_avatares` é o gate de app; a RLS (migration
-    0052, mesma regra) é quem garante isso também no banco, caso essa checagem
-    de app tenha algum furo. Upload no Storage via service_role: a policy de
-    `storage.objects` só libera cada um escrever no PRÓPRIO path (0033), então
-    o alvo aqui (path de OUTRO usuário) precisa bypassar a RLS de Storage —
-    mesmo padrão já usado em `criar_usuario`."""
+    pedido do usuário — além do TI, o Marketing (ADMIN/OPERADOR do próprio
+    setor) pode fazer isso para QUALQUER usuário, não só na criação da conta.
+    Restrito a esse público desde 2026-08-17 (antes qualquer ADMIN de setor
+    entrava — bug real: o recurso aparecia até pra setores sem fila como
+    Compras, onde não faz sentido nenhum). `_require_pode_editar_avatares` é
+    o gate de app; a RLS (migration 0084, mesma regra) é quem garante isso
+    também no banco, caso essa checagem de app tenha algum furo. Upload no
+    Storage via service_role: a policy de `storage.objects` só libera cada um
+    escrever no PRÓPRIO path (0033), então o alvo aqui (path de OUTRO
+    usuário) precisa bypassar a RLS de Storage — mesmo padrão já usado em
+    `criar_usuario`."""
     _require_pode_editar_avatares(ctx)
 
     def _volta(*, ok: str = "", erro: str = ""):

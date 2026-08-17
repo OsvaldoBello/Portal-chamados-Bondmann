@@ -156,12 +156,17 @@
             </td>
             <td class="py-2.5">
               <div class="flex flex-col items-start gap-2">
-                {# Foto de perfil (2026-07-23): TI, ADMIN de qualquer setor e o
-                   OPERADOR do Marketing podem enviar/trocar a foto de um
-                   usuário já criado — botão fica junto das demais ações desta
-                   coluna. `data-autosubmit` (shell.js) envia o form assim que
-                   o arquivo é escolhido; um `onchange` inline aqui seria
-                   bloqueado pela CSP (`script-src 'self'`, sem inline). #}
+                {# Foto de perfil (2026-07-23): TI ou Marketing (ADMIN/OPERADOR
+                   do próprio setor) podem enviar/trocar a foto de um usuário
+                   já criado — botão fica junto das demais ações desta coluna.
+                   Sem `{% if %}` aqui: só quem tem essa permissão chega até
+                   esta tela (`_require_pode_editar_avatares`, restrita ao
+                   Marketing desde 2026-08-17 — antes a tela inteira ficava
+                   aberta a QUALQUER ADMIN de setor, mesmo sem nenhuma ação
+                   disponível nela, ex.: Compras). `data-autosubmit`
+                   (shell.js) envia o form assim que o arquivo é escolhido; um
+                   `onchange` inline aqui seria bloqueado pela CSP
+                   (`script-src 'self'`, sem inline). #}
                 <form method="post" action="/admin/usuarios/{{ u.id }}/avatar" enctype="multipart/form-data">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <label class="inline-flex items-center gap-1 text-xs font-semibold text-navy-700 hover:underline cursor-pointer">

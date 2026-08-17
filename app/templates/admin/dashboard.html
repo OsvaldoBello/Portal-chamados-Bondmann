@@ -136,10 +136,17 @@
     <h3 class="font-display font-bold text-navy mb-3">Chamados por departamento</h3>
     <canvas id="chart-departamento" height="180"></canvas>
   </div>
+  {% if not escopo_autor %}
+  {# Pedido do usuário (2026-08-17): "Chamados por setor" agrupa pelo setor
+     SOLICITANTE (`c.setor`) — pra um admin de setor sem fila (`escopo_autor`,
+     ver AdminCtx.escopo_autor), os indicadores já são escopados aos chamados
+     abertos pela própria equipe, então esse gráfico sempre devolveria uma
+     única barra (o próprio setor): dado redundante, sem valor. #}
   <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h3 class="font-display font-bold text-navy mb-3">Chamados por setor</h3>
     <canvas id="chart-setor" height="180"></canvas>
   </div>
+  {% endif %}
   <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h3 class="font-display font-bold text-navy mb-3">Produtividade por operador (resolvidos)</h3>
     <canvas id="chart-produtividade" height="180"></canvas>

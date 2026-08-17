@@ -106,11 +106,14 @@
               <span>Gestão de catálogo</span>
             </a>
             {% endif %}
-            {# "Contas de usuário" (2026-07-23): agora também acessível a
-               qualquer ADMIN de setor e ao OPERADOR do Marketing — só para
+            {# "Contas de usuário" (2026-07-23): TI e Marketing (ADMIN ou
+               OPERADOR do próprio setor) — para o Marketing é só pra
                enviar/trocar foto de perfil (a criação/exclusão/mudança de
-               papel segue exclusiva do TI, escondida na própria tela). #}
-            {% if perfil.is_ti or perfil.role == 'ADMIN' or (perfil.role == 'OPERADOR' and perfil.departamento == 'Marketing') %}
+               papel segue exclusiva do TI, escondida na própria tela).
+               Restrito ao Marketing desde 2026-08-17 (pedido do usuário): a
+               tela tinha ficado visível a QUALQUER ADMIN de setor, mesmo sem
+               nenhuma ação disponível nela (ex.: Compras). #}
+            {% if perfil.is_ti or perfil.departamento == 'Marketing' %}
             <a href="/admin/usuarios" class="flex items-center gap-2.5 px-3.5 py-2 rounded-lg text-[13px] transition {% if active is defined and active == 'usuarios' %}text-white bg-white/10{% else %}text-white/60 hover:text-white hover:bg-white/5{% endif %}">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"/></svg>
               <span>Contas de usuário</span>

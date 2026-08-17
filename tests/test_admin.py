@@ -307,6 +307,28 @@ def test_admin_setor_solicitante_ve_chamados_da_equipe():
         assert fake_rh.escopos_recebidos == [False]
 
 
+def test_setor_sem_fila_nao_mostra_grafico_chamados_por_setor():
+    # Pedido do usuário (2026-08-17): "Chamados por setor" agrupa pelo setor
+    # SOLICITANTE — pra um admin de setor sem fila (escopo_autor=True, ex.:
+    # Compras) esse gráfico sempre devolveria uma única barra (o próprio
+    # setor), então some da tela. Setor com fila (RH) mantém o gráfico.
+    perfil_compras = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Compras",
+                                     departamento_id="dcompras", recebe_chamados=False)
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil_compras) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert "Chamados por setor" not in r.text
+    assert 'id="chart-setor"' not in r.text
+
+    perfil_rh = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH",
+                                departamento_id="drh", recebe_chamados=True)
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil_rh) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert "Chamados por setor" in r.text
+    assert 'id="chart-setor"' in r.text
+
+
 def test_dashboard_mostra_kpis_e_dados_grafico():
     with admin_client(FakeAdmin()) as c:
         r = c.get("/admin")
@@ -721,18 +743,25 @@ def test_usuarios_lista_e_form_de_criar():
     assert 'action="/admin/usuarios"' in r.text
 
 
-def test_usuarios_acessivel_a_qualquer_admin_de_setor_mas_sem_acoes_de_ti():
-    # 2026-07-23: qualquer ADMIN (não só o TI) pode ver a tela de contas — mas
-    # só para tratar foto de perfil; criar conta, mudar papel, resetar MFA e
-    # excluir seguem exclusivos do TI (escondidos na própria tela).
+def test_usuarios_admin_fora_do_marketing_recebe_403():
+    # Pedido do usuário (2026-08-17): a tela "Contas de usuário" tinha ficado
+    # visível pra QUALQUER ADMIN de setor desde 2026-07-23 (só em modo
+    # leitura — criar conta, mudar papel, resetar MFA e excluir sempre foram
+    # exclusivos do TI), mas isso incluía setores sem fila como Compras, onde
+    # a tela não tinha nenhuma ação disponível (nem a de foto, restrita ao
+    # Marketing). Agora a tela inteira é exclusiva de TI/Marketing.
     perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        assert c.get("/admin/usuarios").status_code == 403
+
+
+def test_usuarios_admin_do_marketing_ve_botao_de_foto():
+    # ADMIN do Marketing (não só o OPERADOR) segue podendo enviar/trocar foto
+    # — só setores fora do Marketing perderam o botão em 2026-08-17.
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Marketing")
     with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
         r = c.get("/admin/usuarios")
     assert r.status_code == 200
-    assert "Nova conta" not in r.text
-    assert 'action="/admin/usuarios/u1/papel"' not in r.text
-    assert 'action="/admin/usuarios/u1/reset-mfa"' not in r.text
-    assert "Excluir conta" not in r.text
     assert 'action="/admin/usuarios/u1/avatar"' in r.text
 
 
@@ -760,9 +789,26 @@ _PNG_3X5 = bytes.fromhex(
 )
 
 
-def test_atualizar_avatar_usuario_admin_de_outro_setor(monkeypatch):
-    # ADMIN do RH (não-TI) pode trocar o avatar de OUTRO usuário (u1, que na
-    # fixture do FakeAdmin é do RH) — pedido do usuário, 2026-07-23.
+def test_atualizar_avatar_usuario_admin_de_outro_setor_recebe_403():
+    # ADMIN do RH (não-TI, não-Marketing) NÃO pode mais trocar o avatar de
+    # OUTRO usuário — restrito ao Marketing em 2026-08-17 (pedido do usuário;
+    # antes, 2026-07-23, qualquer ADMIN de setor entrava, inclusive setores
+    # sem fila como Compras, onde o recurso não fazia sentido nenhum).
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/admin/usuarios/u1/avatar",
+            files={"arquivo": ("foto.png", _PNG_3X5, "image/png")},
+            headers={"X-CSRF-Token": t},
+            follow_redirects=False,
+        )
+    assert r.status_code == 403
+
+
+def test_atualizar_avatar_usuario_admin_do_marketing(monkeypatch):
+    # ADMIN do Marketing (não-TI) pode trocar o avatar de OUTRO usuário (u1)
+    # — o público restante depois da restrição de 2026-08-17.
     import app.routes.admin as admin_mod
 
     chamadas = []
@@ -776,7 +822,7 @@ def test_atualizar_avatar_usuario_admin_de_outro_setor(monkeypatch):
     # explicitamente no singleton cacheado por `get_settings()`.
     monkeypatch.setattr(admin_mod.get_settings(), "supabase_service_role_key", "fake-service-role")
 
-    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Marketing")
     repo = FakeAdmin(is_ti=False)
     with admin_client(repo, user=_user(role="ADMIN"), perfil=perfil) as c:
         t = _csrf(c)

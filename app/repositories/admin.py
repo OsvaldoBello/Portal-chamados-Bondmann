@@ -669,13 +669,14 @@ class AdminRepo:
             return row["role"] if row else None
 
     async def atualizar_avatar(self, claims: dict, user_id: str, *, avatar_path: str) -> None:
-        """Grava o ``avatar_path`` de OUTRO usuário — TI, qualquer ADMIN de setor
-        ou o OPERADOR do Marketing podem (policy ``perfis_update_avatar_staff``,
-        migration 0052; o TI segue coberto por ``perfis_admin_all``, que também
-        libera as demais colunas). Para os papéis não-TI, o trigger
-        ``enforce_perfil_self_so_avatar`` (migration 0033) segue vetando
-        qualquer coluna além de ``avatar_path``/``updated_at`` — é a única coisa
-        que dá pra alterar no perfil de outra pessoa por essa via."""
+        """Grava o ``avatar_path`` de OUTRO usuário — TI ou Marketing (ADMIN/
+        OPERADOR do próprio setor) podem (policy ``perfis_update_avatar_staff``,
+        migration 0052, restrita ao Marketing pela 0084; o TI segue coberto por
+        ``perfis_admin_all``, que também libera as demais colunas). Para os
+        papéis não-TI, o trigger ``enforce_perfil_self_so_avatar`` (migration
+        0033) segue vetando qualquer coluna além de ``avatar_path``/
+        ``updated_at`` — é a única coisa que dá pra alterar no perfil de outra
+        pessoa por essa via."""
         async with rls_connection(claims) as conn:
             await conn.execute(
                 "UPDATE perfis SET avatar_path = $2 WHERE id = $1::uuid",
