@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import mimetypes
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -88,13 +89,21 @@ async def lifespan(app: FastAPI):
     # estiver desligada; nunca bloqueia o boot.
     reconciliacao_task = ia_triagem.iniciar_reconciliacao(settings)
 
+    # Mesma rede de segurança para o intake de chamados via WhatsApp (as
+    # conversas também são processadas por task em memória). `None` se o
+    # intake estiver desligado.
+    from app.ia import whatsapp_intake
+
+    intake_task = whatsapp_intake.iniciar_reconciliacao(settings)
+
     try:
         yield
     finally:
-        if reconciliacao_task is not None:
-            reconciliacao_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await reconciliacao_task
+        for task in (reconciliacao_task, intake_task):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         await close_pool()
         await close_storage()
 
@@ -127,6 +136,22 @@ def create_app() -> FastAPI:
     app.add_middleware(GZipMiddleware, minimum_size=500)
 
     # Estáticos
+    #
+    # Bug de download (RH, 2026-08-18): os modelos de formulário .docx eram
+    # servidos como ``text/plain`` e o navegador renderizava o binário OOXML
+    # como texto (lixo na tela) em vez de baixar. Causa: a imagem
+    # ``python:3.12-slim`` não traz ``/etc/mime.types`` e o ``mimetypes`` do
+    # Python não conhece os formatos Office por padrão — ``guess_type('.docx')``
+    # volta ``None`` e o ``FileResponse`` do Starlette cai para ``text/plain``.
+    # (O ``.pdf`` do termo de aceite funcionava porque pdf está no mapa embutido.)
+    # Registramos os tipos OOXML explicitamente para o StaticFiles servi-los com
+    # o Content-Type correto — aí o navegador baixa o arquivo normalmente.
+    for _ext, _mime in (
+        (".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        (".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        (".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+    ):
+        mimetypes.add_type(_mime, _ext)
     _STATIC_DIR.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
