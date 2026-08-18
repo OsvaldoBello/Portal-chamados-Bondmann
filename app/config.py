@@ -107,6 +107,39 @@ class Settings(BaseSettings):
     # App Secret do app da Meta, usado para validar a assinatura HMAC
     # (header X-Hub-Signature-256) de cada POST recebido no webhook.
     whatsapp_app_secret: str = Field(default="")
+    # Token permanente do System User (Business Settings → System Users),
+    # usado para ENVIAR mensagens via Graph API. Vazio = envio desligado.
+    whatsapp_access_token: str = Field(default="")
+    # ID do número de telefone registrado (WhatsApp → API Setup), destino das
+    # chamadas POST /{id}/messages. Obrigatório para envio.
+    whatsapp_phone_number_id: str = Field(default="")
+    # Versão da Graph API usada nas chamadas de envio.
+    whatsapp_api_version: str = Field(default="v21.0")
+
+    # --- Intake de chamado via WhatsApp (IA como intérprete, 2026-08-18) ---
+    # Kill switch geral: false = webhook continua só logando, nenhuma
+    # conversa/chamado é criado (mesmo padrão de `ia_triagem_ativa`).
+    whatsapp_intake_ativo: bool = Field(default=False)
+    # CSV de nomes de departamentos habilitados. Vazio = nenhum. V1 cobre só
+    # departamentos "simples" (sem formulário dinâmico do Químico, sem regra
+    # de prazo do Marketing) — rollout faseado, 1 departamento piloto antes
+    # de expandir (mesmo padrão de `ia_triagem_departamentos`).
+    whatsapp_intake_departamentos: str = Field(default="")
+    # Timeout por chamada ao modelo (C6, mesmo valor unificado da triagem).
+    whatsapp_intake_timeout_s: float = Field(default=30.0)
+    # Teto de rodadas de pergunta de esclarecimento antes de encerrar sem
+    # chamado (evita loop infinito de "não entendi, repete").
+    whatsapp_intake_max_rodadas: int = Field(default=4)
+    # Modelo usado na extração. Reaproveita `ia_triagem_api_key`/
+    # `ia_triagem_base_url` (mesmo precedente de `ia_resumo_ativo`) — só o
+    # modelo é próprio; custo fica segregado via `ia_whatsapp_intake.custo_usd`.
+    whatsapp_intake_model: str = Field(default="gpt-5.4-mini")
+    # Teto de bytes ao baixar mídia (foto) do Graph API antes de processar.
+    whatsapp_intake_midia_max_bytes: int = Field(default=8 * 1024 * 1024)
+    # Intervalo (segundos) da varredura de reconciliação de conversas
+    # travadas por restart/redeploy — mesma rede de segurança da triagem
+    # (`ia_triagem_reconciliacao_intervalo_s`). `<= 0` desliga a varredura.
+    whatsapp_intake_reconciliacao_intervalo_s: float = Field(default=60.0)
 
     # --- IA (triagem de chamados + resumo do Químico) ---
     # Frente de IA de triagem (plano_md_mestre_IA.md, Seção 2.4): TODAS as flags
@@ -254,6 +287,11 @@ class Settings(BaseSettings):
     def ia_triagem_departamentos_lista(self) -> list[str]:
         """Nomes de departamentos com triagem ativa (CSV → lista, sem vazios)."""
         return [d.strip() for d in self.ia_triagem_departamentos.split(",") if d.strip()]
+
+    @property
+    def whatsapp_intake_departamentos_lista(self) -> list[str]:
+        """Nomes de departamentos com intake WhatsApp ativo (CSV → lista, sem vazios)."""
+        return [d.strip() for d in self.whatsapp_intake_departamentos.split(",") if d.strip()]
 
     @property
     def ia_triagem_perguntas_departamentos_lista(self) -> list[str]:

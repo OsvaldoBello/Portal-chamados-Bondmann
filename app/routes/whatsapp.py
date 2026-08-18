@@ -102,6 +102,15 @@ async def whatsapp_receive(request: Request):
     tipo_evento, ids = _metadados_evento(payload)
     log.info("WhatsApp webhook: evento=%s ids=%s", tipo_evento, ids)
 
+    # Intake de chamado (kill switch `WHATSAPP_INTAKE_ATIVO`, default off):
+    # grava as mensagens e agenda o processamento pesado numa task — o corpo
+    # da mensagem nunca é logado aqui (PII). Nunca lança: a Meta precisa do
+    # 200 rápido, senão reentrega o evento.
+    if settings.whatsapp_intake_ativo:
+        from app.ia import whatsapp_intake
+
+        await whatsapp_intake.processar_mensagens_whatsapp(payload)
+
     return JSONResponse({"success": True})
 
 

@@ -71,13 +71,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from app.config import Settings, get_settings
 from app.db import admin_connection
 from app.domain.formularios_quimico import rotular
 from app.ia import anexos_contexto, cliente, contexto_quimico
+from app.ia.catalogo_prompt import linha_catalogo, nome_categoria
+from app.ia.chamada_estruturada import chamar_modelo_estruturado
 from app.ia.schemas import SaidaPasseB, SaidaTriagem
 from app.notification import notificar_nova_mensagem_email
 from app.repositories import ia_busca
@@ -168,22 +169,8 @@ def _conteudo_usuario(linhas: list[str], anexos: anexos_contexto.ResultadoAnexos
     return [{"type": "text", "text": texto}, *anexos.blocos_imagem]
 
 
-def _nome_categoria(item: Any) -> str:
-    """Nome de uma entrada do catálogo — aceita ``str`` (formato histórico) ou
-    ``dict`` com ``nome``/``subcategorias`` (formato da F8)."""
-    return str(item.get("nome") or "") if isinstance(item, dict) else str(item)
-
-
-def _linha_catalogo(item: Any) -> str:
-    """Uma categoria do catálogo, com as subcategorias ativas quando houver —
-    o modelo só pode escolher destino que apareça aqui."""
-    nome = _nome_categoria(item)
-    subs = [
-        str(s.get("nome") or "") if isinstance(s, dict) else str(s)
-        for s in (item.get("subcategorias") or [] if isinstance(item, dict) else [])
-    ]
-    subs = [s for s in subs if s]
-    return f"- {nome}" + (f" → subcategorias: {'; '.join(subs)}" if subs else "")
+_nome_categoria = nome_categoria
+_linha_catalogo = linha_catalogo
 
 
 def _linha_catalogo_do_banco(linha: dict[str, Any]) -> dict[str, Any]:
@@ -827,32 +814,19 @@ async def _chamar_modelo[SaidaT: BaseModel](
     silencioso direto (a triagem nunca segura a abertura). ``model``/``schema``
     plugáveis para o Passe B do Químico (F4): mesmo motor, contrato JSON
     diferente (:class:`app.ia.schemas.SaidaPasseB`) e modelo opcionalmente mais
-    forte (``IA_TRIAGEM_MODEL_PASSE_B``)."""
-    modelo_usado = model or settings.ia_triagem_model
-    tokens_in: int | None = None
-    tokens_out: int | None = None
-    erro: str | None = None
-    for _tentativa in (1, 2):
-        try:
-            resposta = await cliente.completar_chat(
-                mensagens=mensagens,
-                model=modelo_usado,
-                api_key=settings.ia_triagem_api_key,
-                base_url=settings.ia_triagem_base_url,
-                timeout_s=settings.ia_triagem_timeout_s,
-                max_tokens=_MAX_TOKENS_SAIDA,
-                json_mode=True,
-            )
-        except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
-            return None, f"provedor: {exc}", tokens_in, tokens_out
-        tokens_in = _soma_tokens(tokens_in, resposta.tokens_entrada)
-        tokens_out = _soma_tokens(tokens_out, resposta.tokens_saida)
-        try:
-            return schema.model_validate_json(resposta.conteudo), None, tokens_in, tokens_out
-        except ValidationError as exc:
-            erro = f"json_invalido: {exc.error_count()} erro(s) de schema"
-            continue
-    return None, erro, tokens_in, tokens_out
+    forte (``IA_TRIAGEM_MODEL_PASSE_B``). Wrapper fino sobre
+    :func:`app.ia.chamada_estruturada.chamar_modelo_estruturado`, injetando os
+    settings de triagem — extraído para ser reaproveitado por outros fluxos
+    (ex.: intake de chamado via WhatsApp) sem duplicar a lógica de retry."""
+    return await chamar_modelo_estruturado(
+        mensagens,
+        model=model or settings.ia_triagem_model,
+        api_key=settings.ia_triagem_api_key,
+        base_url=settings.ia_triagem_base_url,
+        timeout_s=settings.ia_triagem_timeout_s,
+        max_tokens=_MAX_TOKENS_SAIDA,
+        schema=schema,
+    )
 
 
 # Referências fortes às tasks disparadas (asyncio só guarda referência fraca:

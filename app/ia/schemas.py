@@ -58,6 +58,33 @@ class SaidaTriagem(BaseModel):
     termos_busca: list[str] = Field(default_factory=list, max_length=8)
 
 
+class SaidaWhatsAppIntake(BaseModel):
+    """Saída da extração de intake de chamado via WhatsApp.
+
+    Dado o histórico da conversa (+ imagem opcional) e o catálogo de
+    departamento→categoria→subcategoria injetado no prompt, decide se há
+    informação suficiente para abrir o chamado. Campos extras são ignorados
+    (tolerância a divagação); campos obrigatórios ausentes invalidam o JSON.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    # Há dado suficiente (título, descrição, departamento, categoria,
+    # subcategoria) para abrir o chamado sem voltar a perguntar?
+    informacoes_suficientes: bool
+    confianca: Literal["ALTA", "MEDIA", "BAIXA"] = "MEDIA"
+    # Obrigatória quando informacoes_suficientes=False (validado em código,
+    # não pelo schema — o modelo às vezes omite mesmo quando deveria vir).
+    pergunta_esclarecimento: str | None = None
+    titulo: str | None = None
+    descricao: str | None = None
+    # Nomes LITERAIS do catálogo injetado no prompt — qualquer nome fora do
+    # catálogo é tratado como alucinação pelo chamador (nunca vira INSERT).
+    departamento: str | None = None
+    categoria: str | None = None
+    subcategoria: str | None = None
+
+
 class SaidaPasseB(BaseModel):
     """Saída do Passe B do Químico (F4) — pré-análise técnica com a base sigilosa.
 
