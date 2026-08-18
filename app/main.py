@@ -89,21 +89,13 @@ async def lifespan(app: FastAPI):
     # estiver desligada; nunca bloqueia o boot.
     reconciliacao_task = ia_triagem.iniciar_reconciliacao(settings)
 
-    # Mesma rede de segurança para o intake de chamados via WhatsApp (as
-    # conversas também são processadas por task em memória). `None` se o
-    # intake estiver desligado.
-    from app.ia import whatsapp_intake
-
-    intake_task = whatsapp_intake.iniciar_reconciliacao(settings)
-
     try:
         yield
     finally:
-        for task in (reconciliacao_task, intake_task):
-            if task is not None:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+        if reconciliacao_task is not None:
+            reconciliacao_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reconciliacao_task
         await close_pool()
         await close_storage()
 
