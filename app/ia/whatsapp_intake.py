@@ -36,13 +36,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import time
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from app.config import Settings, get_settings
 from app.db import admin_connection
+from app.domain.periodo import TZ_BR
 from app.ia import anexos_contexto, cliente
 from app.ia.catalogo_prompt import linha_catalogo
 from app.ia.chamada_estruturada import chamar_modelo_estruturado
@@ -317,19 +320,38 @@ async def _responder(telefone: str, texto: str) -> None:
 # --------------------------------------------------------------------------
 
 
+# Frases de transição para quando há 2+ perguntas de investigação — escolhidas
+# aqui (não pelo modelo) para o formato nunca depender da boa vontade do
+# modelo e pra não repetir sempre a mesma introdução (achado da sessão
+# 2026-08-19: o modelo tendia a reusar "Oi! Já anotei que..." toda rodada, o
+# que soa robótico). Nenhuma tem saudação nem reintroduz o bot — só a rodada 1
+# faz isso, e essa lista não entra nela (pergunta única não passa por aqui).
+_LEAD_INS_MULTIPLAS_PERGUNTAS = (
+    "Pra eu abrir certinho, me diz:",
+    "Só mais alguns detalhes pra eu direcionar certo:",
+    "Me ajuda com mais uma coisinha:",
+    "Pra te atender melhor, preciso saber:",
+)
+
+
 def texto_das_perguntas(perguntas: list[str]) -> str:
     """Junta as perguntas do modelo numa única mensagem de WhatsApp.
 
-    Uma pergunta vai crua (mensagem de apresentação da primeira rodada cai
-    aqui). Duas ou três são numeradas para a pessoa conseguir responder item a
-    item — o prompt já pede numeração, mas quem garante o formato é isto, não a
-    boa vontade do modelo."""
+    Uma pergunta vai crua — cobre tanto a mensagem de apresentação da primeira
+    rodada (que o prompt instrui a mandar como item único) quanto um
+    esclarecimento pontual. Duas ou três ganham uma transição curta e
+    numeração com quebra de linha real, pra pessoa responder item a item —
+    quem garante esse formato é o código, não a redação do modelo (que já
+    numerou sozinho, sem quebra de linha, ou embutiu a transição dentro da
+    primeira pergunta como texto corrido)."""
     limpas = [p.strip() for p in perguntas if p and p.strip()]
     if not limpas:
         return ""
     if len(limpas) == 1:
         return limpas[0]
-    return "\n".join(f"{i}. {p}" for i, p in enumerate(limpas, 1))
+    lead_in = random.choice(_LEAD_INS_MULTIPLAS_PERGUNTAS)
+    itens = "\n".join(f"{i}. {p}" for i, p in enumerate(limpas, 1))
+    return f"{lead_in}\n{itens}"
 
 
 def decidir_acao_intake(
@@ -382,6 +404,21 @@ def _link_chamado(chamado_id: str, settings: Settings) -> str:
     """URL pública de acompanhamento do chamado (mesma rota que o portal usa
     no redirect pós-abertura: ``/portal/chamados/{id}``)."""
     return f"{settings.portal_base_url.rstrip('/')}/portal/chamados/{chamado_id}"
+
+
+# Emoji da confirmação de chamado criado — variado (2026-08-19) pra não usar
+# sempre o mesmo em toda conversa; texto fixo em Python não tem como "decidir"
+# sozinho, então a escolha aleatória mora aqui.
+_EMOJIS_CONFIRMACAO = ("🙂", "😊", "👍", "✅", "😉")
+
+
+def _texto_confirmacao(codigo: str, departamento_nome: str, chamado_id: str, settings: Settings) -> str:
+    emoji = random.choice(_EMOJIS_CONFIRMACAO)
+    return (
+        f"Prontinho! Abri o chamado {codigo} para você {emoji}\n"
+        f"A equipe de {departamento_nome} já foi avisada e vai te atender.\n\n"
+        f"Acompanhe por aqui: {_link_chamado(chamado_id, settings)}"
+    )
 
 
 def _casar(nome: str | None, itens: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -437,6 +474,23 @@ async def _setores_validos(claims: dict[str, str]) -> list[str]:
     ]
 
 
+def _saudacao_horario(agora: datetime | None = None) -> str:
+    """"Bom dia"/"Boa tarde"/"Boa noite" a partir do relógio real de Brasília.
+
+    O modelo não tem acesso a relógio — pedir pra ele "verificar o horário"
+    (decisão do gestor, 2026-08-19) só produziria hora inventada. A conversão
+    é feita aqui e injetada pronta em :func:`montar_mensagens`; o prompt
+    proíbe o modelo de calcular sozinho. Faixas: 5h–11h59 manhã, 12h–17h59
+    tarde, 18h–4h59 noite (mesmo corte de senso comum usado no cumprimento de
+    telefone/recepção no Brasil)."""
+    hora = (agora or datetime.now(TZ_BR)).hour
+    if 5 <= hora < 12:
+        return "Bom dia"
+    if 12 <= hora < 18:
+        return "Boa tarde"
+    return "Boa noite"
+
+
 def montar_mensagens(
     conversa: list[dict[str, Any]],
     catalogo: list[dict[str, Any]],
@@ -447,7 +501,33 @@ def montar_mensagens(
 
     O catálogo e a lista de setores entram no turno do usuário porque mudam por
     departamento/público; o prompt (system) é fixo e versionado."""
-    linhas = ["## Conversa no WhatsApp"]
+    # Calculado aqui, não deduzido pelo modelo: achado da sessão 2026-08-19,
+    # onde o gpt-5.4-mini (pedido pra "ver se já tem linha [assistente] no
+    # histórico") continuou repetindo a apresentação idêntica rodada após
+    # rodada mesmo com a regra escrita no prompt — inferir estado da conversa
+    # a partir do transcript é pedir demais de um modelo pequeno. Um fato
+    # pronto, calculado em Python, é muito mais confiável do que uma dedução.
+    ja_apresentou = any(item.get("papel") != "usuario" for item in conversa)
+    linhas = [
+        "## Saudação atual (use EXATAMENTE esta na mensagem de apresentação — "
+        "não calcule você mesmo, o relógio é este)",
+        _saudacao_horario(),
+        "",
+        "## Estado da conversa (fato, não precisa deduzir do histórico)",
+        (
+            "Você JÁ mandou a mensagem de apresentação nesta conversa (está no "
+            "histórico abaixo). Está PROIBIDO repetir a apresentação, a "
+            "saudação, ou qualquer variação dela nesta resposta — mesmo que "
+            "pareça a opção mais segura. Responda especificamente à ÚLTIMA "
+            "linha [usuário] do histórico, seguindo a seção 'Nas mensagens "
+            "seguintes' do prompt."
+            if ja_apresentou
+            else "Esta é a primeira mensagem desta conversa — siga a seção "
+            "'Primeira mensagem da conversa' do prompt."
+        ),
+        "",
+        "## Conversa no WhatsApp",
+    ]
     for item in conversa:
         papel = "usuário" if item.get("papel") == "usuario" else "assistente"
         conteudo = str(item.get("conteudo") or "").strip()
@@ -689,9 +769,7 @@ async def _criar_chamado_da_conversa(
     await _anexar_imagem(conversa, perfil, claims, chamado_id, repo, settings)
     await _finalizar(
         conversa_id, telefone, rodada, "CHAMADO_CRIADO",
-        f"Prontinho! Abri o chamado {novo['codigo']} para você 🙂\n"
-        f"A equipe de {departamento['nome']} já foi avisada e vai te atender.\n\n"
-        f"Acompanhe por aqui: {_link_chamado(chamado_id, settings)}",
+        _texto_confirmacao(str(novo["codigo"]), str(departamento["nome"]), chamado_id, settings),
         settings, resultado, tokens_in, tokens_out, duracao_ms,
         novo_status="CONCLUIDA", chamado_id=chamado_id,
     )

@@ -1,9 +1,20 @@
 """Decisão do intake WhatsApp (função pura) e extração de mensagens do webhook."""
 
+from datetime import datetime
+
+import pytest
+
+from app.config import Settings
+from app.domain.periodo import TZ_BR
 from app.ia.schemas import SaidaWhatsAppIntake
 from app.ia.whatsapp_intake import (
+    _EMOJIS_CONFIRMACAO,
+    _LEAD_INS_MULTIPLAS_PERGUNTAS,
+    _saudacao_horario,
+    _texto_confirmacao,
     decidir_acao_intake,
     extrair_mensagens,
+    montar_mensagens,
     texto_das_perguntas,
 )
 
@@ -84,14 +95,81 @@ def test_uma_pergunta_vai_crua():
 
 
 def test_varias_perguntas_sao_numeradas():
+    """A transição de abertura é escolhida pelo código (varia entre rodadas,
+    2026-08-19 — achado da sessão: o modelo sozinho reciclava sempre a mesma
+    frase de recapitulação), então o teste checa a lista numerada, não a
+    string inteira."""
     texto = texto_das_perguntas(["Qual equipamento?", "Desde quando?", "Já tentou algo?"])
-    assert texto == "1. Qual equipamento?\n2. Desde quando?\n3. Já tentou algo?"
+    lead_in, resto = texto.split("\n", 1)
+    assert lead_in in _LEAD_INS_MULTIPLAS_PERGUNTAS
+    assert resto == "1. Qual equipamento?\n2. Desde quando?\n3. Já tentou algo?"
+
+
+def test_lead_in_nunca_aparece_com_pergunta_unica():
+    """Só a rodada de apresentação (e um esclarecimento pontual) usa item
+    único — não pode ganhar a introdução das perguntas múltiplas."""
+    texto = texto_das_perguntas(["De qual setor você é?"])
+    assert texto not in _LEAD_INS_MULTIPLAS_PERGUNTAS
+    assert "\n" not in texto
 
 
 def test_vazios_sao_descartados():
     assert texto_das_perguntas(["  ", "Qual equipamento?", ""]) == "Qual equipamento?"
     assert texto_das_perguntas([]) == ""
     assert texto_das_perguntas(["   "]) == ""
+
+
+# --- _saudacao_horario -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "hora,esperado",
+    [
+        (4, "Boa noite"),
+        (5, "Bom dia"),
+        (11, "Bom dia"),
+        (12, "Boa tarde"),
+        (17, "Boa tarde"),
+        (18, "Boa noite"),
+        (23, "Boa noite"),
+        (0, "Boa noite"),
+    ],
+)
+def test_saudacao_por_faixa_de_horario(hora, esperado):
+    """Fronteiras do corte de senso comum (5h/12h/18h) — o modelo não tem
+    relógio, então é essencial que o código acerte a faixa (2026-08-19)."""
+    assert _saudacao_horario(datetime(2026, 8, 19, hora, 0, tzinfo=TZ_BR)) == esperado
+
+
+def test_montar_mensagens_injeta_saudacao_no_turno_do_usuario():
+    """O modelo não recebe relógio — a saudação certa vem pronta no prompt,
+    calculada em Python, não "verificada" pelo modelo."""
+    msgs = montar_mensagens([], catalogo=[], setores=["TI"])
+    conteudo = msgs[1]["content"]
+    assert "## Saudação atual" in conteudo
+    assert any(s in conteudo for s in ("Bom dia", "Boa tarde", "Boa noite"))
+
+
+# --- _texto_confirmacao -----------------------------------------------
+
+
+def test_confirmacao_varia_o_emoji():
+    """Achado da sessão 2026-08-19: o modelo repetia sempre o mesmo emoji na
+    confirmação — aqui o texto é fixo em Python, então quem varia é o código."""
+    settings = Settings(
+        session_secret="segredo-real-de-teste-nao-default",
+        csrf_secret="outro-segredo-real-de-teste-nao-default",
+    )
+    vistos = {
+        _texto_confirmacao("BOND-2026-00999", "TI", "chamado-uuid", settings)
+        for _ in range(40)
+    }
+    # 40 sorteios entre 5 opções: praticamente certo de ver mais de um emoji.
+    assert len(vistos) > 1
+    for texto in vistos:
+        assert "BOND-2026-00999" in texto
+        assert "/portal/chamados/chamado-uuid" in texto
+        assert any(e in texto for e in _EMOJIS_CONFIRMACAO)
 
 
 # --- extrair_mensagens -----------------------------------------------------
