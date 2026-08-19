@@ -10,6 +10,7 @@ from app.ia.schemas import SaidaWhatsAppIntake
 from app.ia.whatsapp_intake import (
     _EMOJIS_CONFIRMACAO,
     _LEAD_INS_MULTIPLAS_PERGUNTAS,
+    _pede_novo_chamado,
     _saudacao_horario,
     _texto_confirmacao,
     decidir_acao_intake,
@@ -211,6 +212,7 @@ def test_extrai_texto():
             "tipo": "text",
             "corpo": "olá",
             "midia_id": None,
+            "midia_nome": None,
         }
     ]
 
@@ -227,6 +229,26 @@ def test_extrai_imagem_com_legenda():
     (msg,) = extrair_mensagens(payload)
     assert msg["midia_id"] == "midia-123"
     assert msg["corpo"] == "olha o erro"
+    assert msg["midia_nome"] is None  # Meta não manda filename pra foto
+
+
+def test_extrai_documento_com_nome_e_legenda():
+    payload = _payload(
+        {
+            "id": "wamid.E",
+            "from": "5551999998888",
+            "type": "document",
+            "document": {
+                "id": "midia-456",
+                "filename": "orcamento.pdf",
+                "caption": "segue o orçamento",
+            },
+        }
+    )
+    (msg,) = extrair_mensagens(payload)
+    assert msg["midia_id"] == "midia-456"
+    assert msg["midia_nome"] == "orcamento.pdf"
+    assert msg["corpo"] == "segue o orçamento"
 
 
 def test_ignora_statuses_e_payload_vazio():
@@ -254,3 +276,29 @@ def test_tipo_sem_suporte_entra_com_corpo_vazio():
     assert msg["tipo"] == "audio"
     assert msg["corpo"] == ""
     assert msg["midia_id"] is None
+
+
+# --- Legenda pedindo chamado novo (bypass do anexo pós-criação) ------------
+
+
+@pytest.mark.parametrize(
+    "legenda",
+    [
+        "novo chamado: o ar-condicionado da sala 3 tá vazando",
+        "Chamado Novo, não tem nada a ver com o outro",
+        "isso aqui é OUTRO CHAMADO",
+        "outro problema: a impressora pegou fogo",
+        "quero abrir outro chamado pra isso",
+        "  novo chamado  ",
+    ],
+)
+def test_pede_novo_chamado_detecta_variacoes(legenda):
+    assert _pede_novo_chamado(legenda) is True
+
+
+@pytest.mark.parametrize(
+    "legenda",
+    ["", "segue a nota fiscal", "olha essa foto", "chamado", "novo"],
+)
+def test_pede_novo_chamado_nao_dispara_por_engano(legenda):
+    assert _pede_novo_chamado(legenda) is False

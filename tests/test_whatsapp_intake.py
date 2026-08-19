@@ -9,6 +9,7 @@ e destino alucinado pelo modelo nunca vira INSERT.
 import json
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
@@ -17,6 +18,8 @@ from app.config import Settings
 from app.ia import whatsapp_intake
 from app.ia.schemas import SaidaWhatsAppIntake
 from app.main import app
+from app.security.uploads import AnexoValidado, UploadInvalido
+from app.services.portal import PortalService
 
 _TELEFONE = "5551999998888"
 _PERFIL = {
@@ -38,6 +41,19 @@ _CATALOGO = [
                 "id": "cat-uuid",
                 "nome": "Equipamentos",
                 "subcategorias": [{"id": "sub-uuid", "nome": "Impressora"}],
+            }
+        ],
+    }
+]
+_CATALOGO_MARKETING = [
+    {
+        "id": "dep-mkt-uuid",
+        "nome": "Marketing",
+        "categorias": [
+            {
+                "id": "cat-mkt-uuid",
+                "nome": "Peça gráfica",
+                "subcategorias": [{"id": "sub-mkt-uuid", "nome": "Banner"}],
             }
         ],
     }
@@ -87,6 +103,32 @@ def _payload(wamid: str = "wamid.A", corpo: str = "a impressora parou") -> dict:
     }
 
 
+def _payload_imagem(wamid: str = "wamid.IMG", midia_id: str = "midia-1", caption: str = "") -> dict:
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "1",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "messages": [
+                                {
+                                    "id": wamid,
+                                    "from": _TELEFONE,
+                                    "type": "image",
+                                    "image": {"id": midia_id, "caption": caption},
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
 class FakeConn:
     """Conexão administrativa scriptada pelos SQLs que o intake usa."""
 
@@ -104,6 +146,9 @@ class FakeConn:
         self.auditorias: list[tuple] = []
         self.executes: list[tuple[str, tuple]] = []
         self.rodada = 0
+        # Chamado recente pra `_chamado_recente_para_anexo` devolver — `None`
+        # (default) = sem chamado dentro da janela, mídia abre conversa nova.
+        self.chamado_recente: dict | None = None
 
     async def fetchval(self, sql: str, *args):
         if "INSERT INTO whatsapp_mensagens_recebidas" in sql:
@@ -130,6 +175,8 @@ class FakeConn:
             }
         if "FROM perfis p" in sql:
             return dict(_PERFIL)
+        if "FROM whatsapp_conversas wc" in sql:
+            return dict(self.chamado_recente) if self.chamado_recente else None
         raise AssertionError(f"fetchrow inesperado: {sql}")
 
     async def fetch(self, sql: str, *args):
@@ -209,7 +256,7 @@ def ambiente(
         ),
         patch.object(whatsapp_intake, "_responder", responder),
         patch.object(whatsapp_intake, "_imagem_da_conversa", AsyncMock(return_value=None)),
-        patch.object(whatsapp_intake, "_anexar_imagem", AsyncMock()),
+        patch.object(whatsapp_intake, "_anexar_midia_da_conversa", AsyncMock()),
         patch.object(whatsapp_intake, "_pos_criacao", AsyncMock()),
         patch("app.repositories.chamados.ChamadosRepo", return_value=repo),
     ]
@@ -420,6 +467,114 @@ async def test_prioridade_ausente_degrada_para_media():
         assert amb.criar.await_args.kwargs["prioridade"] == "MEDIA"
 
 
+# --- Fluxo por demanda do Marketing -----------------------------------------
+
+
+def _saida_marketing(**overrides) -> SaidaWhatsAppIntake:
+    base = dict(
+        informacoes_suficientes=True,
+        confianca="ALTA",
+        titulo="Banner para campanha",
+        descricao="Precisa de um banner novo para a campanha de setembro.",
+        setor="Produção",
+        departamento="Marketing",
+        categoria="Peça gráfica",
+        subcategoria="Banner",
+        prioridade="URGENTE",  # o Marketing ignora isso — só prova que é sobrescrito
+    )
+    base.update(overrides)
+    return SaidaWhatsAppIntake(**base)
+
+
+async def test_marketing_com_data_valida_cria_chamado_com_prazo_e_prioridade_media():
+    conn = FakeConn()
+    data_valida = (PortalService.data_entrega_min() + timedelta(days=7)).isoformat()
+    saida = _saida_marketing(data_entrega=data_valida)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Marketing"),
+        saida=saida, catalogo=_CATALOGO_MARKETING,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        kwargs = amb.criar.await_args.kwargs
+        assert kwargs["departamento_id"] == "dep-mkt-uuid"
+        assert kwargs["data_entrega"].isoformat() == data_valida
+        assert kwargs["sem_prazo"] is False
+        # Marketing não usa impacto × urgência do modelo — prioridade fixa em MEDIA.
+        assert kwargs["prioridade"] == "MEDIA"
+        assert conn.auditorias[0][2] == "CHAMADO_CRIADO"
+
+
+async def test_marketing_sem_prazo_marca_prioridade_baixa():
+    conn = FakeConn()
+    saida = _saida_marketing(sem_prazo=True, data_entrega=None)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Marketing"),
+        saida=saida, catalogo=_CATALOGO_MARKETING,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        kwargs = amb.criar.await_args.kwargs
+        assert kwargs["data_entrega"] is None
+        assert kwargs["sem_prazo"] is True
+        assert kwargs["prioridade"] == "BAIXA"
+
+
+async def test_marketing_sem_data_nem_sem_prazo_pergunta_de_novo_em_vez_de_criar():
+    """Modelo disse `informacoes_suficientes: true` sem resolver o prazo do
+    Marketing — o código não confia nisso e devolve a mesma pergunta que o
+    formulário do Portal faria, sem criar o chamado."""
+    conn = FakeConn()
+    saida = _saida_marketing(data_entrega=None, sem_prazo=False)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Marketing"),
+        saida=saida, catalogo=_CATALOGO_MARKETING,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "PERGUNTA"
+        resposta = amb.responder.await_args.args[1]
+        assert "data de entrega" in resposta.lower()
+
+
+async def test_marketing_data_antes_do_minimo_pergunta_de_novo():
+    conn = FakeConn()
+    data_cedo_demais = PortalService.data_entrega_min().isoformat()
+    # `data_entrega_min()` já é o mínimo aceito; um dia antes dele é cedo demais.
+    from datetime import date as _date
+
+    cedo = (_date.fromisoformat(data_cedo_demais) - timedelta(days=1)).isoformat()
+    saida = _saida_marketing(data_entrega=cedo)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Marketing"),
+        saida=saida, catalogo=_CATALOGO_MARKETING,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "PERGUNTA"
+        assert "mínimo" in amb.responder.await_args.args[1].lower()
+
+
+async def test_marketing_no_teto_de_rodadas_sem_prazo_resolvido_encerra():
+    """Mesma trava de `decidir_acao_intake` para o resto da conversa: não fica
+    perguntando a data para sempre além do teto de rodadas."""
+    conn = FakeConn()
+    conn.rodada = 3  # settings usa max_rodadas=4 → esta rodada já é a última
+    saida = _saida_marketing(data_entrega=None, sem_prazo=False)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Marketing"),
+        saida=saida, catalogo=_CATALOGO_MARKETING,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "ENCERRADO_SEM_CHAMADO"
+
+
 async def test_informacao_insuficiente_pergunta_e_mantem_conversa_aberta():
     conn = FakeConn()
     saida = SaidaWhatsAppIntake(
@@ -566,3 +721,164 @@ async def test_sem_departamento_habilitado_kill_switch_efetivo():
 async def test_sem_chave_de_ia_kill_switch_efetivo():
     settings = _settings(ia_triagem_api_key="")
     assert whatsapp_intake.intake_ativo(settings) is False
+
+
+# --- Anexo pós-criação (foto/documento depois do chamado aberto) -----------
+
+
+_CHAMADO_RECENTE = {"chamado_id": "chamado-uuid", "codigo": "BOND-2026-00999"}
+
+
+async def test_midia_recente_apos_criacao_anexa_direto_sem_reabrir_intake():
+    """Achado do pedido do gestor (2026-08-19): quem esqueceu de mandar a
+    foto/documento no chamado consegue mandar depois, sem reabrir o roteiro
+    do intake do zero — desde que dentro da janela pós-criação."""
+    conn = FakeConn()
+    conn.chamado_recente = _CHAMADO_RECENTE
+    with (
+        ambiente(conn, _settings(), capturar_agendamentos=True) as amb,
+        patch.object(whatsapp_intake, "_anexar_midia_pos_criacao", AsyncMock()) as anexar_pos,
+    ):
+        await whatsapp_intake.processar_mensagens_whatsapp(
+            _payload_imagem(midia_id="midia-1", caption="segue a foto")
+        )
+
+        anexar_pos.assert_called_once()
+        alvo, perfil, msg, telefone, settings_arg = anexar_pos.call_args.args
+        assert alvo == _CHAMADO_RECENTE
+        assert perfil == _PERFIL
+        assert msg["midia_id"] == "midia-1"
+        assert telefone == _TELEFONE
+        assert isinstance(settings_arg, Settings)
+
+    # Nenhuma conversa nova foi criada nem o roteiro de perguntas rodou.
+    assert not any("INSERT INTO whatsapp_conversas" in sql for sql, _ in conn.executes)
+    amb.responder.assert_not_awaited()
+
+
+async def test_midia_com_legenda_de_chamado_novo_nao_anexa_no_anterior():
+    """Achado do gestor (2026-08-19): sem esse bypass, quem manda foto com
+    legenda "novo chamado: ..." pra um problema DIFERENTE do que acabou de
+    abrir teria a mensagem inteira engolida como comentário do chamado
+    anterior. A legenda explícita pula o atalho e abre conversa nova."""
+    conn = FakeConn()
+    conn.chamado_recente = _CHAMADO_RECENTE
+    with (
+        ambiente(conn, _settings(), saida=_saida_completa(), capturar_agendamentos=True) as amb,
+        patch.object(whatsapp_intake, "_anexar_midia_pos_criacao", AsyncMock()) as anexar_pos,
+    ):
+        await whatsapp_intake.processar_mensagens_whatsapp(
+            _payload_imagem(caption="novo chamado: o ar-condicionado da sala 3 tá vazando")
+        )
+
+        anexar_pos.assert_not_called()
+        assert len(amb.agendadas) == 1  # `processar_conversa` da conversa nova
+
+
+async def test_midia_sem_chamado_recente_abre_conversa_normal():
+    """Sem chamado dentro da janela (`chamado_recente=None`, default do
+    fixture): a foto entra no fluxo de sempre, abrindo conversa nova (agenda
+    `processar_conversa`, nunca o atalho de anexo pós-criação)."""
+    conn = FakeConn()
+    with (
+        ambiente(conn, _settings(), saida=_saida_completa(), capturar_agendamentos=True) as amb,
+        patch.object(whatsapp_intake, "_anexar_midia_pos_criacao", AsyncMock()) as anexar_pos,
+    ):
+        await whatsapp_intake.processar_mensagens_whatsapp(_payload_imagem())
+
+        anexar_pos.assert_not_called()
+        assert len(amb.agendadas) == 1  # `processar_conversa` da conversa nova
+
+
+async def test_midia_janela_desligada_nunca_anexa_direto():
+    """`WHATSAPP_INTAKE_ANEXO_JANELA_S=0` desliga o recurso — mesmo com um
+    chamado recente no banco, a mídia sempre abre conversa nova."""
+    conn = FakeConn()
+    conn.chamado_recente = _CHAMADO_RECENTE
+    with (
+        ambiente(
+            conn, _settings(whatsapp_intake_anexo_janela_s=0),
+            saida=_saida_completa(), capturar_agendamentos=True,
+        ) as amb,
+        patch.object(whatsapp_intake, "_anexar_midia_pos_criacao", AsyncMock()) as anexar_pos,
+    ):
+        await whatsapp_intake.processar_mensagens_whatsapp(_payload_imagem())
+
+        anexar_pos.assert_not_called()
+        assert len(amb.agendadas) == 1
+
+
+_ANEXO_VALIDO = AnexoValidado(
+    nome_original="foto.jpg",
+    nome_objeto="uuid123.jpg",
+    ext="jpg",
+    mime="image/jpeg",
+    tamanho=100,
+    conteudo=b"fake",
+)
+
+
+async def test_anexo_pos_criacao_sucesso_confirma_com_codigo():
+    msg = {"midia_id": "midia-1", "midia_nome": None, "tipo": "image", "corpo": ""}
+    responder = AsyncMock()
+    with (
+        patch.object(whatsapp_intake, "_midia_valida", AsyncMock(return_value=_ANEXO_VALIDO)),
+        patch.object(whatsapp_intake, "_subir_anexo_chamado", AsyncMock(return_value=True)),
+        patch.object(whatsapp_intake, "_responder", responder),
+    ):
+        await whatsapp_intake._anexar_midia_pos_criacao(
+            _CHAMADO_RECENTE, _PERFIL, msg, _TELEFONE, _settings()
+        )
+
+    responder.assert_awaited_once()
+    resposta = responder.await_args.args[1]
+    assert "BOND-2026-00999" in resposta
+
+
+async def test_anexo_pos_criacao_tipo_nao_permitido_explica_o_motivo():
+    """`UploadInvalido` já traz mensagem pronta em PT-BR (mesma validação do
+    upload do Portal) — o intake só repassa, sem inventar outro texto."""
+    msg = {"midia_id": "midia-1", "midia_nome": "virus.exe", "tipo": "document", "corpo": ""}
+    responder = AsyncMock()
+    motivo = "Tipo de arquivo não permitido. Aceitos: pdf, jpg, png, mp4, docx, xlsx, pptx."
+    with (
+        patch.object(whatsapp_intake, "_midia_valida", AsyncMock(side_effect=UploadInvalido(motivo))),
+        patch.object(whatsapp_intake, "_responder", responder),
+    ):
+        await whatsapp_intake._anexar_midia_pos_criacao(
+            _CHAMADO_RECENTE, _PERFIL, msg, _TELEFONE, _settings()
+        )
+
+    resposta = responder.await_args.args[1]
+    assert motivo == resposta
+
+
+async def test_anexo_pos_criacao_download_falhou_pede_pra_tentar_de_novo():
+    msg = {"midia_id": "midia-1", "midia_nome": None, "tipo": "image", "corpo": ""}
+    responder = AsyncMock()
+    with (
+        patch.object(whatsapp_intake, "_midia_valida", AsyncMock(return_value=None)),
+        patch.object(whatsapp_intake, "_responder", responder),
+    ):
+        await whatsapp_intake._anexar_midia_pos_criacao(
+            _CHAMADO_RECENTE, _PERFIL, msg, _TELEFONE, _settings()
+        )
+
+    resposta = responder.await_args.args[1]
+    assert "tentar" in resposta.lower()
+
+
+async def test_anexo_pos_criacao_storage_indisponivel_nao_lanca():
+    msg = {"midia_id": "midia-1", "midia_nome": None, "tipo": "image", "corpo": ""}
+    responder = AsyncMock()
+    with (
+        patch.object(whatsapp_intake, "_midia_valida", AsyncMock(return_value=_ANEXO_VALIDO)),
+        patch.object(whatsapp_intake, "_subir_anexo_chamado", AsyncMock(return_value=False)),
+        patch.object(whatsapp_intake, "_responder", responder),
+    ):
+        await whatsapp_intake._anexar_midia_pos_criacao(
+            _CHAMADO_RECENTE, _PERFIL, msg, _TELEFONE, _settings()
+        )
+
+    resposta = responder.await_args.args[1]
+    assert "BOND-2026-00999" not in resposta

@@ -47,6 +47,17 @@ _EXT_MIMES: dict[str, set[str]] = {
 # Extensão normalizada quando há sinônimo (jpeg -> jpg no nome final).
 _EXT_CANON = {"jpeg": "jpg"}
 
+
+def extensao_provavel(mime: str) -> str | None:
+    """Extensão mais provável para um MIME, quando não há nome de arquivo
+    (ex.: documento do WhatsApp sem ``filename`` no payload). Só resolve
+    MIMEs inequívocos — ``application/zip`` aparece em docx/xlsx/pptx (todos
+    contêineres OOXML/ZIP) e não dá pra escolher entre eles às cegas, então
+    devolve ``None`` nesse caso; quem chama decide o que fazer sem nome
+    (normalmente recusar o anexo em vez de arriscar a extensão errada)."""
+    candidatos = {ext for ext, mimes in _EXT_MIMES.items() if mime in mimes} - {"jpeg"}
+    return next(iter(candidatos)) if len(candidatos) == 1 else None
+
 MAX_BYTES_DEFAULT = 10 * 1024 * 1024
 
 # Assinaturas mínimas para fallback quando libmagic não estiver disponível.

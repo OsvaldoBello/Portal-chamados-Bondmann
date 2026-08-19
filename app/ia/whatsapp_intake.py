@@ -38,7 +38,7 @@ import json
 import logging
 import random
 import time
-from datetime import datetime
+from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -111,9 +111,9 @@ def _texto_fora_de_escopo(settings: Settings, departamentos_disponiveis: list[st
     """Assunto sem destino no catálogo disponível (achado do teste real do
     setor Brigadistas, 2026-08-19 — piloto restrito a poucos departamentos).
     Função (não constante), não só pelo link do portal (mesmo padrão de
-    :func:`_texto_confirmacao`) mas porque a lista de setores cobertos hoje é
-    só TI e cresce com o rollout — nomear fixo aqui envelheceria a mensagem a
-    cada novo departamento habilitado."""
+    :func:`_texto_confirmacao`) mas porque a lista de setores cobertos muda
+    com o rollout (`WHATSAPP_INTAKE_DEPARTAMENTOS`) — nomear fixo aqui
+    envelheceria a mensagem a cada novo departamento habilitado."""
     link = f"{settings.portal_base_url.rstrip('/')}/portal/chamados/novo"
     cobertos = " e ".join(departamentos_disponiveis) or "alguns setores"
     return (
@@ -197,9 +197,13 @@ def extrair_mensagens(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Mensagens recebidas do payload do webhook (função pura).
 
     Só ``messages`` — ``statuses`` (entregue/lido) são ignorados. Tipos sem
-    suporte (áudio, vídeo, documento, localização…) entram com ``corpo``
-    vazio para o modelo pedir o relato por texto, em vez de sumirem em
-    silêncio."""
+    suporte (áudio, vídeo, localização…) entram com ``corpo`` vazio para o
+    modelo pedir o relato por texto, em vez de sumirem em silêncio.
+    ``document`` (2026-08-19, pedido do gestor — documento importa até para
+    TI, não só foto para o Marketing) extrai ``midia_id`` igual a ``image``,
+    mais ``midia_nome`` (o ``filename`` que a Meta manda só para documento —
+    é ele que decide a extensão na validação de upload; imagem não tem
+    filename, a extensão vem do MIME)."""
     mensagens: list[dict[str, Any]] = []
     for entry in (payload or {}).get("entry") or []:
         for change in entry.get("changes") or []:
@@ -212,12 +216,18 @@ def extrair_mensagens(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
                 tipo = str(msg.get("type") or "desconhecido")
                 corpo = ""
                 midia_id = None
+                midia_nome = None
                 if tipo == "text":
                     corpo = str((msg.get("text") or {}).get("body") or "")
                 elif tipo == "image":
                     imagem = msg.get("image") or {}
                     midia_id = imagem.get("id")
                     corpo = str(imagem.get("caption") or "")
+                elif tipo == "document":
+                    documento = msg.get("document") or {}
+                    midia_id = documento.get("id")
+                    midia_nome = documento.get("filename")
+                    corpo = str(documento.get("caption") or "")
                 mensagens.append(
                     {
                         "wamid": str(wamid),
@@ -225,6 +235,7 @@ def extrair_mensagens(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
                         "tipo": tipo,
                         "corpo": corpo,
                         "midia_id": midia_id,
+                        "midia_nome": midia_nome,
                     }
                 )
     return mensagens
@@ -246,8 +257,66 @@ async def processar_mensagens_whatsapp(payload: dict[str, Any] | None) -> None:
         log.warning("[WA INTAKE] Falha ao processar mensagens do webhook: %s", exc)
 
 
+# Frases que sinalizam "isso é pra um chamado NOVO, não continuação do que
+# acabou de abrir" — só importa na legenda de uma foto/documento: sem essa
+# saída, `_chamado_recente_para_anexo` sempre anexaria mídia no chamado
+# anterior, mesmo quando é evidência de um problema diferente (ex.: pessoa
+# manda foto de um problema novo com a legenda "chamado novo: ar-condicionado
+# vazando" logo depois de ter aberto outro chamado). Palavra-chave, não IA:
+# decisão estrutural barata, não vale chamar modelo só pra isso.
+_PEDE_NOVO_CHAMADO = (
+    "novo chamado",
+    "chamado novo",
+    "outro chamado",
+    "outro problema",
+    "outro assunto",
+    "assunto diferente",
+    "abrir outro",
+)
+
+
+def _pede_novo_chamado(texto: str) -> bool:
+    """``True`` quando a legenda da mídia diz explicitamente que é pra um
+    chamado novo (função pura, comparação por substring sem caixa/espaços
+    nas pontas — mesmo estilo de :func:`_repete_mensagem_anterior`)."""
+    alvo = (texto or "").strip().casefold()
+    return any(chave in alvo for chave in _PEDE_NOVO_CHAMADO)
+
+
+async def _chamado_recente_para_anexo(
+    conn: Any, telefone: str, janela_s: float
+) -> dict[str, Any] | None:
+    """``{chamado_id, codigo}`` do chamado aberto por este telefone há pouco
+    tempo, se ainda estiver dentro da janela de anexo pós-criação — ``None``
+    quando não há chamado recente o bastante, ou quando há uma conversa
+    ATIVA para o telefone (mensagem em andamento tem prioridade: a mídia
+    entra no fluxo normal de intake, não vira anexo direto). Uma única
+    consulta cobre as duas condições para não ter corrida entre elas."""
+    linha = await conn.fetchrow(
+        """
+        SELECT c.id::text AS chamado_id, c.codigo
+          FROM whatsapp_conversas wc
+          JOIN chamados c ON c.id = wc.chamado_id
+         WHERE wc.telefone = $1
+           AND wc.status = 'CONCLUIDA'
+           AND wc.chamado_id IS NOT NULL
+           AND wc.atualizada_em > now() - ($2 * interval '1 second')
+           AND NOT EXISTS (
+             SELECT 1 FROM whatsapp_conversas wc2
+              WHERE wc2.telefone = $1 AND wc2.status IN ('COLETANDO', 'PROCESSANDO')
+           )
+         ORDER BY wc.atualizada_em DESC
+         LIMIT 1
+        """,
+        telefone,
+        janela_s,
+    )
+    return dict(linha) if linha else None
+
+
 async def _receber_mensagem(msg: dict[str, Any]) -> None:
     """Grava a âncora durável da mensagem e agenda a conversa (uma mensagem)."""
+    settings = get_settings()
     telefone = msg["telefone"]
     async with admin_connection() as conn:
         recebida_id = await conn.fetchval(
@@ -276,6 +345,30 @@ async def _receber_mensagem(msg: dict[str, Any]) -> None:
             _agendar(_responder(telefone, TEXTO_SEM_CADASTRO))
             return
 
+        # Foto/documento chegando pouco depois de um chamado ter sido aberto
+        # por este mesmo telefone: anexa direto no chamado, sem reabrir o
+        # roteiro do intake do zero (2026-08-19, pedido do gestor). Janela
+        # <= 0 desliga o recurso (mesmo padrão de `iniciar_reconciliacao`).
+        # Legenda explicitando chamado NOVO (`_pede_novo_chamado`) pula o
+        # atalho — a pessoa disse que não é continuação, então cai no fluxo
+        # normal abaixo e abre uma conversa nova de verdade.
+        if (
+            msg["midia_id"]
+            and msg["tipo"] in ("image", "document")
+            and settings.whatsapp_intake_anexo_janela_s > 0
+            and not _pede_novo_chamado(msg["corpo"])
+        ):
+            alvo = await _chamado_recente_para_anexo(
+                conn, telefone, settings.whatsapp_intake_anexo_janela_s
+            )
+            if alvo is not None:
+                await conn.execute(
+                    "UPDATE whatsapp_mensagens_recebidas SET status='PROCESSADA', processado_em=now() WHERE id=$1",
+                    recebida_id,
+                )
+                _agendar(_anexar_midia_pos_criacao(alvo, perfil, msg, telefone, settings))
+                return
+
         conversa_id = await _abrir_ou_obter_conversa(conn, perfil, telefone)
         await conn.execute(
             """
@@ -292,6 +385,7 @@ async def _receber_mensagem(msg: dict[str, Any]) -> None:
                         "conteudo": msg["corpo"],
                         "wamid": msg["wamid"],
                         "midia_id": msg["midia_id"],
+                        "midia_nome": msg["midia_nome"],
                     }
                 ],
                 ensure_ascii=False,
@@ -477,10 +571,16 @@ _EMOJIS_CONFIRMACAO = ("🙂", "😊", "👍", "✅", "😉")
 
 def _texto_confirmacao(codigo: str, departamento_nome: str, chamado_id: str, settings: Settings) -> str:
     emoji = random.choice(_EMOJIS_CONFIRMACAO)
+    anexo = (
+        "\n\nSe quiser mandar foto ou documento, é só mandar aqui agora que eu "
+        "anexo no chamado."
+        if settings.whatsapp_intake_anexo_janela_s > 0
+        else ""
+    )
     return (
         f"Prontinho! Abri o chamado {codigo} para você {emoji}\n"
         f"A equipe de {departamento_nome} já foi avisada e vai te atender.\n\n"
-        f"Acompanhe por aqui: {_link_chamado(chamado_id, settings)}"
+        f"Acompanhe por aqui: {_link_chamado(chamado_id, settings)}{anexo}"
     )
 
 
@@ -610,6 +710,28 @@ def montar_mensagens(
             linhas.append(f"### Departamento: {dep['nome']}")
             linhas += [linha_catalogo(cat) for cat in dep["categorias"]]
 
+    from app.services.portal import PortalService
+
+    if PortalService.marketing_dep_id(catalogo):
+        # Data mínima calculada aqui, não pelo modelo (mesmo motivo da
+        # saudação por horário acima): 48h úteis contando fim de semana é
+        # conta que um modelo pequeno erra. O código revalida de qualquer
+        # forma em `_criar_chamado_da_conversa`, mas dar o valor certo de
+        # cara evita rodadas extras pedindo a data de novo.
+        hoje = datetime.now(TZ_BR).date()
+        minimo = PortalService.data_entrega_min()
+        linhas += [
+            "",
+            "## Prazo do Marketing (só quando o destino for o departamento Marketing)",
+            f"Hoje é {hoje.strftime('%d/%m/%Y')}. Se o destino for Marketing, é "
+            "obrigatório perguntar quando a pessoa precisa do material pronto antes "
+            "de considerar `informacoes_suficientes: true`. Aceite uma data (escreva "
+            f"em `data_entrega` no formato AAAA-MM-DD; a mínima aceita é "
+            f"{minimo.strftime('%d/%m/%Y')}, e não pode cair em sábado/domingo) ou, "
+            "se a pessoa disser que não tem pressa/prazo, marque `sem_prazo: true` e "
+            "deixe `data_entrega` vazio.",
+        ]
+
     texto = "\n".join(linhas)
     conteudo_usuario: Any = texto
     if imagem_data_uri:
@@ -629,11 +751,20 @@ async def _imagem_da_conversa(conversa: list[dict[str, Any]], settings: Settings
     Reaproveita ``anexos_contexto.redimensionar_imagem`` (função pura, mesma
     usada pela triagem) — só a origem dos bytes muda (Graph API em vez do
     Storage). Falha de download/decode devolve ``None``: a foto é contexto
-    opcional, nunca motivo para travar o intake."""
+    opcional, nunca motivo para travar o intake. Documento (2026-08-19) não
+    entra aqui — a Meta só manda ``filename`` (``midia_nome``) pra documento,
+    nunca pra foto, então isso funciona como filtro sem precisar guardar o
+    tipo original da mensagem; mandar um PDF pro bloco `image_url` do modelo
+    não faria sentido mesmo (a extração de anexo é só pra ANEXAR, não pra ler)."""
     from app.whatsapp_client import baixar_midia
 
     midia_id = next(
-        (m.get("midia_id") for m in reversed(conversa) if m.get("midia_id")), None
+        (
+            m.get("midia_id")
+            for m in reversed(conversa)
+            if m.get("midia_id") and not m.get("midia_nome")
+        ),
+        None,
     )
     if not midia_id:
         return None
@@ -857,6 +988,39 @@ async def _criar_chamado_da_conversa(
                          TEXTO_SEM_SETOR, settings, resultado, tokens_in, tokens_out, duracao_ms)
         return
 
+    prioridade = _prioridade_valida(saida.prioridade)
+    data_entrega: date | None = None
+    sem_prazo = False
+    from app.services.portal import PortalService
+
+    if PortalService.marketing_dep_id(catalogo) == str(departamento["id"]):
+        # Fluxo por demanda do Marketing (mesma regra do formulário do
+        # Portal): reaproveita `regras_marketing` em vez de reimplementar a
+        # validação de data mínima/fim de semana aqui — fonte única também
+        # para o WhatsApp. `erro` não é fatal: volta como pergunta nova (o
+        # modelo pode ter convertido a data errado, ou a pessoa ainda não
+        # respondeu isso), respeitando o mesmo teto de rodadas do resto da
+        # conversa para não perguntar para sempre.
+        regra = PortalService.regras_marketing(
+            departamento_id=str(departamento["id"]),
+            setores_ativos=catalogo,
+            prioridade=prioridade,
+            sem_prazo_marcado=bool(saida.sem_prazo),
+            data_entrega=str(saida.data_entrega or "").strip(),
+        )
+        if regra.erro:
+            if rodada >= settings.whatsapp_intake_max_rodadas:
+                await _finalizar(conversa_id, telefone, rodada, "ENCERRADO_SEM_CHAMADO",
+                                 TEXTO_ERRO_GENERICO, settings, resultado, tokens_in, tokens_out, duracao_ms)
+                return
+            await _finalizar(
+                conversa_id, telefone, rodada, "PERGUNTA", regra.erro,
+                settings, resultado, tokens_in, tokens_out, duracao_ms,
+                novo_status="COLETANDO", pergunta=regra.erro,
+            )
+            return
+        prioridade, data_entrega, sem_prazo = regra.prioridade, regra.data_entrega, regra.sem_prazo
+
     try:
         telefone_contato = validar_telefone_contato(telefone)
     except ValueError:
@@ -873,14 +1037,16 @@ async def _criar_chamado_da_conversa(
         departamento_id=str(departamento["id"]),
         titulo=titulo,
         descricao=str(saida.descricao or "").strip(),
-        prioridade=_prioridade_valida(saida.prioridade),
+        prioridade=prioridade,
         setor=str(setor),
         telefone_contato=telefone_contato,
+        data_entrega=data_entrega,
+        sem_prazo=sem_prazo,
         origem_demanda=_ORIGEM_DEMANDA,
     )
     chamado_id = str(novo["id"])
 
-    await _anexar_imagem(conversa, perfil, claims, chamado_id, repo, settings)
+    await _anexar_midia_da_conversa(conversa, perfil, claims, chamado_id, repo, settings)
     await _finalizar(
         conversa_id, telefone, rodada, "CHAMADO_CRIADO",
         _texto_confirmacao(str(novo["codigo"]), str(departamento["nome"]), chamado_id, settings),
@@ -892,7 +1058,75 @@ async def _criar_chamado_da_conversa(
     )
 
 
-async def _anexar_imagem(
+async def _midia_valida(msg: dict[str, Any], settings: Settings) -> Any:
+    """Baixa a mídia (foto ou documento) referenciada em ``msg`` e valida
+    como anexo de chamado — mesma allow-list e mesma checagem de MIME real
+    do upload do Portal (``app/security/uploads.py``), fonte única para não
+    o WhatsApp aceitar algo que o Portal recusaria. ``midia_nome`` (só
+    documento costuma ter — a Meta não manda ``filename`` de foto) decide a
+    extensão; sem ele, tenta adivinhar pelo MIME real (:func:`extensao_provavel`)
+    e, se for ambíguo (ex.: ``application/zip``, que serve pra docx/xlsx/pptx),
+    cai num nome sem extensão reconhecida — ``validar_anexo`` recusa em vez de
+    arriscar o tipo errado. Levanta ``UploadInvalido`` quando o tipo/conteúdo é
+    rejeitado — o chamador decide se avisa quem mandou. ``None`` só quando o
+    DOWNLOAD falha (rede, mídia expirada): não há o que dizer sobre isso."""
+    from app.security.uploads import extensao_provavel, validar_anexo
+    from app.whatsapp_client import baixar_midia
+
+    midia_id = msg.get("midia_id")
+    if not midia_id:
+        return None
+    baixado = await baixar_midia(str(midia_id))
+    if baixado is None:
+        return None
+    conteudo, mime = baixado
+    nome = msg.get("midia_nome") or f"whatsapp.{extensao_provavel(mime) or 'bin'}"
+    return validar_anexo(nome, conteudo, max_bytes=settings.anexo_max_bytes)
+
+
+async def _subir_anexo_chamado(
+    validado: Any,
+    perfil: dict[str, Any],
+    claims: dict[str, str],
+    chamado_id: str,
+    repo: Any,
+    settings: Settings,
+) -> bool:
+    """Sobe um anexo já validado para o Storage e registra como mensagem do
+    chamado. Upload via ``service_role`` (o usuário não tem sessão HTTP
+    aqui): seguro porque o ``path`` é construído 100% pelo servidor a partir
+    de ``empresa_id``/``chamado_id`` já validados pela RLS na criação — nada
+    do payload do usuário entra nele. ``False`` quando o Storage não está
+    configurado; nunca lança (quem chama decide a política de falha)."""
+    from app.storage import AnexosStorage, ensure_storage
+
+    if not settings.supabase_service_role_key:
+        return False
+    storage = await ensure_storage()
+    if storage is None:
+        return False
+    path = AnexosStorage.path(str(perfil["empresa_id"]), chamado_id, validado.nome_objeto)
+    await storage.upload(
+        settings.supabase_service_role_key, path, validado.conteudo, validado.mime
+    )
+    await repo.adicionar_mensagem(
+        claims,
+        chamado_id,
+        remetente_id=perfil["id"],
+        conteudo="",
+        anexos=[
+            {
+                "path": path,
+                "nome": validado.nome_original,
+                "mime": validado.mime,
+                "tamanho": validado.tamanho,
+            }
+        ],
+    )
+    return True
+
+
+async def _anexar_midia_da_conversa(
     conversa: list[dict[str, Any]],
     perfil: dict[str, Any],
     claims: dict[str, str],
@@ -900,51 +1134,80 @@ async def _anexar_imagem(
     repo: Any,
     settings: Settings,
 ) -> None:
-    """Sobe a foto enviada no WhatsApp como anexo da 1ª mensagem do chamado.
-
-    Upload via ``service_role`` (o usuário não tem sessão HTTP aqui): seguro
-    porque o ``path`` é construído 100% pelo servidor a partir de
-    ``empresa_id``/``chamado_id`` já validados pela RLS na criação — nada do
-    payload do usuário entra nele. Falha nunca derruba o chamado já criado."""
-    from app.security.uploads import validar_anexo
-    from app.storage import AnexosStorage, ensure_storage
-    from app.whatsapp_client import baixar_midia
-
-    midia_id = next((m.get("midia_id") for m in reversed(conversa) if m.get("midia_id")), None)
-    if not midia_id or not settings.supabase_service_role_key:
+    """Sobe a foto/documento mais recente da conversa de intake como anexo da
+    1ª mensagem do chamado recém-criado. Nunca lança: falha de download,
+    validação (tipo fora da allow-list) ou storage nunca derruba o chamado
+    já criado — o anexo aqui é enriquecimento opcional (a pessoa ainda pode
+    mandar de novo depois, dentro da janela pós-criação de
+    :func:`_anexar_midia_pos_criacao`, dessa vez com confirmação)."""
+    item = next((m for m in reversed(conversa) if m.get("midia_id")), None)
+    if item is None:
         return
     try:
-        baixado = await baixar_midia(str(midia_id))
-        if baixado is None:
+        validado = await _midia_valida(item, settings)
+        if validado is None:
             return
-        conteudo, mime = baixado
-        ext = "png" if "png" in mime else "jpg"
-        validado = validar_anexo(
-            f"whatsapp.{ext}", conteudo, max_bytes=settings.anexo_max_bytes
-        )
-        storage = await ensure_storage()
-        if storage is None:
-            return
-        path = AnexosStorage.path(str(perfil["empresa_id"]), chamado_id, validado.nome_objeto)
-        await storage.upload(
-            settings.supabase_service_role_key, path, validado.conteudo, validado.mime
-        )
-        await repo.adicionar_mensagem(
-            claims,
-            chamado_id,
-            remetente_id=perfil["id"],
-            conteudo="",
-            anexos=[
-                {
-                    "path": path,
-                    "nome": validado.nome_original,
-                    "mime": validado.mime,
-                    "tamanho": validado.tamanho,
-                }
-            ],
-        )
+        await _subir_anexo_chamado(validado, perfil, claims, chamado_id, repo, settings)
     except Exception as exc:  # noqa: BLE001 — anexo é opcional (inclui UploadInvalido)
         log.warning("[WA INTAKE] Anexo do WhatsApp falhou (chamado %s): %s", chamado_id, exc)
+
+
+_TEXTO_ANEXO_FALHOU = (
+    "Não consegui salvar esse arquivo agora. Pode tentar mandar de novo daqui a pouco?"
+)
+
+
+def _texto_anexo_ok(codigo: str) -> str:
+    emoji = random.choice(_EMOJIS_CONFIRMACAO)
+    return f"Anexei ao chamado {codigo} {emoji}"
+
+
+async def _anexar_midia_pos_criacao(
+    alvo: dict[str, Any],
+    perfil: dict[str, Any],
+    msg: dict[str, Any],
+    telefone: str,
+    settings: Settings,
+) -> None:
+    """Anexa uma foto/documento recebido DENTRO da janela pós-criação
+    (``WHATSAPP_INTAKE_ANEXO_JANELA_S``) direto no chamado ``alvo``, fora do
+    fluxo de intake — não passa por :func:`processar_conversa`/
+    ``ia_whatsapp_intake`` porque não há decisão de IA aqui, só upload.
+
+    Ao contrário do anexo durante o intake (:func:`_anexar_midia_da_conversa`,
+    silencioso — o chamado já existe de qualquer forma), aqui a pessoa está
+    esperando uma confirmação de que o arquivo chegou: erro de tipo/tamanho
+    vira resposta explicando o motivo (``UploadInvalido`` já traz mensagem
+    pronta em PT-BR), não silêncio. Nunca lança — task de fundo."""
+    from app.repositories.chamados import ChamadosRepo
+    from app.security.uploads import UploadInvalido
+
+    claims = claims_do_perfil(perfil["id"])
+    repo = ChamadosRepo()
+    try:
+        validado = await _midia_valida(msg, settings)
+    except UploadInvalido as exc:
+        await _responder(telefone, str(exc))
+        return
+    except Exception as exc:  # noqa: BLE001 — nunca derruba a task de fundo
+        log.warning(
+            "[WA INTAKE] Anexo pós-criação falhou (chamado %s): %s", alvo["chamado_id"], exc
+        )
+        await _responder(telefone, _TEXTO_ANEXO_FALHOU)
+        return
+    if validado is None:
+        await _responder(telefone, _TEXTO_ANEXO_FALHOU)
+        return
+    try:
+        ok = await _subir_anexo_chamado(
+            validado, perfil, claims, alvo["chamado_id"], repo, settings
+        )
+    except Exception as exc:  # noqa: BLE001 — nunca derruba a task de fundo
+        log.warning(
+            "[WA INTAKE] Upload pós-criação falhou (chamado %s): %s", alvo["chamado_id"], exc
+        )
+        ok = False
+    await _responder(telefone, _texto_anexo_ok(alvo["codigo"]) if ok else _TEXTO_ANEXO_FALHOU)
 
 
 async def _pos_criacao(

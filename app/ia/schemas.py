@@ -102,6 +102,17 @@ class SaidaWhatsAppIntake(BaseModel):
     # `decidir_acao_intake` encerra a conversa nesse caso, mesmo com
     # `informacoes_suficientes: false` e rodada < teto.
     assunto_fora_do_escopo: bool = False
+    # Fluxo por demanda do Marketing (2026-08-19, mesma regra de
+    # `PortalService.regras_marketing`): só relevante quando `departamento`
+    # for "Marketing". `data_entrega` é a data pedida pela pessoa, convertida
+    # pelo modelo para "AAAA-MM-DD" (nunca calculada por ele sozinho — a data
+    # de hoje e a mínima aceita vêm prontas no turno `user`); `sem_prazo` é
+    # `true` quando a pessoa diz que não tem pressa. O chamador REVALIDA os
+    # dois (formato, mínimo de 48h úteis, sem fim de semana) com a mesma
+    # função do Portal — o modelo pode errar a conversão, o código não deixa
+    # passar.
+    data_entrega: str | None = None
+    sem_prazo: bool = False
 
 
 class SaidaPasseB(BaseModel):

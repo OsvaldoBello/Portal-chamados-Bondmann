@@ -120,10 +120,13 @@ class Settings(BaseSettings):
     # Kill switch geral: false = webhook continua só logando, nenhuma
     # conversa/chamado é criado (mesmo padrão de `ia_triagem_ativa`).
     whatsapp_intake_ativo: bool = Field(default=False)
-    # CSV de nomes de departamentos habilitados. Vazio = nenhum. V1 cobre só
-    # departamentos "simples" (sem formulário dinâmico do Químico, sem regra
-    # de prazo do Marketing) — rollout faseado, 1 departamento piloto antes
-    # de expandir (mesmo padrão de `ia_triagem_departamentos`).
+    # CSV de nomes de departamentos habilitados. Vazio = nenhum. Rollout
+    # faseado, 1 departamento por vez (mesmo padrão de
+    # `ia_triagem_departamentos`). V1 cobria só departamentos "simples"; desde
+    # 2026-08-19 o intake também sabe tratar o fluxo por demanda do Marketing
+    # (`app/ia/whatsapp_intake.py::_criar_chamado_da_conversa`, reaproveitando
+    # `PortalService.regras_marketing`). Segue faltando o formulário dinâmico
+    # do Dpto Químico — não habilitar esse departamento aqui ainda.
     whatsapp_intake_departamentos: str = Field(default="")
     # Timeout por chamada ao modelo (C6, mesmo valor unificado da triagem).
     whatsapp_intake_timeout_s: float = Field(default=30.0)
@@ -138,8 +141,15 @@ class Settings(BaseSettings):
     # `ia_triagem_base_url` (mesmo precedente de `ia_resumo_ativo`) — só o
     # modelo é próprio; custo fica segregado via `ia_whatsapp_intake.custo_usd`.
     whatsapp_intake_model: str = Field(default="gpt-5.4-mini")
-    # Teto de bytes ao baixar mídia (foto) do Graph API antes de processar.
+    # Teto de bytes ao baixar mídia (foto/documento) do Graph API antes de
+    # processar.
     whatsapp_intake_midia_max_bytes: int = Field(default=8 * 1024 * 1024)
+    # Janela (segundos) pós-criação do chamado em que uma foto/documento
+    # recebido do mesmo telefone é anexado DIRETO no chamado recém-aberto,
+    # sem reabrir o roteiro do intake (2026-08-19, pedido do gestor: quem
+    # esqueceu de mandar a foto ainda consegue anexar depois). `<= 0` desliga
+    # o recurso — mídia sempre abre conversa nova, como antes. Default 30min.
+    whatsapp_intake_anexo_janela_s: float = Field(default=1800.0)
     # Intervalo (segundos) da varredura de reconciliação de conversas
     # travadas por restart/redeploy — mesma rede de segurança da triagem
     # (`ia_triagem_reconciliacao_intervalo_s`). `<= 0` desliga a varredura.

@@ -71,7 +71,7 @@ async def enviar_mensagem_texto(destinatario: str, corpo: str) -> dict:
 
 
 async def baixar_midia(media_id: str) -> tuple[bytes, str] | None:
-    """Baixa uma mídia recebida (foto do intake) — ``(conteudo, mime)`` ou ``None``.
+    """Baixa uma mídia recebida (foto ou documento do intake) — ``(conteudo, mime)`` ou ``None``.
 
     São dois GETs no Graph API: o primeiro resolve ``{url, mime_type}`` a
     partir do ``media_id`` do webhook, o segundo baixa o binário (a URL de

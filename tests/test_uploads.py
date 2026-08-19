@@ -9,6 +9,7 @@ import pytest
 
 from app.security.uploads import (
     UploadInvalido,
+    extensao_provavel,
     sanitizar_nome_exibicao,
     sniff_signature,
     validar_anexo,
@@ -113,3 +114,19 @@ def test_mp4_valido_via_sniffer():
     a = validar_anexo("video.mp4", MP4, magic_impl=sniff_signature)
     assert a.ext == "mp4"
     assert a.mime == "video/mp4"
+
+
+def test_extensao_provavel_mimes_inequivocos():
+    """Usado quando não há nome de arquivo (documento do WhatsApp sem
+    ``filename``) — resolve os MIMEs que só têm UMA extensão possível."""
+    assert extensao_provavel("application/pdf") == "pdf"
+    assert extensao_provavel("image/png") == "png"
+    assert extensao_provavel("image/jpeg") == "jpg"  # nunca "jpeg" (sinônimo)
+    assert extensao_provavel("video/mp4") == "mp4"
+
+
+def test_extensao_provavel_mime_ambiguo_devolve_none():
+    """``application/zip`` serve pra docx/xlsx/pptx — sem nome de arquivo não
+    dá pra escolher entre eles às cegas; melhor recusar do que arriscar."""
+    assert extensao_provavel("application/zip") is None
+    assert extensao_provavel("text/plain") is None
