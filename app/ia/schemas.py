@@ -93,6 +93,15 @@ class SaidaWhatsAppIntake(BaseModel):
     # Prioridade derivada do relato (impacto × urgência). Ausente/inválida
     # degrada para MEDIA no chamador — nunca bloqueia a abertura.
     prioridade: Literal["BAIXA", "MEDIA", "ALTA", "URGENTE"] | None = None
+    # Achado em produção (2026-08-19, teste real do gestor pelo setor
+    # Brigadistas): com o piloto restrito a poucos departamentos, um relato
+    # que não se encaixa em NENHUMA combinação do catálogo fornecido fazia o
+    # modelo ficar perguntando sem fim, tentando achar informação que nunca
+    # ia resolver — porque o destino simplesmente não existe no catálogo
+    # atual. `true` diz "já entendi o relato, mas não há pra onde mandar";
+    # `decidir_acao_intake` encerra a conversa nesse caso, mesmo com
+    # `informacoes_suficientes: false` e rodada < teto.
+    assunto_fora_do_escopo: bool = False
 
 
 class SaidaPasseB(BaseModel):

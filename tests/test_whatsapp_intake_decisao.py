@@ -86,6 +86,23 @@ def test_sem_saida_do_modelo_encerra():
     assert decidir_acao_intake(None, rodada=1, max_rodadas=4) == "ENCERRAR_SEM_CHAMADO"
 
 
+def test_assunto_fora_do_escopo_encerra_mesmo_com_rodada_e_pergunta_disponiveis():
+    """Achado do teste real do setor Brigadistas (2026-08-19): com o piloto
+    restrito a poucos departamentos, insistir perguntando não cria um destino
+    que não existe no catálogo — encerra na rodada 1, mesmo com pergunta
+    formulada e longe do teto."""
+    saida = _saida(
+        informacoes_suficientes=False,
+        assunto_fora_do_escopo=True,
+        perguntas=["Isso afeta mais alguém no seu setor?"],  # ignorada de propósito
+        setor="Brigadistas",
+        departamento=None,
+        categoria=None,
+        subcategoria=None,
+    )
+    assert decidir_acao_intake(saida, rodada=1, max_rodadas=6) == "ENCERRAR_SEM_CHAMADO"
+
+
 # --- texto_das_perguntas ---------------------------------------------------
 
 

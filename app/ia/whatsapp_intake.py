@@ -56,6 +56,31 @@ log = logging.getLogger("app.ia_whatsapp_intake")
 
 _MAX_TOKENS_SAIDA = 900
 _ORIGEM_DEMANDA = "WhatsApp"
+
+# Rede de segurança contra o modelo repetir uma mensagem já enviada nesta
+# conversa (achado em produção, 2026-08-19: mesmo com o estado da conversa
+# injetado como fato pronto em `montar_mensagens` — não deduzido pelo modelo
+# — o gpt-5.4-mini ainda reincidia quando a última mensagem do usuário era
+# curta ou parecia saudação, ex.: "Brigadistas", "Alô". Prompt sozinho não
+# bastou; a garantia real é verificar o texto que SAIRIA e, se for repetição,
+# nunca mandar — 1 nova tentativa reforçada, e se ainda assim repetir, um
+# texto fixo genérico substitui, garantindo que o usuário nunca recebe a
+# mesma mensagem duas vezes).
+_LEMBRETE_ANTI_REPETICAO = {
+    "role": "system",
+    "content": (
+        "Sua resposta anterior repetiu uma mensagem que você já mandou nesta "
+        "mesma conversa (comparei o texto e é idêntico). Isso é proibido. "
+        "Releia a ÚLTIMA linha [usuário] do histórico acima e responda "
+        "especificamente a ela, com um texto NOVO — nunca repita a "
+        "apresentação nem qualquer pergunta já feita, mesmo que a resposta da "
+        "pessoa tenha sido curta."
+    ),
+}
+_TEXTO_CONTINUAR_GENERICO = (
+    "Só um instante! Pode me contar de novo, rapidinho, o que você precisa? "
+    "Quero ter certeza de que anotei certinho."
+)
 # Margem antes de considerar uma conversa "travada" na reconciliação — evita
 # corrida com a task recém-disparada (mesmo papel de `_MARGEM_ORFAO` na
 # triagem, onde 1 min já se mostrou suficiente em produção).
@@ -80,6 +105,23 @@ TEXTO_SEM_SETOR = (
     "obrigatório para abrir o chamado. Peça ao TI para completar o seu perfil "
     "no Portal, aí a gente resolve por aqui rapidinho."
 )
+
+
+def _texto_fora_de_escopo(settings: Settings, departamentos_disponiveis: list[str]) -> str:
+    """Assunto sem destino no catálogo disponível (achado do teste real do
+    setor Brigadistas, 2026-08-19 — piloto restrito a poucos departamentos).
+    Função (não constante), não só pelo link do portal (mesmo padrão de
+    :func:`_texto_confirmacao`) mas porque a lista de setores cobertos hoje é
+    só TI e cresce com o rollout — nomear fixo aqui envelheceria a mensagem a
+    cada novo departamento habilitado."""
+    link = f"{settings.portal_base_url.rstrip('/')}/portal/chamados/novo"
+    cobertos = " e ".join(departamentos_disponiveis) or "alguns setores"
+    return (
+        "Entendi o que você precisa, mas esse assunto ainda não está "
+        f"disponível pra abrir por aqui pelo WhatsApp — por enquanto só "
+        f"cobrimos chamados de {cobertos}. Pode abrir direto pelo Portal que "
+        f"a equipe certa vai te atender: {link}"
+    )
 
 
 @lru_cache(maxsize=2)
@@ -354,19 +396,40 @@ def texto_das_perguntas(perguntas: list[str]) -> str:
     return f"{lead_in}\n{itens}"
 
 
+def _repete_mensagem_anterior(texto: str, conversa: list[dict[str, Any]]) -> bool:
+    """``True`` se ``texto`` é idêntico a alguma mensagem que o BOT já mandou
+    nesta conversa (função pura — comparação exata, sem caixa/espaços nas
+    pontas). Base da rede de segurança contra o modelo travar repetindo a
+    apresentação (ver ``_LEMBRETE_ANTI_REPETICAO``)."""
+    alvo = texto.strip().casefold()
+    if not alvo:
+        return False
+    return any(
+        str(item.get("conteudo") or "").strip().casefold() == alvo
+        for item in conversa
+        if item.get("papel") != "usuario"
+    )
+
+
 def decidir_acao_intake(
     saida: SaidaWhatsAppIntake | None, rodada: int, max_rodadas: int
 ) -> str:
     """``CRIAR_CHAMADO`` | ``PERGUNTA`` | ``ENCERRAR_SEM_CHAMADO`` (função pura).
 
     Sem saída válida do modelo ⇒ encerra (o usuário recebe orientação de usar
-    o Portal). Informação suficiente **e setor informado** ⇒ cria: o setor é
-    campo obrigatório do chamado e, por decisão do gestor (2026-08-18), vem da
-    conversa, não do cadastro — modelo que diz "suficiente" sem setor está
-    errado e vira pergunta, não chamado sem dono declarado. Insuficiente ⇒
-    pergunta, desde que haja pergunta formulada e ainda reste rodada; no teto,
-    encerra em vez de perguntar para sempre."""
+    o Portal). Assunto fora do escopo do piloto (nenhum destino do catálogo
+    serve, mesmo com o relato entendido) ⇒ encerra ANTES de checar rodada ou
+    pergunta — insistir perguntando não vai abrir um destino que não existe
+    (achado do teste real do setor Brigadistas, 2026-08-19, com o piloto
+    restrito a poucos departamentos). Informação suficiente **e setor
+    informado** ⇒ cria: o setor é campo obrigatório do chamado e, por decisão
+    do gestor (2026-08-18), vem da conversa, não do cadastro — modelo que diz
+    "suficiente" sem setor está errado e vira pergunta, não chamado sem dono
+    declarado. Insuficiente ⇒ pergunta, desde que haja pergunta formulada e
+    ainda reste rodada; no teto, encerra em vez de perguntar para sempre."""
     if saida is None:
+        return "ENCERRAR_SEM_CHAMADO"
+    if saida.assunto_fora_do_escopo:
         return "ENCERRAR_SEM_CHAMADO"
     if saida.informacoes_suficientes and (saida.setor or "").strip():
         return "CRIAR_CHAMADO"
@@ -643,9 +706,10 @@ async def _processar_conversa(conversa_id: str) -> None:
 
     setores = await _setores_validos(claims)
     imagem = await _imagem_da_conversa(mensagens_acumuladas, settings)
+    mensagens = montar_mensagens(mensagens_acumuladas, catalogo, imagem, setores)
     inicio = time.monotonic()
     saida, erro, tokens_in, tokens_out = await chamar_modelo_estruturado(
-        montar_mensagens(mensagens_acumuladas, catalogo, imagem, setores),
+        mensagens,
         model=settings.whatsapp_intake_model,
         api_key=settings.ia_triagem_api_key,
         base_url=settings.ia_triagem_base_url,
@@ -653,16 +717,62 @@ async def _processar_conversa(conversa_id: str) -> None:
         max_tokens=_MAX_TOKENS_SAIDA,
         schema=SaidaWhatsAppIntake,
     )
-    duracao_ms = int((time.monotonic() - inicio) * 1000)
     if erro:
         log.warning("[WA INTAKE] Conversa %s sem saída útil: %s", conversa_id, erro)
 
     acao = decidir_acao_intake(saida, rodada, settings.whatsapp_intake_max_rodadas)
+    pergunta = (
+        texto_das_perguntas(saida.perguntas) if saida is not None and acao == "PERGUNTA" else ""
+    )
+    repetiu = False
+
+    if acao == "PERGUNTA" and _repete_mensagem_anterior(pergunta, mensagens_acumuladas):
+        # Achado em produção (2026-08-19): mesmo com o estado da conversa
+        # injetado como fato, o modelo às vezes trava repetindo a
+        # apresentação — nunca manda isso ao usuário; tenta de novo com
+        # reforço explícito antes de desistir (ver constantes no topo).
+        log.warning(
+            "[WA INTAKE] Conversa %s rodada %s: resposta repetida, tentando de novo.",
+            conversa_id, rodada,
+        )
+        repetiu = True
+        saida_retry, _erro_retry, tokens_in_retry, tokens_out_retry = await chamar_modelo_estruturado(
+            [*mensagens, _LEMBRETE_ANTI_REPETICAO],
+            model=settings.whatsapp_intake_model,
+            api_key=settings.ia_triagem_api_key,
+            base_url=settings.ia_triagem_base_url,
+            timeout_s=settings.whatsapp_intake_timeout_s,
+            max_tokens=_MAX_TOKENS_SAIDA,
+            schema=SaidaWhatsAppIntake,
+        )
+        tokens_in = tokens_in if tokens_in_retry is None else (tokens_in or 0) + tokens_in_retry
+        tokens_out = tokens_out if tokens_out_retry is None else (tokens_out or 0) + tokens_out_retry
+        acao_retry = decidir_acao_intake(saida_retry, rodada, settings.whatsapp_intake_max_rodadas)
+        pergunta_retry = (
+            texto_das_perguntas(saida_retry.perguntas)
+            if saida_retry is not None and acao_retry == "PERGUNTA"
+            else ""
+        )
+        if saida_retry is not None and (
+            acao_retry != "PERGUNTA"
+            or not _repete_mensagem_anterior(pergunta_retry, mensagens_acumuladas)
+        ):
+            # Tentativa nova resolveu (ou decidiu criar chamado/encerrar) — usa ela.
+            saida, acao, pergunta = saida_retry, acao_retry, pergunta_retry
+        else:
+            # Repetiu de novo (ou a tentativa falhou): mantém o `setor`/demais
+            # campos já extraídos por `saida` (a rede de segurança troca só o
+            # TEXTO enviado, nunca descarta dado real já capturado), mas o
+            # usuário nunca recebe a mesma mensagem duas vezes.
+            pergunta = _TEXTO_CONTINUAR_GENERICO
+
+    duracao_ms = int((time.monotonic() - inicio) * 1000)
     resultado = saida.model_dump() if saida is not None else {"erro": erro}
+    if repetiu:
+        resultado["retry_anti_repeticao"] = True
 
     if acao == "PERGUNTA":
         assert saida is not None  # garantido por decidir_acao_intake
-        pergunta = texto_das_perguntas(saida.perguntas)
         await _finalizar(
             conversa_id, telefone, rodada, "PERGUNTA", pergunta,
             settings, resultado, tokens_in, tokens_out, duracao_ms,
@@ -678,9 +788,13 @@ async def _processar_conversa(conversa_id: str) -> None:
         )
         return
 
+    fora_de_escopo = saida is not None and saida.assunto_fora_do_escopo
     await _finalizar(
         conversa_id, telefone, rodada, "ENCERRADO_SEM_CHAMADO",
-        TEXTO_ERRO_GENERICO, settings, resultado, tokens_in, tokens_out, duracao_ms,
+        _texto_fora_de_escopo(settings, settings.whatsapp_intake_departamentos_lista)
+        if fora_de_escopo
+        else TEXTO_ERRO_GENERICO,
+        settings, resultado, tokens_in, tokens_out, duracao_ms,
     )
 
 

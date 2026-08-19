@@ -161,6 +161,7 @@ def ambiente(
     *,
     perfil: dict | None = _PERFIL,
     saida: SaidaWhatsAppIntake | None = None,
+    respostas_modelo: list[tuple] | None = None,
     catalogo: list | None = None,
     setores: list | None = None,
     capturar_agendamentos: bool = False,
@@ -200,7 +201,11 @@ def ambiente(
             AsyncMock(return_value=setores if setores is not None else _SETORES),
         ),
         patch.object(
-            whatsapp_intake, "chamar_modelo_estruturado", AsyncMock(return_value=(saida, None, 100, 50))
+            whatsapp_intake,
+            "chamar_modelo_estruturado",
+            AsyncMock(side_effect=respostas_modelo)
+            if respostas_modelo is not None
+            else AsyncMock(return_value=(saida, None, 100, 50)),
         ),
         patch.object(whatsapp_intake, "_responder", responder),
         patch.object(whatsapp_intake, "_imagem_da_conversa", AsyncMock(return_value=None)),
@@ -354,6 +359,31 @@ async def test_categoria_alucinada_nunca_vira_insert():
         assert conn.auditorias[0][2] == "ENCERRADO_SEM_CHAMADO"
 
 
+async def test_assunto_fora_do_escopo_orienta_portal_em_vez_de_insistir():
+    """Achado do teste real do setor Brigadistas (2026-08-19): quando o
+    relato não se encaixa em nenhum destino do catálogo disponível, o bot
+    orienta o Portal em vez de continuar perguntando sem chance de resolver."""
+    conn = FakeConn()
+    saida = SaidaWhatsAppIntake(
+        informacoes_suficientes=False,
+        confianca="ALTA",
+        assunto_fora_do_escopo=True,
+        setor="Brigadistas",
+    )
+    with ambiente(conn, _settings(), saida=saida) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "ENCERRADO_SEM_CHAMADO"
+        resposta = amb.responder.await_args.args[1]
+        assert "Portal" in resposta
+        assert "/portal/chamados/novo" in resposta
+        # Nome do(s) departamento(s) cobertos hoje é dinâmico (settings), não
+        # fixo em "TI" no texto — evita a mensagem envelhecer com o rollout.
+        assert "TI" in resposta
+        assert "deu um problema" not in resposta.lower()
+
+
 async def test_setor_do_perfil_e_a_rede_de_seguranca_quando_o_dito_nao_casa():
     """Setor fora da lista de ativos não vira valor livre: cai no cadastro."""
     conn = FakeConn()
@@ -428,6 +458,69 @@ async def test_tres_perguntas_viram_uma_mensagem_numerada():
             for sql, args in conn.executes
             if "UPDATE whatsapp_conversas" in sql
         )
+
+
+async def test_resposta_repetida_tenta_de_novo_e_usa_a_nova():
+    """Achado em produção (2026-08-19): o modelo às vezes repete uma mensagem
+    já enviada nesta conversa mesmo com o estado injetado como fato. O código
+    detecta e tenta de novo antes de mandar ao usuário."""
+    conn = FakeConn()
+    conn.mensagens_acumuladas = [
+        {"papel": "usuario", "conteudo": "Opa"},
+        {"papel": "assistente", "conteudo": "De qual setor você é?"},
+        {"papel": "usuario", "conteudo": "TI"},
+    ]
+    conn.rodada = 2
+    repetida = SaidaWhatsAppIntake(
+        informacoes_suficientes=False, confianca="BAIXA",
+        perguntas=["De qual setor você é?"],  # idêntica à já enviada
+    )
+    nova = SaidaWhatsAppIntake(
+        informacoes_suficientes=False, confianca="ALTA", setor="TI",
+        perguntas=["Show, e o que está acontecendo?"],
+    )
+    with ambiente(
+        conn, _settings(), respostas_modelo=[(repetida, None, 100, 50), (nova, None, 80, 40)]
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 2
+        amb.responder.assert_awaited_once()
+        resposta = amb.responder.await_args.args[1]
+        assert resposta == "Show, e o que está acontecendo?"
+        assert "De qual setor você é?" not in resposta
+        # Tokens das duas tentativas somados no registro de auditoria.
+        assert conn.auditorias[0][5] == 180  # tokens_entrada
+        assert conn.auditorias[0][6] == 90  # tokens_saida
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["retry_anti_repeticao"] is True
+        assert resultado["setor"] == "TI"
+
+
+async def test_resposta_repetida_duas_vezes_usa_texto_generico():
+    """Se a tentativa nova TAMBÉM repetir, nunca manda a mensagem duplicada —
+    cai num texto fixo, mas preserva o `setor` já extraído pela 1ª tentativa."""
+    conn = FakeConn()
+    conn.mensagens_acumuladas = [
+        {"papel": "usuario", "conteudo": "Opa"},
+        {"papel": "assistente", "conteudo": "De qual setor você é?"},
+        {"papel": "usuario", "conteudo": "TI"},
+    ]
+    conn.rodada = 2
+    repetida = SaidaWhatsAppIntake(
+        informacoes_suficientes=False, confianca="BAIXA", setor="TI",
+        perguntas=["De qual setor você é?"],
+    )
+    with ambiente(
+        conn, _settings(), respostas_modelo=[(repetida, None, 100, 50), (repetida, None, 90, 45)]
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 2
+        resposta = amb.responder.await_args.args[1]
+        assert resposta == whatsapp_intake._TEXTO_CONTINUAR_GENERICO
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["setor"] == "TI"  # dado real preservado apesar do texto genérico
 
 
 async def test_lock_otimista_impede_processamento_concorrente():
