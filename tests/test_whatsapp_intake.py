@@ -26,6 +26,9 @@ _PERFIL = {
     "departamento_id": "dep-autor-uuid",
     "departamento_nome": "Compras",
 }
+# Setores ativos = domínio do campo `setor` (todos os departamentos ativos, não
+# só os que recebem chamado — o setor aqui é o de quem PEDE).
+_SETORES = ["Compras", "Produção", "TI"]
 _CATALOGO = [
     {
         "id": "dep-ti-uuid",
@@ -49,6 +52,10 @@ def _settings(**overrides) -> Settings:
         whatsapp_intake_departamentos="TI",
         ia_triagem_api_key="chave-de-teste",
         whatsapp_intake_max_rodadas=4,
+        # Explícito para o teste não depender do `.env` do desenvolvedor:
+        # `Settings()` também lê o arquivo, e com App Secret preenchido a rota
+        # passa a exigir assinatura HMAC válida e devolve 403 nos POSTs abaixo.
+        whatsapp_app_secret="",
     )
     base.update(overrides)
     return Settings(**base)
@@ -155,6 +162,7 @@ def ambiente(
     perfil: dict | None = _PERFIL,
     saida: SaidaWhatsAppIntake | None = None,
     catalogo: list | None = None,
+    setores: list | None = None,
     capturar_agendamentos: bool = False,
 ):
     """Patches comuns: banco, settings, catálogo, modelo e envio de WhatsApp."""
@@ -187,6 +195,11 @@ def ambiente(
             AsyncMock(return_value=catalogo if catalogo is not None else _CATALOGO),
         ),
         patch.object(
+            whatsapp_intake,
+            "_setores_validos",
+            AsyncMock(return_value=setores if setores is not None else _SETORES),
+        ),
+        patch.object(
             whatsapp_intake, "chamar_modelo_estruturado", AsyncMock(return_value=(saida, None, 100, 50))
         ),
         patch.object(whatsapp_intake, "_responder", responder),
@@ -216,9 +229,13 @@ def _saida_completa(**overrides) -> SaidaWhatsAppIntake:
         confianca="ALTA",
         titulo="Impressora não imprime",
         descricao="A impressora do setor parou de imprimir.",
+        # Setor DITO NA CONVERSA — de propósito diferente do `departamento_nome`
+        # do perfil ("Compras"), para os testes provarem qual dos dois vence.
+        setor="Produção",
         departamento="TI",
         categoria="Equipamentos",
         subcategoria="Impressora",
+        prioridade="ALTA",
     )
     base.update(overrides)
     return SaidaWhatsAppIntake(**base)
@@ -300,13 +317,18 @@ async def test_fluxo_feliz_cria_chamado_em_nome_do_perfil_resolvido():
         assert kwargs["categoria_id"] == "cat-uuid"
         assert kwargs["subcategoria_id"] == "sub-uuid"
         assert kwargs["origem_demanda"] == "WhatsApp"
-        # `setor` = setor demandante (o do autor), não o de destino.
-        assert kwargs["setor"] == "Compras"
+        # `setor` = setor demandante, vindo da CONVERSA (decisão 2026-08-18),
+        # não do `departamento_nome` do perfil, que aqui é "Compras".
+        assert kwargs["setor"] == "Produção"
+        # Prioridade é decidida pelo modelo, não mais fixa em MEDIA.
+        assert kwargs["prioridade"] == "ALTA"
         assert kwargs["telefone_contato"] == _TELEFONE
 
-        # Confirmação com o código do chamado.
+        # Confirmação com o código do chamado e o link de acompanhamento.
         amb.responder.assert_awaited_once()
-        assert "BOND-2026-00999" in amb.responder.await_args.args[1]
+        resposta = amb.responder.await_args.args[1]
+        assert "BOND-2026-00999" in resposta
+        assert "/portal/chamados/chamado-uuid" in resposta
         # Auditoria gravada com a ação certa.
         assert conn.auditorias and conn.auditorias[0][2] == "CHAMADO_CRIADO"
 
@@ -332,12 +354,26 @@ async def test_categoria_alucinada_nunca_vira_insert():
         assert conn.auditorias[0][2] == "ENCERRADO_SEM_CHAMADO"
 
 
-async def test_perfil_sem_setor_nao_inventa_valor():
-    """`setor` é obrigatório; sem departamento no perfil, orienta contato humano."""
+async def test_setor_do_perfil_e_a_rede_de_seguranca_quando_o_dito_nao_casa():
+    """Setor fora da lista de ativos não vira valor livre: cai no cadastro."""
+    conn = FakeConn()
+    saida = _saida_completa(setor="Setor Que Não Existe")
+    with ambiente(conn, _settings(), saida=saida) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        assert amb.criar.await_args.kwargs["setor"] == "Compras"  # do perfil
+
+
+async def test_sem_setor_em_lugar_nenhum_nao_inventa_valor():
+    """`setor` é obrigatório; sem casar na conversa NEM no perfil, orienta contato humano."""
     conn = FakeConn()
     perfil_sem_setor = dict(_PERFIL, departamento_id=None, departamento_nome=None)
     with ambiente(
-        conn, _settings(), perfil=perfil_sem_setor, saida=_saida_completa()
+        conn,
+        _settings(),
+        perfil=perfil_sem_setor,
+        saida=_saida_completa(setor="Setor Que Não Existe"),
     ) as amb:
         await whatsapp_intake.processar_conversa("conversa-uuid")
 
@@ -345,12 +381,21 @@ async def test_perfil_sem_setor_nao_inventa_valor():
         assert "setor" in amb.responder.await_args.args[1].lower()
 
 
+async def test_prioridade_ausente_degrada_para_media():
+    """Modelo que omite prioridade não pode bloquear a abertura do chamado."""
+    conn = FakeConn()
+    with ambiente(conn, _settings(), saida=_saida_completa(prioridade=None)) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert amb.criar.await_args.kwargs["prioridade"] == "MEDIA"
+
+
 async def test_informacao_insuficiente_pergunta_e_mantem_conversa_aberta():
     conn = FakeConn()
     saida = SaidaWhatsAppIntake(
         informacoes_suficientes=False,
         confianca="BAIXA",
-        pergunta_esclarecimento="Qual equipamento apresentou o problema?",
+        perguntas=["Qual equipamento apresentou o problema?"],
     )
     with ambiente(conn, _settings(), saida=saida) as amb:
         await whatsapp_intake.processar_conversa("conversa-uuid")
@@ -358,6 +403,24 @@ async def test_informacao_insuficiente_pergunta_e_mantem_conversa_aberta():
         amb.criar.assert_not_awaited()
         amb.responder.assert_awaited_once()
         assert "Qual equipamento" in amb.responder.await_args.args[1]
+
+
+async def test_tres_perguntas_viram_uma_mensagem_numerada():
+    """O roteiro de investigação da triagem chega ao usuário numa mensagem só."""
+    conn = FakeConn()
+    saida = SaidaWhatsAppIntake(
+        informacoes_suficientes=False,
+        confianca="BAIXA",
+        perguntas=["Qual equipamento?", "Desde quando?", "O que já tentou?"],
+    )
+    with ambiente(conn, _settings(), saida=saida) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        amb.responder.assert_awaited_once()
+        resposta = amb.responder.await_args.args[1]
+        assert "1. Qual equipamento?" in resposta
+        assert "3. O que já tentou?" in resposta
         assert conn.auditorias[0][2] == "PERGUNTA"
         # Conversa volta a COLETANDO para aceitar a resposta do usuário.
         assert any(

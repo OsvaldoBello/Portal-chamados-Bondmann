@@ -128,8 +128,12 @@ class Settings(BaseSettings):
     # Timeout por chamada ao modelo (C6, mesmo valor unificado da triagem).
     whatsapp_intake_timeout_s: float = Field(default=30.0)
     # Teto de rodadas de pergunta de esclarecimento antes de encerrar sem
-    # chamado (evita loop infinito de "não entendi, repete").
-    whatsapp_intake_max_rodadas: int = Field(default=4)
+    # chamado (evita loop infinito de "não entendi, repete"). Era 4; subiu para
+    # 6 em 2026-08-18 junto com a apresentação obrigatória do bot: saudação,
+    # setor e o roteiro de investigação já consomem 3 rodadas antes de sobrar
+    # margem para uma resposta vaga, e encerrar no meio disso deixaria o
+    # usuário sem chamado tendo respondido tudo que foi perguntado.
+    whatsapp_intake_max_rodadas: int = Field(default=6)
     # Modelo usado na extração. Reaproveita `ia_triagem_api_key`/
     # `ia_triagem_base_url` (mesmo precedente de `ia_resumo_ativo`) — só o
     # modelo é próprio; custo fica segregado via `ia_whatsapp_intake.custo_usd`.
@@ -140,6 +144,14 @@ class Settings(BaseSettings):
     # travadas por restart/redeploy — mesma rede de segurança da triagem
     # (`ia_triagem_reconciliacao_intervalo_s`). `<= 0` desliga a varredura.
     whatsapp_intake_reconciliacao_intervalo_s: float = Field(default=60.0)
+
+    # Base pública do portal, usada no link de acompanhamento que o intake
+    # manda por WhatsApp junto com o código do chamado. Default = domínio do
+    # Railway (o mesmo que atende o webhook da Meta hoje); trocar aqui quando
+    # existir domínio próprio. Sem barra no fim.
+    portal_base_url: str = Field(
+        default="https://portal-chamados-bondmann-production.up.railway.app"
+    )
 
     # --- IA (triagem de chamados + resumo do Químico) ---
     # Frente de IA de triagem (plano_md_mestre_IA.md, Seção 2.4): TODAS as flags

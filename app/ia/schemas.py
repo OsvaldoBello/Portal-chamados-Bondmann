@@ -69,20 +69,30 @@ class SaidaWhatsAppIntake(BaseModel):
 
     model_config = {"extra": "ignore"}
 
-    # Há dado suficiente (título, descrição, departamento, categoria,
-    # subcategoria) para abrir o chamado sem voltar a perguntar?
+    # Há dado suficiente (título, descrição, setor, departamento, categoria,
+    # subcategoria, prioridade) para abrir o chamado sem voltar a perguntar?
     informacoes_suficientes: bool
     confianca: Literal["ALTA", "MEDIA", "BAIXA"] = "MEDIA"
-    # Obrigatória quando informacoes_suficientes=False (validado em código,
-    # não pelo schema — o modelo às vezes omite mesmo quando deveria vir).
-    pergunta_esclarecimento: str | None = None
+    # De 1 a 3 perguntas quando informacoes_suficientes=False (decisão do
+    # gestor 2026-08-18: o modelo escolhe quantas, mandando uma só quando falta
+    # pouco e as 3 quando o relato é vago). Lista NÃO vazia é validada em
+    # código, não pelo schema — o modelo às vezes omite mesmo quando deveria
+    # vir. Mesmo teto de 3 do ciclo de perguntas da triagem do portal.
+    perguntas: list[str] = Field(default_factory=list, max_length=3)
     titulo: str | None = None
     descricao: str | None = None
+    # Setor DEMANDANTE (o do próprio autor), perguntado na conversa — nome
+    # literal da lista de setores ativos injetada no prompt. Mesmo campo
+    # obrigatório do formulário de abertura do portal.
+    setor: str | None = None
     # Nomes LITERAIS do catálogo injetado no prompt — qualquer nome fora do
     # catálogo é tratado como alucinação pelo chamador (nunca vira INSERT).
     departamento: str | None = None
     categoria: str | None = None
     subcategoria: str | None = None
+    # Prioridade derivada do relato (impacto × urgência). Ausente/inválida
+    # degrada para MEDIA no chamador — nunca bloqueia a abertura.
+    prioridade: Literal["BAIXA", "MEDIA", "ALTA", "URGENTE"] | None = None
 
 
 class SaidaPasseB(BaseModel):

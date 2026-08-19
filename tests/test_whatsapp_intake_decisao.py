@@ -1,7 +1,11 @@
 """Decisão do intake WhatsApp (função pura) e extração de mensagens do webhook."""
 
 from app.ia.schemas import SaidaWhatsAppIntake
-from app.ia.whatsapp_intake import decidir_acao_intake, extrair_mensagens
+from app.ia.whatsapp_intake import (
+    decidir_acao_intake,
+    extrair_mensagens,
+    texto_das_perguntas,
+)
 
 
 def _saida(**overrides) -> SaidaWhatsAppIntake:
@@ -10,9 +14,11 @@ def _saida(**overrides) -> SaidaWhatsAppIntake:
         confianca="ALTA",
         titulo="Impressora não imprime",
         descricao="A impressora do setor parou de imprimir hoje de manhã.",
+        setor="Produção",
         departamento="TI",
         categoria="Equipamentos",
         subcategoria="Impressora",
+        prioridade="MEDIA",
     )
     base.update(overrides)
     return SaidaWhatsAppIntake(**base)
@@ -25,7 +31,7 @@ def test_informacoes_suficientes_cria_chamado():
 def test_insuficiente_com_pergunta_pergunta():
     saida = _saida(
         informacoes_suficientes=False,
-        pergunta_esclarecimento="Qual impressora apresentou o problema?",
+        perguntas=["Qual impressora apresentou o problema?"],
         titulo=None,
         descricao=None,
         departamento=None,
@@ -35,23 +41,57 @@ def test_insuficiente_com_pergunta_pergunta():
     assert decidir_acao_intake(saida, rodada=1, max_rodadas=4) == "PERGUNTA"
 
 
+def test_suficiente_sem_setor_pergunta_em_vez_de_criar():
+    """`setor` é campo obrigatório do chamado e, por decisão de 2026-08-18, vem
+    da conversa. Modelo que diz "suficiente" sem setor está errado — vira
+    pergunta, nunca chamado sem dono declarado."""
+    saida = _saida(setor=None, perguntas=["De qual setor você é?"])
+    assert decidir_acao_intake(saida, rodada=1, max_rodadas=4) == "PERGUNTA"
+
+
+def test_suficiente_sem_setor_e_sem_pergunta_encerra():
+    assert (
+        decidir_acao_intake(_saida(setor="  ", perguntas=[]), rodada=1, max_rodadas=4)
+        == "ENCERRAR_SEM_CHAMADO"
+    )
+
+
 def test_teto_de_rodadas_encerra_em_vez_de_perguntar():
     """Sem isso o usuário ficaria num loop de 'não entendi, repete'."""
     saida = _saida(
         informacoes_suficientes=False,
-        pergunta_esclarecimento="Pode detalhar melhor?",
+        perguntas=["Pode detalhar melhor?"],
         titulo=None,
     )
     assert decidir_acao_intake(saida, rodada=4, max_rodadas=4) == "ENCERRAR_SEM_CHAMADO"
 
 
 def test_insuficiente_sem_pergunta_encerra():
-    saida = _saida(informacoes_suficientes=False, pergunta_esclarecimento="   ", titulo=None)
+    saida = _saida(informacoes_suficientes=False, perguntas=["   "], titulo=None)
     assert decidir_acao_intake(saida, rodada=1, max_rodadas=4) == "ENCERRAR_SEM_CHAMADO"
 
 
 def test_sem_saida_do_modelo_encerra():
     assert decidir_acao_intake(None, rodada=1, max_rodadas=4) == "ENCERRAR_SEM_CHAMADO"
+
+
+# --- texto_das_perguntas ---------------------------------------------------
+
+
+def test_uma_pergunta_vai_crua():
+    """A apresentação da primeira rodada cai aqui — numerar "1." ficaria bizarro."""
+    assert texto_das_perguntas(["De qual setor você é?"]) == "De qual setor você é?"
+
+
+def test_varias_perguntas_sao_numeradas():
+    texto = texto_das_perguntas(["Qual equipamento?", "Desde quando?", "Já tentou algo?"])
+    assert texto == "1. Qual equipamento?\n2. Desde quando?\n3. Já tentou algo?"
+
+
+def test_vazios_sao_descartados():
+    assert texto_das_perguntas(["  ", "Qual equipamento?", ""]) == "Qual equipamento?"
+    assert texto_das_perguntas([]) == ""
+    assert texto_das_perguntas(["   "]) == ""
 
 
 # --- extrair_mensagens -----------------------------------------------------

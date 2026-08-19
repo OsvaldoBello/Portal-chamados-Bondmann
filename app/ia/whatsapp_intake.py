@@ -58,18 +58,24 @@ _ORIGEM_DEMANDA = "WhatsApp"
 # triagem, onde 1 min já se mostrou suficiente em produção).
 _MARGEM_TRAVADA = "2 minutes"
 
+# Mensagens fixas — mesmo tom amigável que o prompt exige do modelo (decisão
+# do gestor, 2026-08-18): quem lê não distingue o que veio da IA do que veio
+# daqui, então destoar aqui quebra a persona do bot inteira.
 TEXTO_SEM_CADASTRO = (
-    "Olá! Não encontrei este número no cadastro do Portal de Chamados da "
-    "Bondmann. Para abrir chamados por aqui, peça ao TI para cadastrar o seu "
-    "número no seu perfil do Portal."
+    "Oi! Eu sou o bot de chamados da Bondmann 🙂\n"
+    "Não encontrei este número no cadastro do Portal, então ainda não consigo "
+    "abrir chamado para você por aqui. É só pedir ao TI para cadastrar o seu "
+    "número no seu perfil do Portal que a gente se resolve por aqui na próxima!"
 )
 TEXTO_ERRO_GENERICO = (
-    "Não consegui registrar seu chamado agora. Tente novamente em alguns "
-    "minutos ou abra pelo Portal de Chamados."
+    "Desculpa, deu um problema aqui do meu lado e não consegui registrar seu "
+    "chamado agora. Pode tentar de novo daqui a alguns minutos? Se preferir "
+    "não esperar, dá para abrir direto pelo Portal de Chamados."
 )
 TEXTO_SEM_SETOR = (
-    "Seu cadastro está sem setor definido, então não consigo abrir o chamado "
-    "por aqui. Peça ao TI para completar seu perfil no Portal."
+    "Quase lá! Só que não consegui identificar o seu setor, e ele é "
+    "obrigatório para abrir o chamado. Peça ao TI para completar o seu perfil "
+    "no Portal, aí a gente resolve por aqui rapidinho."
 )
 
 
@@ -311,22 +317,71 @@ async def _responder(telefone: str, texto: str) -> None:
 # --------------------------------------------------------------------------
 
 
+def texto_das_perguntas(perguntas: list[str]) -> str:
+    """Junta as perguntas do modelo numa única mensagem de WhatsApp.
+
+    Uma pergunta vai crua (mensagem de apresentação da primeira rodada cai
+    aqui). Duas ou três são numeradas para a pessoa conseguir responder item a
+    item — o prompt já pede numeração, mas quem garante o formato é isto, não a
+    boa vontade do modelo."""
+    limpas = [p.strip() for p in perguntas if p and p.strip()]
+    if not limpas:
+        return ""
+    if len(limpas) == 1:
+        return limpas[0]
+    return "\n".join(f"{i}. {p}" for i, p in enumerate(limpas, 1))
+
+
 def decidir_acao_intake(
     saida: SaidaWhatsAppIntake | None, rodada: int, max_rodadas: int
 ) -> str:
     """``CRIAR_CHAMADO`` | ``PERGUNTA`` | ``ENCERRAR_SEM_CHAMADO`` (função pura).
 
     Sem saída válida do modelo ⇒ encerra (o usuário recebe orientação de usar
-    o Portal). Informação suficiente ⇒ cria. Insuficiente ⇒ pergunta, desde
-    que haja pergunta formulada e ainda reste rodada; no teto, encerra em vez
-    de perguntar para sempre."""
+    o Portal). Informação suficiente **e setor informado** ⇒ cria: o setor é
+    campo obrigatório do chamado e, por decisão do gestor (2026-08-18), vem da
+    conversa, não do cadastro — modelo que diz "suficiente" sem setor está
+    errado e vira pergunta, não chamado sem dono declarado. Insuficiente ⇒
+    pergunta, desde que haja pergunta formulada e ainda reste rodada; no teto,
+    encerra em vez de perguntar para sempre."""
     if saida is None:
         return "ENCERRAR_SEM_CHAMADO"
-    if saida.informacoes_suficientes:
+    if saida.informacoes_suficientes and (saida.setor or "").strip():
         return "CRIAR_CHAMADO"
-    if rodada >= max_rodadas or not (saida.pergunta_esclarecimento or "").strip():
+    if rodada >= max_rodadas or not texto_das_perguntas(saida.perguntas):
         return "ENCERRAR_SEM_CHAMADO"
     return "PERGUNTA"
+
+
+def _casar_setor(nome: str | None, setores: list[str]) -> str | None:
+    """Casa o setor dito na conversa com um setor ativo real.
+
+    Mesma comparação exata de :func:`_casar` (sem caixa/espaços nas pontas),
+    sobre uma lista de strings em vez de linhas de catálogo. Devolve o nome
+    CANÔNICO — o que vai para o banco é o do cadastro, nunca a grafia que o
+    modelo escreveu."""
+    alvo = (nome or "").strip().casefold()
+    if not alvo:
+        return None
+    return next((s for s in setores if s.strip().casefold() == alvo), None)
+
+
+def _prioridade_valida(prioridade: str | None) -> str:
+    """Prioridade do modelo, degradando para ``MEDIA``.
+
+    O schema já restringe os valores, mas a degradação explícita cobre o
+    ``None`` (modelo omitiu) sem espalhar a decisão pelo chamador — e mantém o
+    comportamento anterior à decisão de 2026-08-18, quando era fixo em MEDIA."""
+    from app.repositories.chamados import PRIORIDADES
+
+    candidato = (prioridade or "").strip().upper()
+    return candidato if candidato in PRIORIDADES else "MEDIA"
+
+
+def _link_chamado(chamado_id: str, settings: Settings) -> str:
+    """URL pública de acompanhamento do chamado (mesma rota que o portal usa
+    no redirect pós-abertura: ``/portal/chamados/{id}``)."""
+    return f"{settings.portal_base_url.rstrip('/')}/portal/chamados/{chamado_id}"
 
 
 def _casar(nome: str | None, itens: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -366,15 +421,32 @@ async def _montar_catalogo(claims: dict[str, str]) -> list[dict[str, Any]]:
     return catalogo
 
 
+async def _setores_validos(claims: dict[str, str]) -> list[str]:
+    """Nomes dos setores ativos — domínio do campo obrigatório ``setor``.
+
+    Mesma fonte e mesma semântica do formulário de abertura do portal
+    (``app/routes/portal.py``: ``setores`` = todos os departamentos ativos, não
+    só os que recebem chamado — o setor aqui é o DEMANDANTE, quem está pedindo,
+    e Produção/Comercial não têm fila mas abrem chamado). Validar contra esta
+    lista é o que impede o modelo de inventar setor: o POST do portal recusa
+    valor fora dela (``portal.py`` linha 483), e aqui a regra é a mesma."""
+    from app.repositories.catalogo import CatalogoRepo
+
+    return [
+        str(d["nome"]) for d in await CatalogoRepo().departamentos_ativos(claims) if d.get("nome")
+    ]
+
+
 def montar_mensagens(
     conversa: list[dict[str, Any]],
     catalogo: list[dict[str, Any]],
     imagem_data_uri: str | None = None,
+    setores: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Mensagens system+user da extração (mesmo formato do motor de triagem).
 
-    O catálogo entra no turno do usuário porque muda por departamento/público;
-    o prompt (system) é fixo e versionado."""
+    O catálogo e a lista de setores entram no turno do usuário porque mudam por
+    departamento/público; o prompt (system) é fixo e versionado."""
     linhas = ["## Conversa no WhatsApp"]
     for item in conversa:
         papel = "usuário" if item.get("papel") == "usuario" else "assistente"
@@ -383,6 +455,12 @@ def montar_mensagens(
             linhas.append(f"[{papel}] {conteudo}")
         elif item.get("midia_id"):
             linhas.append(f"[{papel}] (enviou uma imagem)")
+    if setores:
+        linhas += [
+            "",
+            "## Setores (para o campo `setor` — o setor de quem está pedindo)",
+            ", ".join(setores),
+        ]
     if catalogo:
         linhas += ["", "## Catálogo disponível"]
         for dep in catalogo:
@@ -483,10 +561,11 @@ async def _processar_conversa(conversa_id: str) -> None:
                          TEXTO_ERRO_GENERICO, settings, {}, None, None, None)
         return
 
+    setores = await _setores_validos(claims)
     imagem = await _imagem_da_conversa(mensagens_acumuladas, settings)
     inicio = time.monotonic()
     saida, erro, tokens_in, tokens_out = await chamar_modelo_estruturado(
-        montar_mensagens(mensagens_acumuladas, catalogo, imagem),
+        montar_mensagens(mensagens_acumuladas, catalogo, imagem, setores),
         model=settings.whatsapp_intake_model,
         api_key=settings.ia_triagem_api_key,
         base_url=settings.ia_triagem_base_url,
@@ -503,18 +582,18 @@ async def _processar_conversa(conversa_id: str) -> None:
 
     if acao == "PERGUNTA":
         assert saida is not None  # garantido por decidir_acao_intake
+        pergunta = texto_das_perguntas(saida.perguntas)
         await _finalizar(
-            conversa_id, telefone, rodada, "PERGUNTA",
-            str(saida.pergunta_esclarecimento or "").strip(),
+            conversa_id, telefone, rodada, "PERGUNTA", pergunta,
             settings, resultado, tokens_in, tokens_out, duracao_ms,
-            novo_status="COLETANDO", pergunta=str(saida.pergunta_esclarecimento or "").strip(),
+            novo_status="COLETANDO", pergunta=pergunta,
         )
         return
 
     if acao == "CRIAR_CHAMADO":
         assert saida is not None
         await _criar_chamado_da_conversa(
-            conversa_id, telefone, rodada, perfil, claims, catalogo, saida,
+            conversa_id, telefone, rodada, perfil, claims, catalogo, setores, saida,
             mensagens_acumuladas, settings, resultado, tokens_in, tokens_out, duracao_ms,
         )
         return
@@ -547,6 +626,7 @@ async def _criar_chamado_da_conversa(
     perfil: dict[str, Any],
     claims: dict[str, str],
     catalogo: list[dict[str, Any]],
+    setores: list[str],
     saida: SaidaWhatsAppIntake,
     conversa: list[dict[str, Any]],
     settings: Settings,
@@ -573,8 +653,12 @@ async def _criar_chamado_da_conversa(
     subcategoria = _casar(saida.subcategoria, categoria["subcategorias"])
 
     # `setor` = setor DEMANDANTE (o do próprio autor), mesma semântica do
-    # formulário web. Sem departamento no perfil não inventamos valor.
-    if not perfil.get("departamento_nome"):
+    # formulário web. Decisão do gestor (2026-08-18): vem da CONVERSA, não do
+    # cadastro — o bot pergunta na apresentação. O cadastro entra só como rede
+    # de segurança quando o nome dito não casa com nenhum setor ativo, e aí a
+    # regra antiga vale: sem setor de lugar nenhum, não inventamos valor.
+    setor = _casar_setor(saida.setor, setores) or perfil.get("departamento_nome")
+    if not setor:
         await _finalizar(conversa_id, telefone, rodada, "ENCERRADO_SEM_CHAMADO",
                          TEXTO_SEM_SETOR, settings, resultado, tokens_in, tokens_out, duracao_ms)
         return
@@ -595,8 +679,8 @@ async def _criar_chamado_da_conversa(
         departamento_id=str(departamento["id"]),
         titulo=titulo,
         descricao=str(saida.descricao or "").strip(),
-        prioridade="MEDIA",
-        setor=str(perfil["departamento_nome"]),
+        prioridade=_prioridade_valida(saida.prioridade),
+        setor=str(setor),
         telefone_contato=telefone_contato,
         origem_demanda=_ORIGEM_DEMANDA,
     )
@@ -605,8 +689,9 @@ async def _criar_chamado_da_conversa(
     await _anexar_imagem(conversa, perfil, claims, chamado_id, repo, settings)
     await _finalizar(
         conversa_id, telefone, rodada, "CHAMADO_CRIADO",
-        f"Chamado {novo['codigo']} aberto! A equipe de {departamento['nome']} "
-        f"vai te atender em breve. Acompanhe pelo Portal de Chamados.",
+        f"Prontinho! Abri o chamado {novo['codigo']} para você 🙂\n"
+        f"A equipe de {departamento['nome']} já foi avisada e vai te atender.\n\n"
+        f"Acompanhe por aqui: {_link_chamado(chamado_id, settings)}",
         settings, resultado, tokens_in, tokens_out, duracao_ms,
         novo_status="CONCLUIDA", chamado_id=chamado_id,
     )
