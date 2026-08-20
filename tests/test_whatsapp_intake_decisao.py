@@ -10,6 +10,7 @@ from app.ia.schemas import SaidaWhatsAppIntake
 from app.ia.whatsapp_intake import (
     _EMOJIS_CONFIRMACAO,
     _LEAD_INS_MULTIPLAS_PERGUNTAS,
+    _mesclar_campos_confirmados,
     _pede_novo_chamado,
     _saudacao_horario,
     _texto_confirmacao,
@@ -166,6 +167,48 @@ def test_montar_mensagens_injeta_saudacao_no_turno_do_usuario():
     conteudo = msgs[1]["content"]
     assert "## Saudação atual" in conteudo
     assert any(s in conteudo for s in ("Bom dia", "Boa tarde", "Boa noite"))
+
+
+def test_montar_mensagens_injeta_campos_ja_confirmados():
+    """Achado em produção (2026-08-20): sem isso, o modelo às vezes reformula
+    uma pergunta já respondida em rodada anterior. O setor/departamento já
+    extraídos entram como fato pronto no turno do usuário, igual à saudação."""
+    msgs = montar_mensagens(
+        [], catalogo=[], setores=["TI"], campos_confirmados={"setor": "TI"}
+    )
+    conteudo = msgs[1]["content"]
+    assert "## Dados já confirmados nesta conversa" in conteudo
+    assert "Setor de quem está pedindo: TI" in conteudo
+
+
+def test_montar_mensagens_sem_campos_confirmados_nao_injeta_secao():
+    """Rodada 1 (nada extraído ainda) não deve mostrar a seção vazia."""
+    msgs = montar_mensagens([], catalogo=[], setores=["TI"])
+    assert "## Dados já confirmados" not in msgs[1]["content"]
+
+
+# --- _mesclar_campos_confirmados ---------------------------------------
+
+
+def test_mesclar_campos_confirmados_repoe_campo_omitido():
+    """O modelo esqueceu de repetir `setor` nesta rodada — o valor
+    confirmado na rodada anterior é reposto, nunca se perde."""
+    saida = _saida(setor=None)
+    mesclada = _mesclar_campos_confirmados(saida, {"setor": "TI"})
+    assert mesclada.setor == "TI"
+
+
+def test_mesclar_campos_confirmados_nao_sobrescreve_valor_novo():
+    """A pessoa corrigiu o setor nesta rodada — o valor novo do modelo
+    vence, o confirmado antigo não sobrescreve."""
+    saida = _saida(setor="Produção")
+    mesclada = _mesclar_campos_confirmados(saida, {"setor": "Compras"})
+    assert mesclada.setor == "Produção"
+
+
+def test_mesclar_campos_confirmados_sem_mudanca_devolve_o_mesmo_objeto():
+    saida = _saida(setor="TI")
+    assert _mesclar_campos_confirmados(saida, {"setor": "TI"}) is saida
 
 
 # --- _texto_confirmacao -----------------------------------------------

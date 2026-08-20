@@ -149,6 +149,10 @@ class FakeConn:
         # Chamado recente pra `_chamado_recente_para_anexo` devolver — `None`
         # (default) = sem chamado dentro da janela, mídia abre conversa nova.
         self.chamado_recente: dict | None = None
+        # Campos confirmados em rodada anterior pra `_campos_confirmados`
+        # devolver — `None` (default) = nada extraído ainda.
+        self.resultado_confirmado: dict | None = None
+        self.consultas_campos_confirmados = 0
 
     async def fetchval(self, sql: str, *args):
         if "INSERT INTO whatsapp_mensagens_recebidas" in sql:
@@ -177,6 +181,11 @@ class FakeConn:
             return dict(_PERFIL)
         if "FROM whatsapp_conversas wc" in sql:
             return dict(self.chamado_recente) if self.chamado_recente else None
+        if "SELECT resultado FROM ia_whatsapp_intake" in sql:
+            self.consultas_campos_confirmados += 1
+            if self.resultado_confirmado is None:
+                return None
+            return {"resultado": json.dumps(self.resultado_confirmado, ensure_ascii=False)}
         raise AssertionError(f"fetchrow inesperado: {sql}")
 
     async def fetch(self, sql: str, *args):
@@ -882,3 +891,55 @@ async def test_anexo_pos_criacao_storage_indisponivel_nao_lanca():
 
     resposta = responder.await_args.args[1]
     assert "BOND-2026-00999" not in resposta
+
+
+# --- Campos confirmados não se perdem entre rodadas -------------------------
+#
+# Achado em produção (2026-08-20, chamado real de Marketing): `setor` saiu
+# certo em `saida.setor` desde a rodada 2 (auditoria confirma), mas o modelo
+# mesmo assim reformulou "de qual setor você é?" nas rodadas 2, 3 E 4 — cada
+# reformulação com texto diferente escapava da rede de segurança de
+# repetição exata, queimando rodadas do teto à toa até a conversa morrer em
+# ENCERRADO_SEM_CHAMADO. Estes testes cobrem a correção: o setor (e os
+# outros campos "sticky") já confirmado numa rodada anterior é lido de volta
+# da auditoria e nunca se perde, mesmo que o modelo omita no JSON desta vez.
+
+
+async def test_primeira_rodada_nunca_consulta_campos_confirmados():
+    """Round 1 não tem nada extraído ainda — nem vale a pena consultar."""
+    conn = FakeConn()  # rodada=0 → computa rodada=1
+    with ambiente(conn, _settings(), saida=_saida_completa()) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+    assert conn.consultas_campos_confirmados == 0
+    amb.criar.assert_awaited_once()
+
+
+async def test_setor_confirmado_em_rodada_anterior_nao_se_perde_mesmo_se_modelo_esquecer():
+    """O modelo (mockado) volta SEM `setor` nesta rodada — simula exatamente
+    o achado de produção. Com o setor já confirmado na rodada anterior, o
+    chamado ainda assim é criado com o setor certo, sem pedir de novo."""
+    conn = FakeConn()
+    conn.rodada = 1  # próxima rodada processada será a 2
+    conn.resultado_confirmado = {"setor": "TI"}
+    saida_sem_setor = _saida_completa(setor=None)
+    with ambiente(conn, _settings(), saida=saida_sem_setor) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert conn.consultas_campos_confirmados == 1
+        amb.criar.assert_awaited_once()
+        assert amb.criar.await_args.kwargs["setor"] == "TI"
+
+
+async def test_campo_confirmado_nao_sobrescreve_valor_novo_do_modelo():
+    """Se a pessoa CORRIGIU o setor nesta rodada, o valor novo do modelo
+    vence — o campo confirmado só reaparece quando o modelo omite."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {"setor": "Compras"}
+    saida_corrigida = _saida_completa(setor="Produção")
+    with ambiente(conn, _settings(), saida=saida_corrigida) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        assert amb.criar.await_args.kwargs["setor"] == "Produção"

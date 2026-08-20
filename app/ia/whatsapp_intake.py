@@ -654,16 +654,37 @@ def _saudacao_horario(agora: datetime | None = None) -> str:
     return "Boa noite"
 
 
+_ROTULOS_CAMPOS_CONFIRMADOS = {
+    "setor": "Setor de quem está pedindo",
+    "departamento": "Departamento de destino",
+    "categoria": "Categoria",
+    "subcategoria": "Subcategoria",
+    "data_entrega": "Data de entrega (Marketing)",
+    "sem_prazo": "Sem prazo determinado (Marketing)",
+}
+
+
 def montar_mensagens(
     conversa: list[dict[str, Any]],
     catalogo: list[dict[str, Any]],
     imagem_data_uri: str | None = None,
     setores: list[str] | None = None,
+    campos_confirmados: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Mensagens system+user da extração (mesmo formato do motor de triagem).
 
     O catálogo e a lista de setores entram no turno do usuário porque mudam por
-    departamento/público; o prompt (system) é fixo e versionado."""
+    departamento/público; o prompt (system) é fixo e versionado.
+    ``campos_confirmados`` (2026-08-20) são setor/departamento/categoria/
+    subcategoria/data_entrega/sem_prazo já extraídos em rodada anterior desta
+    MESMA conversa (:func:`_campos_confirmados`) — mesmo motivo de
+    ``ja_apresentou`` abaixo: um modelo pequeno não é confiável re-derivando
+    do histórico de texto o que já respondeu estruturadamente antes. Achado em
+    produção (chamado de Marketing, 2026-08-20): `setor` saía certo em
+    `saida.setor` desde a rodada 2, mas o modelo mesmo assim reformulou "qual
+    é o seu setor?" nas rodadas 2, 3 e 4 — cada reformulação com texto
+    diferente escapava do `_repete_mensagem_anterior` (que só pega repetição
+    EXATA), queimando rodadas do teto à toa."""
     # Calculado aqui, não deduzido pelo modelo: achado da sessão 2026-08-19,
     # onde o gpt-5.4-mini (pedido pra "ver se já tem linha [assistente] no
     # histórico") continuou repetindo a apresentação idêntica rodada após
@@ -688,6 +709,20 @@ def montar_mensagens(
             else "Esta é a primeira mensagem desta conversa — siga a seção "
             "'Primeira mensagem da conversa' do prompt."
         ),
+    ]
+    if campos_confirmados:
+        linhas += [
+            "",
+            "## Dados já confirmados nesta conversa (fatos — NÃO pergunte de "
+            "novo sobre eles, mesmo que o histórico abaixo pareça incompleto "
+            "ou você não tenha certeza; copie estes valores exatamente nos "
+            "campos correspondentes do JSON desta rodada)",
+        ]
+        linhas += [
+            f"- {_ROTULOS_CAMPOS_CONFIRMADOS.get(campo, campo)}: {valor}"
+            for campo, valor in campos_confirmados.items()
+        ]
+    linhas += [
         "",
         "## Conversa no WhatsApp",
     ]
@@ -779,6 +814,56 @@ async def _imagem_da_conversa(conversa: list[dict[str, Any]], settings: Settings
     )
 
 
+_CAMPOS_STICKY = ("setor", "departamento", "categoria", "subcategoria", "data_entrega", "sem_prazo")
+
+
+async def _campos_confirmados(conn: Any, conversa_id: str) -> dict[str, Any]:
+    """Setor/departamento/categoria/subcategoria/data_entrega/sem_prazo já
+    extraídos na rodada mais recente desta conversa — lidos da auditoria
+    (``ia_whatsapp_intake.resultado``, gravada a cada rodada por
+    :func:`_finalizar`), não de uma coluna nova: o dado já existe ali, sem
+    precisar de migration. Vazio na primeira rodada (nada extraído ainda) ou
+    quando não há nenhum campo confirmado."""
+    linha = await conn.fetchrow(
+        """
+        SELECT resultado FROM ia_whatsapp_intake
+         WHERE conversa_id = $1::uuid
+         ORDER BY rodada DESC
+         LIMIT 1
+        """,
+        conversa_id,
+    )
+    if linha is None:
+        return {}
+    resultado = linha["resultado"]
+    if isinstance(resultado, str):
+        resultado = json.loads(resultado)
+    if not isinstance(resultado, dict):
+        return {}
+    return {
+        campo: resultado[campo]
+        for campo in _CAMPOS_STICKY
+        if resultado.get(campo) not in (None, "", False)
+    }
+
+
+def _mesclar_campos_confirmados(
+    saida: SaidaWhatsAppIntake, confirmados: dict[str, Any]
+) -> SaidaWhatsAppIntake:
+    """Repõe um campo já confirmado em rodada anterior que o modelo tenha
+    esquecido de repetir nesta rodada — nunca deixa um dado real regredir
+    pra vazio. Rede de segurança: a correção principal é a injeção do fato
+    em :func:`montar_mensagens`; isso cobre o caso do modelo ainda assim
+    omitir o campo apesar da instrução."""
+    dados = saida.model_dump()
+    mudou = False
+    for campo, valor in confirmados.items():
+        if not dados.get(campo):
+            dados[campo] = valor
+            mudou = True
+    return SaidaWhatsAppIntake(**dados) if mudou else saida
+
+
 async def processar_conversa(conversa_id: str) -> None:
     """Roda uma rodada de extração e executa a ação decidida. Nunca lança."""
     try:
@@ -828,6 +913,11 @@ async def _processar_conversa(conversa_id: str) -> None:
     rodada = int(conversa["rodada"]) + 1
     claims = claims_do_perfil(perfil["id"])
 
+    campos_confirmados: dict[str, Any] = {}
+    if rodada > 1:
+        async with admin_connection() as conn:
+            campos_confirmados = await _campos_confirmados(conn, conversa_id)
+
     catalogo = await _montar_catalogo(claims)
     if not catalogo:
         log.warning("[WA INTAKE] Nenhum departamento habilitado tem catálogo visível.")
@@ -837,7 +927,7 @@ async def _processar_conversa(conversa_id: str) -> None:
 
     setores = await _setores_validos(claims)
     imagem = await _imagem_da_conversa(mensagens_acumuladas, settings)
-    mensagens = montar_mensagens(mensagens_acumuladas, catalogo, imagem, setores)
+    mensagens = montar_mensagens(mensagens_acumuladas, catalogo, imagem, setores, campos_confirmados)
     inicio = time.monotonic()
     saida, erro, tokens_in, tokens_out = await chamar_modelo_estruturado(
         mensagens,
@@ -850,6 +940,8 @@ async def _processar_conversa(conversa_id: str) -> None:
     )
     if erro:
         log.warning("[WA INTAKE] Conversa %s sem saída útil: %s", conversa_id, erro)
+    if saida is not None and campos_confirmados:
+        saida = _mesclar_campos_confirmados(saida, campos_confirmados)
 
     acao = decidir_acao_intake(saida, rodada, settings.whatsapp_intake_max_rodadas)
     pergunta = (
@@ -878,6 +970,8 @@ async def _processar_conversa(conversa_id: str) -> None:
         )
         tokens_in = tokens_in if tokens_in_retry is None else (tokens_in or 0) + tokens_in_retry
         tokens_out = tokens_out if tokens_out_retry is None else (tokens_out or 0) + tokens_out_retry
+        if saida_retry is not None and campos_confirmados:
+            saida_retry = _mesclar_campos_confirmados(saida_retry, campos_confirmados)
         acao_retry = decidir_acao_intake(saida_retry, rodada, settings.whatsapp_intake_max_rodadas)
         pergunta_retry = (
             texto_das_perguntas(saida_retry.perguntas)

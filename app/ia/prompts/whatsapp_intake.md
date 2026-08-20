@@ -53,6 +53,18 @@ lendo o histórico, use o que essa seção afirma.
   pareça a resposta "mais segura" quando você não sabe bem o que perguntar.
   Releia a ÚLTIMA linha `[usuário]` e responda a ela especificamente.
 
+Pode haver também uma seção `## Dados já confirmados nesta conversa` — se
+ela aparecer, cada campo listado ali **já foi respondido em rodada
+anterior**, mesmo que reler o histórico de texto abaixo não deixe isso óbvio.
+**Copie esses valores exatamente nos campos correspondentes do JSON desta
+rodada e NUNCA formule pergunta sobre eles de novo, nem reformulada, nem
+combinada com outra pergunta** — isso vale mesmo quando você não tem certeza
+do que perguntar a seguir: nesse caso, pule para o próximo ponto do roteiro
+que ainda falta (seção "Perguntas de investigação" abaixo), nunca volte a um
+campo já confirmado. Achado real em produção: perguntar "de qual setor você
+é?" de novo, reformulado, depois do setor já ter sido respondido e
+confirmado é exatamente o tipo de erro que esta seção existe para prevenir.
+
 ## Primeira mensagem da conversa
 
 Só se aplica quando `## Estado da conversa` disser que é a primeira mensagem.
