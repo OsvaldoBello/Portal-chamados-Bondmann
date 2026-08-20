@@ -102,6 +102,38 @@ def test_pode_reabrir_verdadeiro_mesmo_no_proprio_departamento():
     )
 
 
+def test_pode_excluir_autor_com_chamado_novo_sem_atendimento():
+    assert PortalService.pode_excluir(
+        {"status": "NOVO", "cliente_id": "u1", "operador_id": None, "respondido_em": None}, "u1"
+    )
+
+
+def test_pode_excluir_falso_se_nao_autor():
+    assert not PortalService.pode_excluir(
+        {"status": "NOVO", "cliente_id": "u1", "operador_id": None, "respondido_em": None}, "u2"
+    )
+
+
+def test_pode_excluir_falso_se_status_diferente_de_novo():
+    assert not PortalService.pode_excluir(
+        {"status": "EM_ATENDIMENTO", "cliente_id": "u1", "operador_id": None, "respondido_em": None}, "u1"
+    )
+
+
+def test_pode_excluir_falso_se_ja_tem_operador():
+    assert not PortalService.pode_excluir(
+        {"status": "NOVO", "cliente_id": "u1", "operador_id": "op1", "respondido_em": None}, "u1"
+    )
+
+
+def test_pode_excluir_falso_se_ja_foi_respondido():
+    """`respondido_em` cobre o caso de staff responder sem reivindicar antes
+    (mudaria `operador_id`/`status` mas não necessariamente os dois)."""
+    assert not PortalService.pode_excluir(
+        {"status": "NOVO", "cliente_id": "u1", "operador_id": None, "respondido_em": "2026-08-20T10:00:00"}, "u1"
+    )
+
+
 def test_marketing_dep_id_encontra_por_nome_case_insensitive():
     deps = [{"id": "x1", "nome": "marketing"}]
     assert PortalService.marketing_dep_id(deps) == "x1"

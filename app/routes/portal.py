@@ -730,6 +730,7 @@ async def detalhe_chamado(
     request: Request,
     chamado_id: str,
     avaliar_pendente: str = "",
+    excluir: str = "",
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
@@ -768,6 +769,8 @@ async def detalhe_chamado(
             "formulario_pendente": formulario_pendente,
             "pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id),
             "pode_reabrir": PortalService.pode_reabrir(chamado, ctx.user.id),
+            "pode_excluir": PortalService.pode_excluir(chamado, ctx.user.id),
+            "confirmar_exclusao": bool(excluir),
             "avaliar_pendente": bool(avaliar_pendente),
             "observadores": observadores,
             "usuarios_copia": usuarios_copia,
@@ -778,6 +781,36 @@ async def detalhe_chamado(
             "base_template": portal_base_template(ctx.perfil),
         },
     )
+
+
+@router.post("/chamados/{chamado_id}/excluir")
+async def excluir_chamado(
+    request: Request,
+    chamado_id: str,
+    ctx: PortalCtx = Depends(portal_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Exclui um chamado aberto por engano pelo PRÓPRIO autor.
+
+    Decisão do gestor (2026-08-20), revertendo parcialmente a
+    `0025_chamados_delete_staff.sql` ("O funcionário NUNCA apaga"). Checagem
+    explícita em Python (mesmo padrão de `reabrir_chamado` — 404/403 de
+    verdade, não um redirect silencioso que pareceria sucesso mesmo sem
+    apagar nada) + RLS reforçando no banco (`chamados_delete_cliente`,
+    migration 0088, mesma condição de `PortalService.pode_excluir`): chamado
+    já atendido só é excluído por staff/TI (`chamados_delete_staff`,
+    inalterada)."""
+    chamado = await repo.obter(ctx.user.claims, chamado_id)
+    if chamado is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+    if not PortalService.pode_excluir(chamado, ctx.user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Só o autor pode excluir, e apenas enquanto o chamado ainda não foi atendido.",
+        )
+    await repo.excluir(ctx.user.claims, chamado_id)
+    return RedirectResponse("/portal", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/chamados/{chamado_id}/observadores")

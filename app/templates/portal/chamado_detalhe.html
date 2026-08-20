@@ -187,6 +187,30 @@
 </div>
 {% endif %}
 
+{# Zona de exclusão: o autor pode desfazer um chamado aberto por engano,
+   só enquanto ninguém mexeu nele ainda (ver PortalService.pode_excluir).
+   Confirmação em duas etapas, mesmo padrão do Workspace/admin. #}
+{% if pode_excluir %}
+<div class="bg-white rounded-xl shadow-card border border-sla-danger/30 p-5 space-y-2 mb-5">
+  {% if confirmar_exclusao %}
+  <p class="text-[13px] text-sla-danger font-semibold">Excluir o chamado <span class="break-all">{{ chamado.codigo }}</span>? Esta ação é permanente e apaga toda a conversa.</p>
+  <div class="flex items-center gap-2">
+    <form method="post" action="/portal/chamados/{{ chamado.id }}/excluir">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-sla-danger text-white hover:brightness-95">Confirmar exclusão</button>
+    </form>
+    <a href="/portal/chamados/{{ chamado.id }}" class="text-xs font-semibold px-3 py-1.5 rounded-lg bg-surface2 text-navy hover:bg-line">Cancelar</a>
+  </div>
+  {% else %}
+  <a href="/portal/chamados/{{ chamado.id }}?excluir=1"
+     class="inline-flex items-center gap-1.5 text-xs font-semibold text-sla-danger hover:underline">
+    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 7h12M9 7V5.5A1.5 1.5 0 0110.5 4h3A1.5 1.5 0 0115 5.5V7m-6 4v6m4-6v6M5 7l1 12a2 2 0 002 2h8a2 2 0 002-2l1-12"/></svg>
+    Excluir chamado (aberto por engano)
+  </a>
+  {% endif %}
+</div>
+{% endif %}
+
 {# Avaliação (CSAT) — fragmento isolado para swap HTMX #}
 {% include "portal/_avaliacao.html" %}
 {% endblock %}

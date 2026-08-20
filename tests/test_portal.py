@@ -101,6 +101,7 @@ class FakeRepo:
         }
         self.avaliacoes: list[dict] = []
         self.reaberturas: list[str] = []
+        self.exclusoes: list[str] = []
         self.criados: list[dict] = []
         self.mensagens_criadas: list[dict] = []
         self.observadores_adicionados: list[tuple] = []
@@ -207,6 +208,10 @@ class FakeRepo:
             return None
         self.reaberturas.append(chamado_id)
         return {"id": chamado_id, "status": "EM_ATENDIMENTO"}
+
+    async def excluir(self, claims, chamado_id):
+        self.exclusoes.append(chamado_id)
+        return True
 
     async def adicionar_mensagem(self, claims, chamado_id, *, remetente_id, conteudo, anexos=None):
         self.mensagens_criadas.append(
@@ -1258,6 +1263,81 @@ def test_post_reabrir_nao_autor_e_bloqueado():
         )
     assert resp.status_code == 403
     assert repo.reaberturas == []
+
+
+# --------------------------------------------------------------------------
+# 2026-08-20: exclusão pelo autor (chamado aberto por engano, sem atendimento).
+# --------------------------------------------------------------------------
+def test_excluir_mostrado_quando_novo_sem_atendimento():
+    repo = FakeRepo(chamado=_chamado(status="NOVO", operador_id=None, respondido_em=None))
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa")
+    assert resp.status_code == 200
+    assert "Excluir chamado" in resp.text
+
+
+def test_excluir_oculto_quando_ja_tem_operador():
+    repo = FakeRepo(chamado=_chamado(status="NOVO", operador_id="op1", respondido_em=None))
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa")
+    assert resp.status_code == 200
+    assert "Excluir chamado" not in resp.text
+
+
+def test_excluir_oculto_quando_ja_foi_respondido():
+    repo = FakeRepo(
+        chamado=_chamado(status="NOVO", operador_id=None, respondido_em=datetime(2026, 6, 30, 13, 0, tzinfo=UTC))
+    )
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa")
+    assert resp.status_code == 200
+    assert "Excluir chamado" not in resp.text
+
+
+def test_excluir_oculto_quando_status_diferente_de_novo():
+    repo = FakeRepo(chamado=_chamado(status="EM_ATENDIMENTO", operador_id=None, respondido_em=None))
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa")
+    assert resp.status_code == 200
+    assert "Excluir chamado" not in resp.text
+
+
+def test_post_excluir_autor_chamado_novo_redireciona():
+    repo = FakeRepo(chamado=_chamado(status="NOVO", operador_id=None, respondido_em=None))
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/excluir",
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/portal"
+    assert repo.exclusoes == ["aaa"]
+
+
+def test_post_excluir_chamado_ja_atendido_e_bloqueado():
+    repo = FakeRepo(chamado=_chamado(status="NOVO", operador_id="op1", respondido_em=None))
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/excluir",
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 403
+    assert repo.exclusoes == []
+
+
+def test_post_excluir_nao_autor_e_bloqueado():
+    repo = FakeRepo(chamado=_chamado(status="NOVO", cliente_id="outro-uid", operador_id=None, respondido_em=None))
+    with portal_client(repo) as client:
+        token = _csrf(client)
+        resp = client.post(
+            "/portal/chamados/aaa/excluir",
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 403
+    assert repo.exclusoes == []
 
 
 # --------------------------------------------------------------------------

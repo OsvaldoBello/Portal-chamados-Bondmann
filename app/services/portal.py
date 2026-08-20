@@ -81,6 +81,21 @@ class PortalService:
         )
 
     @staticmethod
+    def pode_excluir(chamado: dict, user_id: str) -> bool:
+        """Regra de UI: o autor pode excluir o PRÓPRIO chamado só enquanto
+        ele ainda não foi atendido — decisão do gestor (2026-08-20),
+        reversão parcial da `0025_chamados_delete_staff.sql` ("O funcionário
+        NUNCA apaga"). RLS (`chamados_delete_cliente`, migration 0088) reforça
+        no banco com a mesma condição; esta função só evita mostrar o botão
+        quando a exclusão de qualquer forma seria recusada."""
+        return (
+            str(chamado.get("cliente_id")) == str(user_id)
+            and chamado.get("status") == "NOVO"
+            and not chamado.get("operador_id")
+            and not chamado.get("respondido_em")
+        )
+
+    @staticmethod
     def data_entrega_min() -> date:
         """Menor data de entrega permitida (hoje + 48h, no fuso de Brasília).
 
