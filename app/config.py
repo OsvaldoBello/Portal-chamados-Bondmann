@@ -131,12 +131,17 @@ class Settings(BaseSettings):
     # Timeout por chamada ao modelo (C6, mesmo valor unificado da triagem).
     whatsapp_intake_timeout_s: float = Field(default=30.0)
     # Teto de rodadas de pergunta de esclarecimento antes de encerrar sem
-    # chamado (evita loop infinito de "não entendi, repete"). Era 4; subiu para
-    # 6 em 2026-08-18 junto com a apresentação obrigatória do bot: saudação,
-    # setor e o roteiro de investigação já consomem 3 rodadas antes de sobrar
-    # margem para uma resposta vaga, e encerrar no meio disso deixaria o
-    # usuário sem chamado tendo respondido tudo que foi perguntado.
-    whatsapp_intake_max_rodadas: int = Field(default=6)
+    # chamado (evita loop infinito de "não entendi, repete" — nunca removido
+    # de vez, sempre existe algum teto, mesmo filosofia de kill switch do
+    # resto do projeto). Era 4; subiu pra 6 em 2026-08-18 junto com a
+    # apresentação obrigatória do bot. Subiu bem mais, pra 30, em 2026-08-20
+    # (pedido do gestor: teto baixo cortava a conversa do Marketing antes da
+    # IA conseguir captar a demanda completa) — não é "sem limite" de
+    # verdade, mas alto o bastante pra nunca ser o fator limitante numa
+    # conversa normal; o que hoje encerra cedo demais é falha de conteúdo do
+    # prompt (perguntar prazo antes de saber a demanda), não falta de rodada
+    # — ver `app/ia/prompts/whatsapp_intake.md`, itens 3/4/6.
+    whatsapp_intake_max_rodadas: int = Field(default=30)
     # Modelo usado na extração. Reaproveita `ia_triagem_api_key`/
     # `ia_triagem_base_url` (mesmo precedente de `ia_resumo_ativo`) — só o
     # modelo é próprio; custo fica segregado via `ia_whatsapp_intake.custo_usd`.
