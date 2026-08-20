@@ -125,8 +125,11 @@ class Settings(BaseSettings):
     # `ia_triagem_departamentos`). V1 cobria só departamentos "simples"; desde
     # 2026-08-19 o intake também sabe tratar o fluxo por demanda do Marketing
     # (`app/ia/whatsapp_intake.py::_criar_chamado_da_conversa`, reaproveitando
-    # `PortalService.regras_marketing`). Segue faltando o formulário dinâmico
-    # do Dpto Químico — não habilitar esse departamento aqui ainda.
+    # `PortalService.regras_marketing`). Desde 2026-08-20 também sabe travar a
+    # abertura do RH quando a subcategoria exige formulário anexado
+    # (`_formulario_rh_pendente`, reaproveitando `formularios_rh.py` — mesma
+    # regra endurecida no Portal em 2026-08-10). Segue faltando o formulário
+    # dinâmico do Dpto Químico — não habilitar esse departamento aqui ainda.
     whatsapp_intake_departamentos: str = Field(default="")
     # Timeout por chamada ao modelo (C6, mesmo valor unificado da triagem).
     whatsapp_intake_timeout_s: float = Field(default=30.0)

@@ -70,6 +70,58 @@ async def enviar_mensagem_texto(destinatario: str, corpo: str) -> dict:
     return data
 
 
+async def enviar_documento(
+    destinatario: str, link: str, *, nome_arquivo: str | None = None, legenda: str | None = None
+) -> dict:
+    """Envia um documento por URL pública — o modelo em branco de um
+    formulário obrigatório (ex.: RH, `app/domain/formularios_rh.py`), por
+    exemplo.
+
+    Usa o parâmetro `link` da Graph API (a própria Meta baixa o arquivo dessa
+    URL e reenvia ao destinatário) em vez do fluxo de upload prévio
+    (`POST /{phone_number_id}/media`): os modelos são estáticos e já públicos
+    (`app/static/formularios/...`), então não há por que subir de novo a cada
+    envio. Mesma janela de 24h de `enviar_mensagem_texto`.
+    """
+    settings = get_settings()
+    if not settings.whatsapp_access_token or not settings.whatsapp_phone_number_id:
+        raise WhatsAppNaoConfigurado(
+            "WHATSAPP_ACCESS_TOKEN e/ou WHATSAPP_PHONE_NUMBER_ID não configurados."
+        )
+
+    url = (
+        f"https://graph.facebook.com/{settings.whatsapp_api_version}"
+        f"/{settings.whatsapp_phone_number_id}/messages"
+    )
+    documento: dict[str, str] = {"link": link}
+    if nome_arquivo:
+        documento["filename"] = nome_arquivo
+    if legenda:
+        documento["caption"] = legenda
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": destinatario,
+        "type": "document",
+        "document": documento,
+    }
+    headers = {"Authorization": f"Bearer {settings.whatsapp_access_token}"}
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+
+    if resp.status_code >= 400:
+        detalhe = resp.text
+        log.warning("WhatsApp: envio de documento recusado pela Graph API (status=%s)", resp.status_code)
+        raise WhatsAppEnvioFalhou(resp.status_code, detalhe)
+
+    data = resp.json()
+    log.info(
+        "WhatsApp: documento enviado (message_id=%s)",
+        (data.get("messages") or [{}])[0].get("id"),
+    )
+    return data
+
+
 async def baixar_midia(media_id: str) -> tuple[bytes, str] | None:
     """Baixa uma mídia recebida (foto ou documento do intake) — ``(conteudo, mime)`` ou ``None``.
 

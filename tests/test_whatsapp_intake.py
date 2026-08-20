@@ -207,6 +207,7 @@ class Ambiente:
 
     criar: AsyncMock
     responder: AsyncMock
+    responder_documento: AsyncMock
     agendadas: list
 
 
@@ -230,6 +231,7 @@ def ambiente(
 
     criar = AsyncMock(return_value={"id": "chamado-uuid", "codigo": "BOND-2026-00999"})
     responder = AsyncMock()
+    responder_documento = AsyncMock()
     agendadas: list = []
 
     repo = AsyncMock()
@@ -264,6 +266,7 @@ def ambiente(
             else AsyncMock(return_value=(saida, None, 100, 50)),
         ),
         patch.object(whatsapp_intake, "_responder", responder),
+        patch.object(whatsapp_intake, "_responder_documento", responder_documento),
         patch.object(whatsapp_intake, "_imagem_da_conversa", AsyncMock(return_value=None)),
         patch.object(whatsapp_intake, "_anexar_midia_da_conversa", AsyncMock()),
         patch.object(whatsapp_intake, "_pos_criacao", AsyncMock()),
@@ -276,7 +279,10 @@ def ambiente(
         for p in patches:
             stack.enter_context(p)
         try:
-            yield Ambiente(criar=criar, responder=responder, agendadas=agendadas)
+            yield Ambiente(
+                criar=criar, responder=responder,
+                responder_documento=responder_documento, agendadas=agendadas,
+            )
         finally:
             # Corotinas capturadas nunca são aguardadas — fecha para não vazar.
             for corotina in agendadas:
@@ -577,6 +583,139 @@ async def test_marketing_no_teto_de_rodadas_sem_prazo_resolvido_encerra():
     with ambiente(
         conn, _settings(whatsapp_intake_departamentos="Marketing"),
         saida=saida, catalogo=_CATALOGO_MARKETING,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "ENCERRADO_SEM_CHAMADO"
+
+
+# --- Formulário obrigatório do RH -------------------------------------------
+#
+# Mesma regra endurecida no Portal em 2026-08-10 (`app/routes/portal.py`):
+# certas subcategorias do RH exigem o FB anexado já na ABERTURA — "avisar e
+# deixar concluir depois" reabriu um bug real uma vez. O WhatsApp reaproveita
+# `app/domain/formularios_rh.py::formulario_da_subcategoria` para não virar
+# uma porta lateral que reabre o mesmo gap.
+
+
+_CATALOGO_RH = [
+    {
+        "id": "dep-rh-uuid",
+        "nome": "RH",
+        "categorias": [
+            {
+                "id": "cat-rh-uuid",
+                "nome": "Movimentação de pessoal",
+                "subcategorias": [
+                    {"id": "sub-rh-formulario-uuid", "nome": "Aumento de Quadro"},
+                    {"id": "sub-rh-livre-uuid", "nome": "Dúvida geral"},
+                ],
+            }
+        ],
+    }
+]
+
+
+def _saida_rh(**overrides) -> SaidaWhatsAppIntake:
+    base = dict(
+        informacoes_suficientes=True,
+        confianca="ALTA",
+        titulo="Contratação para o time comercial",
+        descricao="Precisa abrir vaga nova para reforçar o time comercial.",
+        setor="Produção",
+        departamento="RH",
+        categoria="Movimentação de pessoal",
+        subcategoria="Aumento de Quadro",
+        prioridade="MEDIA",
+    )
+    base.update(overrides)
+    return SaidaWhatsAppIntake(**base)
+
+
+async def test_rh_subcategoria_com_formulario_sem_anexo_pergunta_em_vez_de_criar():
+    """Sem anexo, o bot manda o modelo em branco como DOCUMENTO de verdade no
+    WhatsApp (não só um link em texto) e explica o que fazer em seguida."""
+    conn = FakeConn()
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="RH"),
+        saida=_saida_rh(), catalogo=_CATALOGO_RH,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "PERGUNTA"
+        # O modelo em branco foi mandado como documento (link do estático).
+        amb.responder_documento.assert_awaited_once()
+        link, kwargs = amb.responder_documento.await_args.args[1], amb.responder_documento.await_args.kwargs
+        assert link.endswith("/static/formularios/rh/fb031-solicitacao-contratacao.docx")
+        assert "fb031" in kwargs["nome_arquivo"].lower()
+        # E o texto explicativo saiu depois, sem repetir o link (o documento
+        # já chegou pronto pra abrir).
+        resposta = amb.responder.await_args.args[1]
+        assert "formulário" in resposta.lower()
+        assert "http" not in resposta.lower()
+
+
+async def test_rh_subcategoria_com_formulario_e_anexo_valido_cria_chamado():
+    conn = FakeConn()
+    conn.mensagens_acumuladas = [
+        {"papel": "usuario", "conteudo": "", "midia_id": "midia-1", "midia_nome": None}
+    ]
+    with (
+        ambiente(
+            conn, _settings(whatsapp_intake_departamentos="RH"),
+            saida=_saida_rh(), catalogo=_CATALOGO_RH,
+        ) as amb,
+        patch.object(whatsapp_intake, "_midia_valida", AsyncMock(return_value=_ANEXO_VALIDO)),
+    ):
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        assert conn.auditorias[0][2] == "CHAMADO_CRIADO"
+
+
+async def test_rh_subcategoria_com_formulario_e_anexo_invalido_pergunta_de_novo():
+    """Arquivo enviado mas recusado pela validação (tipo/tamanho) conta como
+    "sem anexo" — não deixa passar algo que o Portal também recusaria."""
+    conn = FakeConn()
+    conn.mensagens_acumuladas = [
+        {"papel": "usuario", "conteudo": "", "midia_id": "midia-1", "midia_nome": "virus.exe"}
+    ]
+    with (
+        ambiente(
+            conn, _settings(whatsapp_intake_departamentos="RH"),
+            saida=_saida_rh(), catalogo=_CATALOGO_RH,
+        ) as amb,
+        patch.object(
+            whatsapp_intake, "_midia_valida",
+            AsyncMock(side_effect=UploadInvalido("Tipo não permitido.")),
+        ),
+    ):
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "PERGUNTA"
+
+
+async def test_rh_subcategoria_sem_formulario_nao_exige_anexo():
+    conn = FakeConn()
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="RH"),
+        saida=_saida_rh(subcategoria="Dúvida geral"), catalogo=_CATALOGO_RH,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        assert conn.auditorias[0][2] == "CHAMADO_CRIADO"
+
+
+async def test_rh_no_teto_de_rodadas_sem_formulario_encerra():
+    conn = FakeConn()
+    conn.rodada = 3  # settings usa max_rodadas=4 → esta rodada já é a última
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="RH"),
+        saida=_saida_rh(), catalogo=_CATALOGO_RH,
     ) as amb:
         await whatsapp_intake.processar_conversa("conversa-uuid")
 

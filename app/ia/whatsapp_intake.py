@@ -45,6 +45,7 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.db import admin_connection
+from app.domain.formularios_rh import FormularioObrigatorio, formulario_da_subcategoria
 from app.domain.periodo import TZ_BR
 from app.ia import anexos_contexto, cliente
 from app.ia.catalogo_prompt import linha_catalogo
@@ -449,6 +450,20 @@ async def _responder(telefone: str, texto: str) -> None:
         await enviar_mensagem_texto(telefone, texto)
     except Exception as exc:  # noqa: BLE001
         log.warning("[WA INTAKE] Falha ao responder no WhatsApp: %s", type(exc).__name__)
+
+
+async def _responder_documento(telefone: str, link: str, *, nome_arquivo: str) -> None:
+    """Envia um documento (o modelo em branco de um formulário obrigatório)
+    — nunca lança, mesma tolerância de :func:`_responder`. Falha aqui não
+    pode travar a conversa: o texto explicativo mandado logo em seguida ainda
+    traz o link, então a pessoa consegue baixar mesmo se o envio do documento
+    falhar."""
+    from app.whatsapp_client import enviar_documento
+
+    try:
+        await enviar_documento(telefone, link, nome_arquivo=nome_arquivo, legenda=nome_arquivo)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[WA INTAKE] Falha ao enviar documento no WhatsApp: %s", type(exc).__name__)
 
 
 # --------------------------------------------------------------------------
@@ -1038,6 +1053,68 @@ async def _perfil_por_id(perfil_id: str) -> dict[str, Any] | None:
     return dict(linha) if linha else None
 
 
+async def _formulario_rh_pendente(
+    departamento: dict[str, Any],
+    subcategoria: dict[str, Any] | None,
+    conversa: list[dict[str, Any]],
+    settings: Settings,
+) -> FormularioObrigatorio | None:
+    """O formulário obrigatório da subcategoria quando ela exige um anexo que
+    a conversa ainda não tem — ``None`` quando não há exigência (fora do RH,
+    ou subcategoria sem formulário) ou o anexo já está presente. Mesma regra
+    do Portal (``app/routes/portal.py``, endurecida em 2026-08-10 depois de um
+    chamado real ter aberto sem o FB porque "avisar e deixar concluir depois"
+    não bastou) — reaproveita
+    :func:`app.domain.formularios_rh.formulario_da_subcategoria`, fonte única
+    também usada pelo Portal e pelo Workspace, sem reimplementar a lista de
+    subcategorias aqui. O WhatsApp segue a mesma trava NA ABERTURA para não
+    virar uma porta lateral que reabre o gap que o Portal já fechou."""
+    if (departamento.get("nome") or "").strip().casefold() != "rh":
+        return None
+    formulario = formulario_da_subcategoria(subcategoria["nome"] if subcategoria else None)
+    if formulario is None:
+        return None
+
+    item = next((m for m in reversed(conversa) if m.get("midia_id")), None)
+    if item is not None:
+        try:
+            validado = await _midia_valida(item, settings)
+        except Exception:  # noqa: BLE001 — inclui UploadInvalido: tipo/tamanho recusado
+            validado = None
+        if validado is not None:
+            return None
+
+    return formulario
+
+
+def _texto_formulario_pendente(formulario: FormularioObrigatorio) -> str:
+    return (
+        f'Essa subcategoria ("{formulario.label}") exige o formulário preenchido e '
+        "assinado já na abertura do chamado — mandei o modelo aqui em cima "
+        "pra você baixar. Preenche, assina e me manda de volta a foto ou o "
+        "arquivo que eu sigo com a abertura do chamado."
+    )
+
+
+async def _enviar_formulario_pendente(
+    telefone: str, formulario: FormularioObrigatorio, settings: Settings
+) -> str:
+    """Manda o(s) arquivo(s)-modelo do formulário obrigatório como documento
+    de verdade no WhatsApp — não só um link solto em texto (pedido do gestor,
+    2026-08-20: quem só vê um link no meio de uma conversa tende a não abrir;
+    o documento chega pronto pra visualizar/baixar direto no WhatsApp). Usa
+    ``enviar_documento`` com o link público do estático
+    (``app/static/formularios/rh/``), sem subir o arquivo de novo a cada
+    envio. Devolve o texto gravado no histórico da conversa (a explicação do
+    que fazer, mandada por último, depois do(s) documento(s))."""
+    base = settings.portal_base_url.rstrip("/")
+    for arquivo in formulario.arquivos:
+        await _responder_documento(telefone, f"{base}{arquivo.url}", nome_arquivo=arquivo.nome)
+    texto = _texto_formulario_pendente(formulario)
+    await _responder(telefone, texto)
+    return texto
+
+
 async def _criar_chamado_da_conversa(
     conversa_id: str,
     telefone: str,
@@ -1070,6 +1147,23 @@ async def _criar_chamado_da_conversa(
                          TEXTO_ERRO_GENERICO, settings, resultado, tokens_in, tokens_out, duracao_ms)
         return
     subcategoria = _casar(saida.subcategoria, categoria["subcategorias"])
+
+    formulario_pendente = await _formulario_rh_pendente(departamento, subcategoria, conversa, settings)
+    if formulario_pendente:
+        if rodada >= settings.whatsapp_intake_max_rodadas:
+            await _finalizar(conversa_id, telefone, rodada, "ENCERRADO_SEM_CHAMADO",
+                             TEXTO_ERRO_GENERICO, settings, resultado, tokens_in, tokens_out, duracao_ms)
+            return
+        # O(s) documento(s) e o texto já saem daqui (`_enviar_formulario_pendente`,
+        # que manda o arquivo de verdade, não só um link) — `_finalizar` só
+        # grava a auditoria e o histórico, sem mandar mensagem de novo.
+        texto_pedido = await _enviar_formulario_pendente(telefone, formulario_pendente, settings)
+        await _finalizar(
+            conversa_id, telefone, rodada, "PERGUNTA", "",
+            settings, resultado, tokens_in, tokens_out, duracao_ms,
+            novo_status="COLETANDO", pergunta=texto_pedido,
+        )
+        return
 
     # `setor` = setor DEMANDANTE (o do próprio autor), mesma semântica do
     # formulário web. Decisão do gestor (2026-08-18): vem da CONVERSA, não do

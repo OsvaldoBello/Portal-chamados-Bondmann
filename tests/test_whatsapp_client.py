@@ -1,5 +1,7 @@
 """Cliente de envio do WhatsApp Cloud API (app/whatsapp_client.py)."""
 
+import json
+
 import httpx
 import pytest
 
@@ -8,6 +10,7 @@ from app.whatsapp_client import (
     WhatsAppEnvioFalhou,
     WhatsAppNaoConfigurado,
     baixar_midia,
+    enviar_documento,
     enviar_mensagem_texto,
 )
 
@@ -65,6 +68,69 @@ async def test_envio_recusado_pela_graph_api(monkeypatch):
 
     with pytest.raises(WhatsAppEnvioFalhou):
         await enviar_mensagem_texto("5551994105691", "oi")
+
+
+# --- enviar_documento (formulário obrigatório do RH, por exemplo) ----------
+
+
+async def test_enviar_documento_sem_config_recusa_envio(monkeypatch):
+    monkeypatch.setattr("app.whatsapp_client.get_settings", lambda: _settings())
+    with pytest.raises(WhatsAppNaoConfigurado):
+        await enviar_documento("5551994105691", "https://portal.example/form.docx")
+
+
+async def test_enviar_documento_ok_manda_link_nome_e_legenda(monkeypatch):
+    settings = _settings(whatsapp_access_token="token-teste", whatsapp_phone_number_id="123")
+    monkeypatch.setattr("app.whatsapp_client.get_settings", lambda: settings)
+
+    capturado: dict = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer token-teste"
+        assert request.url.path == "/v21.0/123/messages"
+        capturado["payload"] = json.loads(request.content)
+        return httpx.Response(200, json={"messages": [{"id": "wamid.DOC"}]})
+
+    transport = httpx.MockTransport(_handler)
+    original_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "httpx.AsyncClient",
+        lambda **kw: original_async_client(transport=transport, **{k: v for k, v in kw.items() if k != "transport"}),
+    )
+
+    resultado = await enviar_documento(
+        "5551994105691",
+        "https://portal.example/fb031.docx",
+        nome_arquivo="FB031.docx",
+        legenda="FB031 — Solicitação de contratação",
+    )
+
+    assert resultado["messages"][0]["id"] == "wamid.DOC"
+    payload = capturado["payload"]
+    assert payload["type"] == "document"
+    assert payload["document"] == {
+        "link": "https://portal.example/fb031.docx",
+        "filename": "FB031.docx",
+        "caption": "FB031 — Solicitação de contratação",
+    }
+
+
+async def test_enviar_documento_recusado_pela_graph_api(monkeypatch):
+    settings = _settings(whatsapp_access_token="token-teste", whatsapp_phone_number_id="123")
+    monkeypatch.setattr("app.whatsapp_client.get_settings", lambda: settings)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "Media link inválido"}})
+
+    transport = httpx.MockTransport(_handler)
+    original_async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        "httpx.AsyncClient",
+        lambda **kw: original_async_client(transport=transport, **{k: v for k, v in kw.items() if k != "transport"}),
+    )
+
+    with pytest.raises(WhatsAppEnvioFalhou):
+        await enviar_documento("5551994105691", "https://portal.example/form.docx")
 
 
 # --- baixar_midia (foto recebida no intake) --------------------------------
