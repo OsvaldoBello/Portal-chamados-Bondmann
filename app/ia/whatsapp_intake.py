@@ -1075,10 +1075,21 @@ async def _formulario_rh_pendente(
     if formulario is None:
         return None
 
-    item = next((m for m in reversed(conversa) if m.get("midia_id")), None)
-    if item is not None:
+    # Só a ÚLTIMA mensagem da conversa conta como "o anexo chegou" — nunca
+    # qualquer mídia em qualquer ponto do histórico. Achado real em produção
+    # (2026-08-20, chamado BOND-2026-00780): a conversa tinha um anexo antigo
+    # e sem relação nenhuma (mandado antes mesmo de a pessoa dizer o que
+    # precisava) logo na primeira mensagem; com a busca "mídia mais recente
+    # em qualquer lugar do histórico" esse arquivo satisfazia a exigência do
+    # FB030 sem a pessoa nunca ter mandado o formulário de verdade. Restringir
+    # à última mensagem exige que o anexo tenha vindo DEPOIS do pedido — no
+    # pior caso (a pessoa manda o anexo e, antes da próxima rodada rodar,
+    # ainda escreve outra mensagem de texto) o bot só pede de novo, o que é
+    # seguro; o que não pode acontecer é o oposto (aceitar anexo errado).
+    ultima = conversa[-1] if conversa else None
+    if ultima is not None and ultima.get("midia_id"):
         try:
-            validado = await _midia_valida(item, settings)
+            validado = await _midia_valida(ultima, settings)
         except Exception:  # noqa: BLE001 — inclui UploadInvalido: tipo/tamanho recusado
             validado = None
         if validado is not None:

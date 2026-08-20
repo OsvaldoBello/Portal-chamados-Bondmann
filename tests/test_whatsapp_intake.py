@@ -675,6 +675,33 @@ async def test_rh_subcategoria_com_formulario_e_anexo_valido_cria_chamado():
         assert conn.auditorias[0][2] == "CHAMADO_CRIADO"
 
 
+async def test_rh_anexo_antigo_sem_relacao_nao_satisfaz_a_exigencia():
+    """Achado real em produção (2026-08-20, chamado BOND-2026-00780): um anexo
+    mandado no COMEÇO de uma conversa longa (antes de a pessoa dizer o que
+    precisava, sem nenhuma relação com o formulário) satisfazia a exigência
+    porque a checagem antiga procurava mídia em qualquer ponto do histórico.
+    Só a ÚLTIMA mensagem pode contar — havendo mensagens de texto depois do
+    anexo antigo, a exigência continua pendente."""
+    conn = FakeConn()
+    conn.mensagens_acumuladas = [
+        {"papel": "usuario", "conteudo": "", "midia_id": "midia-antiga", "midia_nome": "outra-coisa.docx"},
+        {"papel": "assistente", "conteudo": "Bom dia! ..."},
+        {"papel": "usuario", "conteudo": "Preciso de alteração de função", "midia_id": None},
+    ]
+    with (
+        ambiente(
+            conn, _settings(whatsapp_intake_departamentos="RH"),
+            saida=_saida_rh(), catalogo=_CATALOGO_RH,
+        ) as amb,
+        patch.object(whatsapp_intake, "_midia_valida", AsyncMock(return_value=_ANEXO_VALIDO)),
+    ):
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "PERGUNTA"
+        amb.responder_documento.assert_awaited_once()
+
+
 async def test_rh_subcategoria_com_formulario_e_anexo_invalido_pergunta_de_novo():
     """Arquivo enviado mas recusado pela validação (tipo/tamanho) conta como
     "sem anexo" — não deixa passar algo que o Portal também recusaria."""
