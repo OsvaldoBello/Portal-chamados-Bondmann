@@ -13,6 +13,9 @@
     NOVO: "#2563EB", PROJETOS: "#7C3AED", EM_ATENDIMENTO: "#6366F1",
     RESPOSTA_CLIENTE: "#0D9488", AGUARDANDO: "#F59E0B", RESOLVIDO: "#16A34A",
   };
+  // Mesma leitura verde→âmbar→vermelho do "Prazo de resolução" por chamado
+  // (app/domain/sla_visual.py / tailwind.config.js `sla.{ok,warn,danger}`).
+  var SLA_OK = "#16a34a", SLA_WARN = "#f59e0b", SLA_DANGER = "#dc2626", CINZA = "#94A3B8";
 
   function bar(id, labels, data, cor, horizontal) {
     var c = document.getElementById(id);
@@ -127,6 +130,19 @@
       buscaTimer = setTimeout(carregarModalCsat, 350);
     });
   }
+
+  // Dias para conclusão (2026-08-20) — 3 faixas, mesma cor do prazo por chamado.
+  var tc = d.tempo_conclusao || {};
+  bar("chart-tempo-conclusao", ["Mesmo dia", "Dia seguinte", "2 dias ou mais"],
+      [tc.mesmo_dia || 0, tc.dia_seguinte || 0, tc.dois_dias_mais || 0],
+      [SLA_OK, SLA_WARN, SLA_DANGER]);
+
+  // Satisfação agrupada (2026-08-20) — mesma base do gráfico de CSAT acima,
+  // só que somada em 3 faixas (satisfeito 4-5 / neutro 3 / insatisfeito 1-2).
+  var sat = d.satisfacao || {};
+  bar("chart-satisfacao", ["Satisfeito", "Neutro", "Insatisfeito"],
+      [sat.satisfeito || 0, sat.neutro || 0, sat.insatisfeito || 0],
+      [GREEN, CINZA, SLA_DANGER]);
 
   // Departamento
   var dep = d.por_departamento || [];

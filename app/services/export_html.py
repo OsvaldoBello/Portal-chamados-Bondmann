@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.domain.indicadores import resumir_satisfacao, resumir_tempo_conclusao
 from app.domain.periodo import TZ_BR
 
 # Paleta do painel (app/static/js/admin.js e tailwind.config.js).
@@ -48,6 +49,7 @@ AMBAR = "#F59E0B"
 VERMELHO = "#DC2626"
 AZUL = "#2563EB"
 TEAL = "#0D9488"
+CINZA = "#94A3B8"
 STATUS_COR = {
     "NOVO": AZUL,
     "A_FAZER": "#0EA5E9",
@@ -211,6 +213,15 @@ def montar_relatorio_geral(
     por_departamento = graficos.get("por_departamento") or []
     por_setor = graficos.get("por_setor") or []
     produtividade = graficos.get("produtividade") or []
+    tempo_conclusao = graficos.get("tempo_conclusao") or {
+        "mesmo_dia": 0, "dia_seguinte": 0, "dois_dias_mais": 0,
+    }
+    # Mesmos resumos "fáceis de ler" da tela (2026-08-20) — ver
+    # app/domain/indicadores.py: agrupam CSAT 1-5 e dias de conclusão em 3
+    # faixas cada, usados aqui pro cartão extra e pela legenda dos 2 gráficos
+    # novos abaixo.
+    resumo_satisfacao = resumir_satisfacao(csat)
+    resumo_tempo_conclusao = resumir_tempo_conclusao(**tempo_conclusao)
 
     cartoes = [
         _kpi("Chamados no total", kpis.get("total", 0)),
@@ -237,6 +248,16 @@ def montar_relatorio_geral(
             "tempo médio",
         ),
         _kpi("Resolvidos", kpis.get("resolvidos", 0), destaque=VERDE),
+        _kpi(
+            "Resolvidos no mês de abertura",
+            kpis.get("resolvidos_no_mes_abertura", 0),
+            (
+                f"{kpis.get('pct_resolvidos_no_mes_abertura')}% dos {kpis.get('total', 0)} abertos no mês"
+                if kpis.get("pct_resolvidos_no_mes_abertura") is not None
+                else "sem chamados abertos no mês"
+            ),
+            VERDE,
+        ),
     ]
     if escopo == "TI":
         cartoes += [
@@ -293,6 +314,38 @@ def montar_relatorio_geral(
             [_barras([x["resolvidos"] for x in produtividade], VERDE)],
             horizontal=True,
             largura_total=True,
+        ),
+        _grafico(
+            "tempo_conclusao",
+            "Dias para conclusão",
+            "bar",
+            ["Mesmo dia", "Dia seguinte", "2 dias ou mais"],
+            [_barras(
+                [resumo_tempo_conclusao.mesmo_dia, resumo_tempo_conclusao.dia_seguinte,
+                 resumo_tempo_conclusao.dois_dias_mais],
+                [VERDE, AMBAR, VERMELHO],
+            )],
+            subtitulo=(
+                f"{resumo_tempo_conclusao.pct_mesmo_dia}% no mesmo dia · "
+                f"{resumo_tempo_conclusao.pct_dia_seguinte}% no dia seguinte"
+                if resumo_tempo_conclusao.total
+                else "Nenhum chamado resolvido no período"
+            ),
+        ),
+        _grafico(
+            "satisfacao",
+            "Satisfação dos chamados",
+            "bar",
+            ["Satisfeito", "Neutro", "Insatisfeito"],
+            [_barras(
+                [resumo_satisfacao.satisfeito, resumo_satisfacao.neutro, resumo_satisfacao.insatisfeito],
+                [VERDE, CINZA, VERMELHO],
+            )],
+            subtitulo=(
+                f"{resumo_satisfacao.pct_satisfeito}% satisfeitos (nota 4–5)"
+                if resumo_satisfacao.total
+                else "Nenhuma avaliação no período"
+            ),
         ),
     ]
 

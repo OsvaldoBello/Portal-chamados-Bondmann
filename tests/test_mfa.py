@@ -159,6 +159,9 @@ class _FakeAdminRepo:
     async def csat_distribuicao(self, claims, **kw):
         return {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
 
+    async def tempo_conclusao_distribuicao(self, claims, **kw):
+        return {"mesmo_dia": 0, "dia_seguinte": 0, "dois_dias_mais": 0}
+
     async def por_departamento(self, claims, **kw):
         return []
 

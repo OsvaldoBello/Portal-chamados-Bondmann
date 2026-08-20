@@ -52,7 +52,8 @@ class FakeAdmin:
         return {"total": 10, "abertos": 4, "resolvidos": 6, "resolvidos_no_prazo": 5,
                 "conformidade_sla": 83.3, "csat_media": 4.5, "csat_respostas": 4,
                 "tma_horas": 12.0, "tma_seg": 43200,
-                "projetos_resolvidos": 1, "tma_projetos_seg": 288000, "tma_projetos_horas": 80.0}
+                "projetos_resolvidos": 1, "tma_projetos_seg": 288000, "tma_projetos_horas": 80.0,
+                "resolvidos_no_mes_abertura": 3, "pct_resolvidos_no_mes_abertura": 30.0}
 
     async def por_status(self, claims, *, departamento_id=None, todos_setores=False,
                           periodo_inicio=None, periodo_fim=None, escopo_autor=False):
@@ -61,6 +62,10 @@ class FakeAdmin:
     async def csat_distribuicao(self, claims, *, departamento_id=None, todos_setores=False,
                                  periodo_inicio=None, periodo_fim=None, escopo_autor=False):
         return {1: 0, 2: 0, 3: 1, 4: 1, 5: 2}
+
+    async def tempo_conclusao_distribuicao(self, claims, *, departamento_id=None, todos_setores=False,
+                                            periodo_inicio=None, periodo_fim=None, escopo_autor=False):
+        return {"mesmo_dia": 3, "dia_seguinte": 2, "dois_dias_mais": 1}
 
     async def por_departamento(self, claims, *, departamento_id=None, todos_setores=False,
                                 periodo_inicio=None, periodo_fim=None, escopo_autor=False):
@@ -337,6 +342,30 @@ def test_dashboard_mostra_kpis_e_dados_grafico():
     assert "4.5" in r.text                    # CSAT médio
     assert 'id="chart-data"' in r.text        # JSON inerte p/ Chart.js
     assert "/static/vendor/chart.umd.js" in r.text
+
+
+def test_dashboard_mostra_resolvidos_no_mes_de_abertura():
+    # Pedido do usuário (2026-08-20): dos chamados ABERTOS no mês, quantos já
+    # foram resolvidos dentro do MESMO mês (FakeAdmin.kpis: 3 de 10 abertos).
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert "Resolvidos no mês de abertura" in r.text
+    assert "30.0% dos 10 abertos no mês" in r.text
+
+
+def test_dashboard_mostra_indicadores_de_dias_para_conclusao_e_satisfacao():
+    # Ambos "fáceis de ler" (2026-08-20): gráfico de 3 barras + frase com
+    # percentual pronta, sem obrigar o leitor a somar nada.
+    with admin_client(FakeAdmin()) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert 'id="chart-tempo-conclusao"' in r.text
+    assert 'id="chart-satisfacao"' in r.text
+    # tempo_conclusao_distribuicao (fake) = mesmo_dia=3, dia_seguinte=2, dois_dias_mais=1 (total 6)
+    assert "50.0% no mesmo dia" in r.text
+    # csat_distribuicao (fake) = {1:0,2:0,3:1,4:1,5:2} -> satisfeito=3, neutro=1, insatisfeito=0 (total 4)
+    assert "75.0% satisfeitos" in r.text
 
 
 def test_csat_do_mes_e_lido_sobre_os_resolvidos_do_mes():

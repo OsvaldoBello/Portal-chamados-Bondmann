@@ -44,6 +44,7 @@ from app.auth.dependencies import CurrentUser, enforce_admin_mfa, get_current_us
 from app.avatar_storage import AvatarStorageError, avatar_path, enviar_avatar, preparar_avatar
 from app.config import get_settings
 from app.db import admin_connection, rls_request_scope
+from app.domain.indicadores import resumir_satisfacao, resumir_tempo_conclusao
 from app.repositories.admin import AdminRepo, get_admin_repo
 from app.repositories.chamados import (
     CACHE_CATEGORIAS,
@@ -343,6 +344,25 @@ async def dashboard(
             periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
             escopo_autor=ctx.escopo_autor,
         ),
+        "tempo_conclusao": await repo.tempo_conclusao_distribuicao(
+            claims, departamento_id=dep_id, todos_setores=False,
+            periodo_inicio=periodo_inicio, periodo_fim=periodo_fim,
+            escopo_autor=ctx.escopo_autor,
+        ),
+    }
+    # Resumos "fáceis de ler" (2026-08-20, pedido do usuário) — derivados dos
+    # próprios `graficos` já buscados acima, sem query nova: agrupam o CSAT
+    # 1-5 e os dias de conclusão em 3 faixas cada. Ver app/domain/indicadores.py.
+    # `graficos["satisfacao"]` (dict simples, não o dataclass) viaja no mesmo
+    # JSON que admin.js já lê (`#chart-data`) — vira o 3º gráfico de barras,
+    # ao lado de "Dias para conclusão"; `resumo_*` (dataclass, com percentual)
+    # alimenta só a legenda textual logo abaixo de cada gráfico.
+    resumo_satisfacao = resumir_satisfacao(graficos["csat"])
+    resumo_tempo_conclusao = resumir_tempo_conclusao(**graficos["tempo_conclusao"])
+    graficos["satisfacao"] = {
+        "satisfeito": resumo_satisfacao.satisfeito,
+        "neutro": resumo_satisfacao.neutro,
+        "insatisfeito": resumo_satisfacao.insatisfeito,
     }
     avaliacoes = await repo.avaliacoes_recentes(
         claims, departamento_id=dep_id, todos_setores=False,
@@ -375,6 +395,8 @@ async def dashboard(
             "escopo": escopo,
             "kpis": kpis,
             "graficos": graficos,
+            "resumo_satisfacao": resumo_satisfacao,
+            "resumo_tempo_conclusao": resumo_tempo_conclusao,
             "avaliacoes": avaliacoes,
             "departamentos": [],
             "departamento_sel": "",
@@ -1379,6 +1401,7 @@ async def export_html(
                 "por_departamento": await repo.por_departamento(claims, **kwargs),
                 "por_setor": await repo.por_setor(claims, **kwargs),
                 "produtividade": await repo.produtividade(claims, **kwargs),
+                "tempo_conclusao": await repo.tempo_conclusao_distribuicao(claims, **kwargs),
             },
             avaliacoes=await repo.avaliacoes_recentes(claims, **kwargs),
         )

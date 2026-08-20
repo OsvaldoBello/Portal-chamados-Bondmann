@@ -29,6 +29,7 @@ GRAFICOS = {
     "por_departamento": [{"departamento": "TI", "total": 7}],
     "por_setor": [{"setor": "Financeiro", "total": 6}],
     "produtividade": [{"operador": "Op TI", "resolvidos": 6}],
+    "tempo_conclusao": {"mesmo_dia": 3, "dia_seguinte": 2, "dois_dias_mais": 1},
 }
 AVALIACOES = [{
     "codigo": "BOND-2026-00001", "titulo": "Impressora", "nota": 5,
@@ -112,6 +113,33 @@ def test_status_do_grafico_saem_rotulados_e_coloridos_por_status():
 def test_csat_cobre_as_cinco_notas_mesmo_sem_avaliacao_em_alguma():
     grafico = next(g for g in _geral()["charts"] if g["id"] == "csat")
     assert grafico["config"]["data"]["datasets"][0]["data"] == [0, 0, 1, 1, 2]
+
+
+def test_relatorio_geral_traz_o_kpi_de_resolvidos_no_mes_de_abertura():
+    kpis = dict(KPIS, resolvidos_no_mes_abertura=3, pct_resolvidos_no_mes_abertura=30.0)
+    ctx = montar_relatorio_geral(
+        escopo="TI", periodo="2026-07", kpis=kpis, graficos=GRAFICOS, avaliacoes=AVALIACOES
+    )
+    valores = {k["rotulo"]: k["valor"] for k in ctx["kpis"]}
+    notas = {k["rotulo"]: k["nota"] for k in ctx["kpis"]}
+    assert valores["Resolvidos no mês de abertura"] == 3
+    assert notas["Resolvidos no mês de abertura"] == "30.0% dos 10 abertos no mês"
+
+
+def test_relatorio_geral_traz_grafico_de_dias_para_conclusao():
+    # tempo_conclusao (fixture): mesmo_dia=3, dia_seguinte=2, dois_dias_mais=1
+    grafico = next(g for g in _geral()["charts"] if g["id"] == "tempo_conclusao")
+    assert grafico["config"]["data"]["labels"] == ["Mesmo dia", "Dia seguinte", "2 dias ou mais"]
+    assert grafico["config"]["data"]["datasets"][0]["data"] == [3, 2, 1]
+    assert "50.0% no mesmo dia" in grafico["subtitulo"]
+
+
+def test_relatorio_geral_traz_grafico_de_satisfacao_agrupada():
+    # csat (fixture): {1:0,2:0,3:1,4:1,5:2} -> satisfeito=3, neutro=1, insatisfeito=0
+    grafico = next(g for g in _geral()["charts"] if g["id"] == "satisfacao")
+    assert grafico["config"]["data"]["labels"] == ["Satisfeito", "Neutro", "Insatisfeito"]
+    assert grafico["config"]["data"]["datasets"][0]["data"] == [3, 1, 0]
+    assert "75.0% satisfeitos" in grafico["subtitulo"]
 
 
 # ---------------------------------------------------------------------------

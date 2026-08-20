@@ -77,9 +77,10 @@
   </a>
 </div>
 
-{# KPIs — um único grid de 4 colunas: com o TI (8 métricas) fecham exatamente
-   2 linhas de 4; fora do TI (6 métricas), a 2ª linha fica com 2 vazias em vez
-   de 3 grids separados deixando buracos em linhas diferentes. #}
+{# KPIs — um único grid de 4 colunas: com o TI (9 métricas) a 2ª linha fecha 4
+   e a 3ª fica com 1 preenchido; fora do TI (7 métricas), a 2ª linha fica com 3
+   preenchidos — em vez de 3 grids separados deixando buracos em linhas
+   diferentes. #}
 <div class="anim-stagger grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
   {% macro kpi(rot, val, sub="") %}
   <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
@@ -101,6 +102,12 @@
          if kpis.csat_respostas else "sem avaliações") }}
   {{ kpi("TMA (resolução)", (kpis.tma_horas ~ "h") if kpis.tma_horas is not none else "—", "tempo médio") }}
   {{ kpi("Resolvidos", kpis.resolvidos) }}
+  {# Pedido do usuário (2026-08-20): dos chamados ABERTOS neste mês, quantos já
+     foram resolvidos dentro do MESMO mês (não carregaram pro seguinte) — ver
+     AdminRepo.kpis / docstring "Resolvidos no mês de abertura". #}
+  {{ kpi("Resolvidos no mês de abertura", kpis.resolvidos_no_mes_abertura,
+         (kpis.pct_resolvidos_no_mes_abertura ~ "% dos " ~ kpis.total ~ " abertos no mês")
+         if kpis.pct_resolvidos_no_mes_abertura is not none else "sem chamados abertos no mês") }}
   {% if escopo == "TI" %}
   {# Coluna "Projetos" do Kanban (migration 0057) é trabalho mais robusto —
      pedido do usuário (2026-07-24): TMA separado do TMA geral acima (que já
@@ -131,6 +138,32 @@
     <h3 class="font-display font-bold text-navy mb-1">Distribuição do CSAT (1–5)</h3>
     <p class="text-[11px] text-faint mb-2">Clique numa barra para ver os chamados daquela nota.</p>
     <canvas id="chart-csat" height="180"></canvas>
+  </div>
+  {# "Fácil de ver e interpretar" (pedido do usuário 2026-08-20): 3 faixas de
+     dias entre abertura e resolução, cor verde→âmbar→vermelho (mesma leitura
+     do "Prazo de resolução" por chamado, ver sla_visual.py) e uma frase
+     pronta abaixo do gráfico, pra não obrigar o leitor a somar as barras. #}
+  <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h3 class="font-display font-bold text-navy mb-1">Dias para conclusão</h3>
+    <p class="text-[11px] text-faint mb-2">
+      {% if resumo_tempo_conclusao.total %}
+      {{ resumo_tempo_conclusao.pct_mesmo_dia }}% no mesmo dia · {{ resumo_tempo_conclusao.pct_dia_seguinte }}% no dia seguinte · {{ resumo_tempo_conclusao.pct_dois_dias_mais }}% em 2 dias ou mais
+      {% else %}
+      Nenhum chamado resolvido no mês.
+      {% endif %}
+    </p>
+    <canvas id="chart-tempo-conclusao" height="180"></canvas>
+  </div>
+  <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
+    <h3 class="font-display font-bold text-navy mb-1">Satisfação dos chamados</h3>
+    <p class="text-[11px] text-faint mb-2">
+      {% if resumo_satisfacao.total %}
+      {{ resumo_satisfacao.pct_satisfeito }}% satisfeitos (4–5★) · {{ resumo_satisfacao.pct_neutro }}% neutros (3★) · {{ resumo_satisfacao.pct_insatisfeito }}% insatisfeitos (1–2★)
+      {% else %}
+      Nenhuma avaliação no mês.
+      {% endif %}
+    </p>
+    <canvas id="chart-satisfacao" height="180"></canvas>
   </div>
   <div class="bg-white rounded-xl shadow-card border border-line/60 p-5">
     <h3 class="font-display font-bold text-navy mb-3">Chamados por departamento</h3>

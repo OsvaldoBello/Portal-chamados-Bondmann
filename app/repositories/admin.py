@@ -89,6 +89,18 @@ class AdminRepo:
         "quantos dos resolvidos do mês foram avaliados" — comparável direto com
         ``resolvidos`` (taxa de resposta), o que antes não era possível.
 
+        **"Resolvidos no mês de abertura" (2026-08-20, pedido do usuário):**
+        de ``resolvidos`` (ancorado em ``resolvido_em``), quantos também foram
+        ABERTOS dentro do mesmo período selecionado — ou seja, chamados que
+        nasceram e morreram no mesmo mês, sem carregar pro mês seguinte. Os
+        dois filtros de data (``created_at`` E ``resolvido_em`` dentro de
+        ``[periodo_inicio, periodo_fim)``) precisam valer juntos: um chamado
+        aberto em maio e resolvido em julho não conta pra julho aqui, mesmo
+        contando pra ``resolvidos`` de julho. ``pct_resolvidos_no_mes_abertura``
+        é sobre ``total`` (volume aberto no mês), não sobre ``resolvidos`` —
+        responde "dos chamados que entraram este mês, quantos por cento já
+        saíram no mesmo mês", não "dos que saíram, quantos entraram junto".
+
         **TMA de "Projetos" separado do TMA geral (2026-07-24, pedido do usuário):**
         chamados finalizados a partir da coluna "Projetos" do Kanban do TI
         (migration `0057`) são trabalho mais robusto — misturar o tempo de
@@ -152,6 +164,13 @@ class AdminRepo:
                       AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
                       AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))
                                                                         AS resolvidos_no_prazo,
+                  count(*) FILTER (
+                    WHERE resolvido_em IS NOT NULL
+                      AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
+                      AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                      AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz))
+                                                                        AS resolvidos_no_mes_abertura,
                   avg(avaliacao_nota) FILTER (
                     WHERE resolvido_em IS NOT NULL
                       AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
@@ -187,8 +206,12 @@ class AdminRepo:
             )
         d = dict(row)
         resolvidos = d["resolvidos"] or 0
+        total = d["total"] or 0
         d["conformidade_sla"] = (
             round(100.0 * (d["resolvidos_no_prazo"] or 0) / resolvidos, 1) if resolvidos else None
+        )
+        d["pct_resolvidos_no_mes_abertura"] = (
+            round(100.0 * (d["resolvidos_no_mes_abertura"] or 0) / total, 1) if total else None
         )
         d["tma_horas"] = round((d["tma_seg"] or 0) / 3600, 1) if d["tma_seg"] else None
         d["tma_projetos_horas"] = (
@@ -273,6 +296,59 @@ class AdminRepo:
             )
         por = {int(r["n"]): r["qtd"] for r in rows}
         return {i: por.get(i, 0) for i in range(1, 6)}
+
+    async def tempo_conclusao_distribuicao(
+        self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
+        periodo_inicio: datetime | None = None, periodo_fim: datetime | None = None,
+        escopo_autor: bool = False,
+    ) -> dict[str, int]:
+        """Dias entre abertura e resolução dos chamados resolvidos no mês, em 3
+        faixas (mesmo indicador que o time já acompanhava em planilha à parte):
+        mesmo dia, dia seguinte, 2 dias ou mais. Ancorado em ``resolvido_em``
+        (mesma base de ``resolvidos``/TMA/CSAT — ver docstring de :meth:`kpis`).
+
+        A diferença de dias é calculada em horário de Brasília (``AT TIME
+        ZONE``), não UTC: um chamado aberto 23h e resolvido 1h do dia seguinte
+        (horário local) é "dia seguinte" pro time, não "mesmo dia" só porque a
+        marca UTC cai no mesmo dia civil. ``escopo_autor`` — ver docstring de
+        :meth:`_kpi_scope`."""
+        async with self._kpi_scope(claims, todos_setores) as conn:
+            row = await conn.fetchrow(
+                """
+                WITH dias AS (
+                  SELECT (c.resolvido_em AT TIME ZONE 'America/Sao_Paulo')::date
+                       - (c.created_at AT TIME ZONE 'America/Sao_Paulo')::date AS n
+                    FROM chamados c
+                   WHERE resolvido_em IS NOT NULL
+                     AND chamado_principal_id IS NULL
+                     AND (
+                           $1::uuid IS NULL
+                           OR (NOT $4::boolean AND c.departamento_id = $1::uuid)
+                           OR ($4::boolean AND EXISTS (
+                                 SELECT 1 FROM perfis autor
+                                  WHERE autor.id = c.cliente_id
+                                    AND autor.departamento_id = $1::uuid
+                               ))
+                         )
+                     AND ($2::timestamptz IS NULL OR resolvido_em >= $2::timestamptz)
+                     AND ($3::timestamptz IS NULL OR resolvido_em < $3::timestamptz)
+                )
+                SELECT
+                  count(*) FILTER (WHERE n = 0)  AS mesmo_dia,
+                  count(*) FILTER (WHERE n = 1)  AS dia_seguinte,
+                  count(*) FILTER (WHERE n >= 2) AS dois_dias_mais
+                FROM dias
+                """,
+                departamento_id,
+                periodo_inicio,
+                periodo_fim,
+                escopo_autor,
+            )
+        return {
+            "mesmo_dia": row["mesmo_dia"] or 0,
+            "dia_seguinte": row["dia_seguinte"] or 0,
+            "dois_dias_mais": row["dois_dias_mais"] or 0,
+        }
 
     async def produtividade(
         self, claims: dict, *, departamento_id: str | None = None, todos_setores: bool = False,
