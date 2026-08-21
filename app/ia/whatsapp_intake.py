@@ -38,6 +38,7 @@ import json
 import logging
 import random
 import time
+from dataclasses import dataclass
 from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -45,6 +46,14 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.db import admin_connection
+from app.domain.formularios_quimico import (
+    CampoDef,
+    campos_da_categoria,
+    eh_categoria_quimico,
+    observacao_categoria,
+    titulo_e_descricao_automaticos,
+    validar_payload as validar_payload_quimico,
+)
 from app.domain.formularios_rh import FormularioObrigatorio, formulario_da_subcategoria
 from app.domain.periodo import TZ_BR
 from app.ia import anexos_contexto, cliente
@@ -678,6 +687,102 @@ _ROTULOS_CAMPOS_CONFIRMADOS = {
     "sem_prazo": "Sem prazo determinado (Marketing)",
 }
 
+_NOME_DEPARTAMENTO_QUIMICO = "Dpto Químico"
+
+
+def _eh_departamento_quimico(nome: str | None) -> bool:
+    """Mesma comparação de :meth:`PortalService.quimico_dep_id` (por nome,
+    sem caixa/espaços nas pontas), mas sobre o NOME dito na conversa em vez de
+    uma lista de departamentos com id — aqui não há id disponível ainda
+    quando o prompt precisa decidir se injeta o formulário dinâmico."""
+    return (nome or "").strip().casefold() == _NOME_DEPARTAMENTO_QUIMICO.casefold()
+
+
+def _campo_por_nome(nome_categoria: str, nome_campo: str) -> CampoDef | None:
+    return next((c for c in campos_da_categoria(nome_categoria) if c.name == nome_campo), None)
+
+
+def _linhas_campo_quimico(campo: CampoDef) -> list[str]:
+    """Descrição de UM campo do formulário dinâmico do Químico, no formato que
+    o modelo recebe no prompt — inclui a lista de opções literal para
+    `select`/`checkbox_multi` (é dela que o modelo copia o valor exato; texto
+    fora da lista é rejeitado por `formularios_quimico.validar_payload` no
+    código, então dar a lista pronta evita ida e volta perguntando de novo)."""
+    obrigatorio = "obrigatório" if campo.obrigatorio else "opcional"
+    linhas = [f'- `{campo.name}` — "{campo.label}" ({obrigatorio})']
+    if campo.ajuda:
+        linhas.append(f"  Contexto: {campo.ajuda}")
+    if campo.tipo == "select":
+        linhas.append(
+            "  Tipo: escolha única — quando a pessoa responder, identifique a opção "
+            "que ela quis dizer (mesmo com grafia diferente, abreviação ou cidade "
+            "em vez do código) e copie EXATAMENTE uma destas opções, nunca um texto "
+            "livre. Se nenhuma opção corresponder com clareza, pergunte de novo "
+            "mostrando as 2-3 mais prováveis:"
+        )
+        linhas.append("  " + " | ".join(campo.opcoes))
+    elif campo.tipo == "checkbox_multi":
+        linhas.append(
+            "  Tipo: múltipla escolha — ao chegar a vez deste campo, apresente TODAS "
+            "as opções abaixo numeradas em uma única pergunta e peça para a pessoa "
+            "responder com os números e/ou os nomes dos itens que quer (pode ser mais "
+            "de um). Na resposta dela, mapeie cada item citado para o texto EXATO da "
+            "lista abaixo e preencha uma LISTA com todos eles em `campos_formulario` — "
+            "nunca invente item fora desta lista, e nunca deixe de perguntar por já "
+            "achar que sabe a resposta:"
+        )
+        linhas += [f"  {i}. {opcao}" for i, opcao in enumerate(campo.opcoes, 1)]
+    elif campo.tipo == "date":
+        linhas.append("  Tipo: data — converta a resposta para o formato AAAA-MM-DD.")
+    elif campo.tipo in ("tel", "email", "number"):
+        linhas.append(f"  Tipo: {campo.tipo}.")
+    return linhas
+
+
+def _secao_formulario_quimico(
+    nome_categoria: str, campos_formulario_confirmados: dict[str, Any]
+) -> list[str]:
+    """Bloco injetado no turno `user` quando departamento e categoria do
+    Químico já estão confirmados (via `campos_confirmados`, mesmo fato pronto
+    do resto da conversa) — descreve campo a campo do layout real da
+    categoria (`formularios_quimico.CAMPOS_POR_CATEGORIA`, fonte única
+    também usada pelo Portal) para o modelo perguntar UM DE CADA VEZ, na
+    ordem do schema, pulando o que já foi confirmado em rodada anterior.
+    Categoria do Químico sem layout dinâmico conhecido (ex.: uma futura
+    categoria "Outros") devolve lista vazia — a conversa segue o roteiro
+    genérico de título/descrição, igual aos demais departamentos."""
+    campos = campos_da_categoria(nome_categoria)
+    if not campos:
+        return []
+    linhas = [
+        "",
+        f'## Formulário do Departamento Químico — categoria "{nome_categoria}"',
+        "Esta categoria tem um formulário fixo: em vez do roteiro genérico de "
+        "investigação, colete EXATAMENTE os campos abaixo, respeitando o tipo de "
+        "cada um. Pergunte só UM campo por rodada (nunca junte dois campos numa "
+        "mesma pergunta, mesmo que pareçam relacionados) — exceto o de múltipla "
+        "escolha, que já é uma pergunta única com várias opções. Pule qualquer "
+        'campo listado em "já confirmados" abaixo — perguntar de novo o que já foi '
+        "respondido é o mesmo erro grave de repetir a pergunta do setor. "
+        "`informacoes_suficientes` só pode ser `true` quando TODOS os campos "
+        "marcados (obrigatório) abaixo estiverem preenchidos em `campos_formulario` "
+        "(os opcionais podem ficar de fora). Grave cada valor coletado em "
+        "`campos_formulario` usando EXATAMENTE o `name` indicado como chave — "
+        "`titulo`/`descricao` não precisam ser preenchidos por você nesta "
+        "categoria, o sistema os deriva automaticamente do formulário.",
+    ]
+    pendentes = [c for c in campos if c.name not in campos_formulario_confirmados]
+    for campo in pendentes:
+        linhas += _linhas_campo_quimico(campo)
+    if campos_formulario_confirmados:
+        linhas += ["", "### Campos deste formulário já confirmados (não pergunte de novo)"]
+        for nome_campo, valor in campos_formulario_confirmados.items():
+            campo_def = _campo_por_nome(nome_categoria, nome_campo)
+            rotulo = campo_def.label if campo_def else nome_campo
+            texto_valor = "; ".join(valor) if isinstance(valor, list) else str(valor)
+            linhas.append(f"- {rotulo}: {texto_valor}")
+    return linhas
+
 
 def montar_mensagens(
     conversa: list[dict[str, Any]],
@@ -685,6 +790,7 @@ def montar_mensagens(
     imagem_data_uri: str | None = None,
     setores: list[str] | None = None,
     campos_confirmados: dict[str, Any] | None = None,
+    campos_formulario_confirmados: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Mensagens system+user da extração (mesmo formato do motor de triagem).
 
@@ -782,6 +888,13 @@ def montar_mensagens(
             "deixe `data_entrega` vazio.",
         ]
 
+    if campos_confirmados and _eh_departamento_quimico(campos_confirmados.get("departamento")):
+        categoria_confirmada = str(campos_confirmados.get("categoria") or "")
+        if eh_categoria_quimico(categoria_confirmada):
+            linhas += _secao_formulario_quimico(
+                categoria_confirmada, campos_formulario_confirmados or {}
+            )
+
     texto = "\n".join(linhas)
     conteudo_usuario: Any = texto
     if imagem_data_uri:
@@ -832,13 +945,13 @@ async def _imagem_da_conversa(conversa: list[dict[str, Any]], settings: Settings
 _CAMPOS_STICKY = ("setor", "departamento", "categoria", "subcategoria", "data_entrega", "sem_prazo")
 
 
-async def _campos_confirmados(conn: Any, conversa_id: str) -> dict[str, Any]:
-    """Setor/departamento/categoria/subcategoria/data_entrega/sem_prazo já
-    extraídos na rodada mais recente desta conversa — lidos da auditoria
-    (``ia_whatsapp_intake.resultado``, gravada a cada rodada por
-    :func:`_finalizar`), não de uma coluna nova: o dado já existe ali, sem
-    precisar de migration. Vazio na primeira rodada (nada extraído ainda) ou
-    quando não há nenhum campo confirmado."""
+async def _resultado_rodada_anterior(conn: Any, conversa_id: str) -> dict[str, Any] | None:
+    """``resultado`` (JSON) da rodada mais recente já auditada desta conversa
+    (``ia_whatsapp_intake.resultado``, gravado a cada rodada por
+    :func:`_finalizar`) — ``None`` na primeira rodada, quando nada foi
+    extraído ainda. Fonte única para as duas derivações de "fato pronto" que
+    a rodada seguinte recebe (:func:`_campos_confirmados` e
+    :func:`_campos_formulario_confirmados`) — uma consulta só, não duas."""
     linha = await conn.fetchrow(
         """
         SELECT resultado FROM ia_whatsapp_intake
@@ -849,17 +962,38 @@ async def _campos_confirmados(conn: Any, conversa_id: str) -> dict[str, Any]:
         conversa_id,
     )
     if linha is None:
-        return {}
+        return None
     resultado = linha["resultado"]
     if isinstance(resultado, str):
         resultado = json.loads(resultado)
-    if not isinstance(resultado, dict):
+    return resultado if isinstance(resultado, dict) else None
+
+
+def _campos_confirmados(resultado: dict[str, Any] | None) -> dict[str, Any]:
+    """Setor/departamento/categoria/subcategoria/data_entrega/sem_prazo já
+    extraídos em rodada anterior, a partir do ``resultado`` de
+    :func:`_resultado_rodada_anterior` — vazio quando não há nenhum campo
+    confirmado ainda."""
+    if not resultado:
         return {}
     return {
         campo: resultado[campo]
         for campo in _CAMPOS_STICKY
         if resultado.get(campo) not in (None, "", False)
     }
+
+
+def _campos_formulario_confirmados(resultado: dict[str, Any] | None) -> dict[str, Any]:
+    """Campos do formulário dinâmico do Químico (``campos_formulario``) já
+    extraídos em rodada anterior — mesma fonte e mesmo motivo de
+    :func:`_campos_confirmados`, só que sobre um dict aninhado em vez de
+    chaves escalares fixas (o conjunto de campos muda por categoria)."""
+    if not resultado:
+        return {}
+    campos = resultado.get("campos_formulario")
+    if not isinstance(campos, dict):
+        return {}
+    return {chave: valor for chave, valor in campos.items() if valor not in (None, "", [])}
 
 
 def _mesclar_campos_confirmados(
@@ -877,6 +1011,64 @@ def _mesclar_campos_confirmados(
             dados[campo] = valor
             mudou = True
     return SaidaWhatsAppIntake(**dados) if mudou else saida
+
+
+def _mesclar_campos_formulario(
+    saida: SaidaWhatsAppIntake, confirmados: dict[str, Any]
+) -> SaidaWhatsAppIntake:
+    """Mesma rede de segurança de :func:`_mesclar_campos_confirmados`, mas
+    para ``campos_formulario`` (dict aninhado do formulário dinâmico do
+    Químico): repõe uma chave já confirmada que o modelo tenha omitido nesta
+    rodada, sem sobrescrever um valor novo que ele tenha trazido."""
+    if not confirmados:
+        return saida
+    atual = dict(saida.campos_formulario or {})
+    mudou = False
+    for campo, valor in confirmados.items():
+        if not atual.get(campo):
+            atual[campo] = valor
+            mudou = True
+    if not mudou:
+        return saida
+    dados = saida.model_dump()
+    dados["campos_formulario"] = atual
+    return SaidaWhatsAppIntake(**dados)
+
+
+def _aplicar_campos_confirmados(
+    saida: SaidaWhatsAppIntake | None,
+    campos_confirmados: dict[str, Any],
+    campos_formulario_confirmados: dict[str, Any],
+) -> SaidaWhatsAppIntake | None:
+    """Aplica as duas redes de segurança de "campo já confirmado não se
+    perde" (escalar + formulário dinâmico do Químico) numa chamada só —
+    reduz a duplicação nos dois pontos que precisam disso (chamada normal e
+    retry anti-repetição)."""
+    if saida is None:
+        return None
+    if campos_confirmados:
+        saida = _mesclar_campos_confirmados(saida, campos_confirmados)
+    if campos_formulario_confirmados:
+        saida = _mesclar_campos_formulario(saida, campos_formulario_confirmados)
+    return saida
+
+
+def _campos_formulario_brutos(valores: dict[str, Any] | None) -> dict[str, list[str]]:
+    """Converte ``SaidaWhatsAppIntake.campos_formulario`` (``str``/``list[str]``
+    por chave, como o modelo devolve) para o formato bruto que
+    ``formularios_quimico.validar_payload`` espera (``list[str]`` por chave —
+    mesmo formato do multipart do Portal, onde ``checkbox_multi`` chega como
+    várias entradas do mesmo campo). Valores vazios/ausentes não entram —
+    ``validar_payload`` trata ausência como campo não preenchido."""
+    brutos: dict[str, list[str]] = {}
+    for nome, valor in (valores or {}).items():
+        if isinstance(valor, list):
+            limpos = [str(v).strip() for v in valor if str(v).strip()]
+            if limpos:
+                brutos[nome] = limpos
+        elif str(valor or "").strip():
+            brutos[nome] = [str(valor).strip()]
+    return brutos
 
 
 async def processar_conversa(conversa_id: str) -> None:
@@ -929,9 +1121,12 @@ async def _processar_conversa(conversa_id: str) -> None:
     claims = claims_do_perfil(perfil["id"])
 
     campos_confirmados: dict[str, Any] = {}
+    campos_formulario_confirmados: dict[str, Any] = {}
     if rodada > 1:
         async with admin_connection() as conn:
-            campos_confirmados = await _campos_confirmados(conn, conversa_id)
+            resultado_anterior = await _resultado_rodada_anterior(conn, conversa_id)
+        campos_confirmados = _campos_confirmados(resultado_anterior)
+        campos_formulario_confirmados = _campos_formulario_confirmados(resultado_anterior)
 
     catalogo = await _montar_catalogo(claims)
     if not catalogo:
@@ -942,7 +1137,10 @@ async def _processar_conversa(conversa_id: str) -> None:
 
     setores = await _setores_validos(claims)
     imagem = await _imagem_da_conversa(mensagens_acumuladas, settings)
-    mensagens = montar_mensagens(mensagens_acumuladas, catalogo, imagem, setores, campos_confirmados)
+    mensagens = montar_mensagens(
+        mensagens_acumuladas, catalogo, imagem, setores,
+        campos_confirmados, campos_formulario_confirmados,
+    )
     inicio = time.monotonic()
     saida, erro, tokens_in, tokens_out = await chamar_modelo_estruturado(
         mensagens,
@@ -955,8 +1153,7 @@ async def _processar_conversa(conversa_id: str) -> None:
     )
     if erro:
         log.warning("[WA INTAKE] Conversa %s sem saída útil: %s", conversa_id, erro)
-    if saida is not None and campos_confirmados:
-        saida = _mesclar_campos_confirmados(saida, campos_confirmados)
+    saida = _aplicar_campos_confirmados(saida, campos_confirmados, campos_formulario_confirmados)
 
     acao = decidir_acao_intake(saida, rodada, settings.whatsapp_intake_max_rodadas)
     pergunta = (
@@ -985,8 +1182,9 @@ async def _processar_conversa(conversa_id: str) -> None:
         )
         tokens_in = tokens_in if tokens_in_retry is None else (tokens_in or 0) + tokens_in_retry
         tokens_out = tokens_out if tokens_out_retry is None else (tokens_out or 0) + tokens_out_retry
-        if saida_retry is not None and campos_confirmados:
-            saida_retry = _mesclar_campos_confirmados(saida_retry, campos_confirmados)
+        saida_retry = _aplicar_campos_confirmados(
+            saida_retry, campos_confirmados, campos_formulario_confirmados
+        )
         acao_retry = decidir_acao_intake(saida_retry, rodada, settings.whatsapp_intake_max_rodadas)
         pergunta_retry = (
             texto_das_perguntas(saida_retry.perguntas)
@@ -1126,6 +1324,52 @@ async def _enviar_formulario_pendente(
     return texto
 
 
+@dataclass(frozen=True)
+class _FormularioQuimico:
+    """Resultado da validação do formulário dinâmico do Químico para a
+    categoria escolhida — mesmo papel de ``RegrasMarketing``
+    (``app/services/portal.py``): ``erro`` não fatal vira nova pergunta,
+    nunca aborta a conversa."""
+
+    dados_formulario: dict[str, Any]
+    titulo: str
+    descricao: str
+    observacao: str
+    erro: str | None = None
+
+
+_SEM_FORMULARIO_QUIMICO = _FormularioQuimico(dados_formulario={}, titulo="", descricao="", observacao="")
+
+
+def _validar_formulario_quimico(
+    departamento: dict[str, Any], categoria: dict[str, Any], saida: SaidaWhatsAppIntake
+) -> _FormularioQuimico:
+    """Valida ``saida.campos_formulario`` contra o layout real da categoria do
+    Químico, reaproveitando ``formularios_quimico.validar_payload`` — a MESMA
+    função que o Portal usa (fonte única, mesmo motivo do
+    :func:`_formulario_rh_pendente`). Fora do Químico, ou numa categoria do
+    Químico sem layout dinâmico conhecido (``validar_payload`` devolve
+    ``limpo`` vazio sem erro), não há o que validar — devolve
+    :data:`_SEM_FORMULARIO_QUIMICO` e o resto do fluxo segue com
+    `titulo`/`descricao` normais, como qualquer outro departamento."""
+    if not _eh_departamento_quimico(str(departamento.get("nome") or "")):
+        return _SEM_FORMULARIO_QUIMICO
+    nome_categoria = str(categoria.get("nome") or "")
+    brutos = _campos_formulario_brutos(saida.campos_formulario)
+    ok, erro, limpo = validar_payload_quimico(nome_categoria, brutos)
+    if not ok:
+        return _FormularioQuimico(dados_formulario={}, titulo="", descricao="", observacao="", erro=erro)
+    if not limpo:
+        return _SEM_FORMULARIO_QUIMICO
+    titulo, descricao = titulo_e_descricao_automaticos(nome_categoria, limpo)
+    return _FormularioQuimico(
+        dados_formulario=limpo,
+        titulo=titulo,
+        descricao=descricao,
+        observacao=observacao_categoria(nome_categoria),
+    )
+
+
 async def _criar_chamado_da_conversa(
     conversa_id: str,
     telefone: str,
@@ -1173,6 +1417,28 @@ async def _criar_chamado_da_conversa(
             conversa_id, telefone, rodada, "PERGUNTA", "",
             settings, resultado, tokens_in, tokens_out, duracao_ms,
             novo_status="COLETANDO", pergunta=texto_pedido,
+        )
+        return
+
+    # Formulário dinâmico do Departamento Químico (2026-08-21, mesma regra
+    # própria de `app/domain/formularios_quimico.py`, já usada pelo Portal):
+    # cada categoria tem um layout fixo de campos — a coleta acontece campo a
+    # campo ao longo da conversa (`_secao_formulario_quimico`, injetada em
+    # `montar_mensagens`), mas quem GARANTE que nada obrigatório ficou de fora
+    # é este código, não a boa vontade do modelo (mesmo espírito do
+    # `regra.erro` do Marketing logo abaixo). `erro` não é fatal: vira nova
+    # pergunta com o texto pronto de `validar_payload` (ex.: 'Preencha o campo
+    # "Região".'), respeitando o mesmo teto de rodadas do resto da conversa.
+    formulario_quimico = _validar_formulario_quimico(departamento, categoria, saida)
+    if formulario_quimico.erro:
+        if rodada >= settings.whatsapp_intake_max_rodadas:
+            await _finalizar(conversa_id, telefone, rodada, "ENCERRADO_SEM_CHAMADO",
+                             TEXTO_ERRO_GENERICO, settings, resultado, tokens_in, tokens_out, duracao_ms)
+            return
+        await _finalizar(
+            conversa_id, telefone, rodada, "PERGUNTA", formulario_quimico.erro,
+            settings, resultado, tokens_in, tokens_out, duracao_ms,
+            novo_status="COLETANDO", pergunta=formulario_quimico.erro,
         )
         return
 
@@ -1225,7 +1491,12 @@ async def _criar_chamado_da_conversa(
     except ValueError:
         telefone_contato = telefone
 
-    titulo = str(saida.titulo or "").strip()[:200]
+    # Categoria do Químico com layout dinâmico: título e descrição são
+    # DERIVADOS do formulário (mesma regra da tela de abertura do Portal, que
+    # esconde os dois campos para essas categorias) — nunca os que o modelo
+    # tenha preenchido por conta própria.
+    titulo = (formulario_quimico.titulo or str(saida.titulo or "").strip())[:200]
+    descricao = formulario_quimico.descricao or str(saida.descricao or "").strip()
     repo = ChamadosRepo()
     novo = await repo.criar(
         claims,
@@ -1235,20 +1506,24 @@ async def _criar_chamado_da_conversa(
         subcategoria_id=str(subcategoria["id"]) if subcategoria else None,
         departamento_id=str(departamento["id"]),
         titulo=titulo,
-        descricao=str(saida.descricao or "").strip(),
+        descricao=descricao,
         prioridade=prioridade,
         setor=str(setor),
         telefone_contato=telefone_contato,
         data_entrega=data_entrega,
         sem_prazo=sem_prazo,
         origem_demanda=_ORIGEM_DEMANDA,
+        dados_formulario=formulario_quimico.dados_formulario,
     )
     chamado_id = str(novo["id"])
 
     await _anexar_midia_da_conversa(conversa, perfil, claims, chamado_id, repo, settings)
+    texto_confirmacao = _texto_confirmacao(str(novo["codigo"]), str(departamento["nome"]), chamado_id, settings)
+    if formulario_quimico.observacao:
+        texto_confirmacao = f"{texto_confirmacao}\n\n{formulario_quimico.observacao}"
     await _finalizar(
         conversa_id, telefone, rodada, "CHAMADO_CRIADO",
-        _texto_confirmacao(str(novo["codigo"]), str(departamento["nome"]), chamado_id, settings),
+        texto_confirmacao,
         settings, resultado, tokens_in, tokens_out, duracao_ms,
         novo_status="CONCLUIDA", chamado_id=chamado_id,
     )

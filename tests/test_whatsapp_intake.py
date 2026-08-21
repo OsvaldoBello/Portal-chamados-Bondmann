@@ -9,12 +9,22 @@ e destino alucinado pelo modelo nunca vira INSERT.
 import json
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.domain.formularios_quimico import (
+    CAT_ANALISE,
+    CAT_DESENVOLVIMENTO,
+    CAT_OCORRENCIA,
+    CAT_VISITA,
+    campos_da_categoria,
+)
+from app.domain.periodo import TZ_BR
 from app.ia import whatsapp_intake
 from app.ia.schemas import SaidaWhatsAppIntake
 from app.main import app
@@ -1109,3 +1119,258 @@ async def test_campo_confirmado_nao_sobrescreve_valor_novo_do_modelo():
 
         amb.criar.assert_awaited_once()
         assert amb.criar.await_args.kwargs["setor"] == "Produção"
+
+
+# --- Formulário dinâmico do Departamento Químico ----------------------------
+#
+# Mesma regra própria do Portal (`app/domain/formularios_quimico.py`): cada
+# categoria do Químico tem um layout FIXO de campos, coletado no WhatsApp
+# campo a campo ao longo da conversa. Quem garante que nada obrigatório ficou
+# de fora, e que valores de `select`/`checkbox_multi` batem com as opções
+# reais, é `_validar_formulario_quimico` — reaproveitando
+# `formularios_quimico.validar_payload`, a MESMA função do Portal.
+
+_CATALOGO_QUIMICO = [
+    {
+        "id": "dep-quimico-uuid",
+        "nome": "Dpto Químico",
+        "categorias": [
+            {"id": "cat-analise-uuid", "nome": CAT_ANALISE, "subcategorias": []},
+            {"id": "cat-ocorrencia-uuid", "nome": CAT_OCORRENCIA, "subcategorias": []},
+            {"id": "cat-visita-uuid", "nome": CAT_VISITA, "subcategorias": []},
+            {"id": "cat-desenvolvimento-uuid", "nome": CAT_DESENVOLVIMENTO, "subcategorias": []},
+            # Categoria do Químico SEM layout dinâmico conhecido — prova que o
+            # departamento sozinho não força o fluxo de formulário fixo.
+            {"id": "cat-duvida-uuid", "nome": "Dúvida Geral", "subcategorias": []},
+        ],
+    }
+]
+
+
+def _valores_validos(nome_categoria: str) -> dict[str, str | list[str]]:
+    """Um valor válido para CADA campo (obrigatório ou não) da categoria,
+    derivado do schema real (`campos_da_categoria`) em vez de hardcodado —
+    não quebra se o formulário do Químico ganhar/perder campos."""
+    valores: dict[str, str | list[str]] = {}
+    for campo in campos_da_categoria(nome_categoria):
+        if campo.tipo == "select":
+            valores[campo.name] = campo.opcoes[0]
+        elif campo.tipo == "checkbox_multi":
+            valores[campo.name] = [campo.opcoes[0]]
+        elif campo.tipo == "email":
+            valores[campo.name] = "contato@teste.com"
+        elif campo.tipo == "date":
+            valores[campo.name] = datetime.now(TZ_BR).date().isoformat()
+        elif campo.tipo == "number":
+            valores[campo.name] = "1"
+        else:
+            texto = "Texto de teste bem detalhado para preencher o campo. "
+            texto = (texto * ((campo.min_chars // len(texto)) + 1))[: max(campo.min_chars, 20)]
+            valores[campo.name] = texto
+    return valores
+
+
+def _saida_quimico(
+    categoria: str = CAT_ANALISE,
+    campos_formulario: dict[str, Any] | None = None,
+    **overrides,
+) -> SaidaWhatsAppIntake:
+    base = dict(
+        informacoes_suficientes=True,
+        confianca="ALTA",
+        titulo="Assunto genérico dito pelo modelo",
+        descricao="Descrição genérica dita pelo modelo.",
+        setor="Produção",
+        departamento="Dpto Químico",
+        categoria=categoria,
+        subcategoria=None,
+        prioridade="MEDIA",
+        campos_formulario=(
+            campos_formulario if campos_formulario is not None else _valores_validos(categoria)
+        ),
+    )
+    base.update(overrides)
+    return SaidaWhatsAppIntake(**base)
+
+
+@pytest.mark.parametrize(
+    "categoria", [CAT_OCORRENCIA, CAT_VISITA, CAT_ANALISE, CAT_DESENVOLVIMENTO]
+)
+async def test_quimico_formulario_completo_cria_chamado_com_titulo_e_descricao_derivados(categoria):
+    """Um teste por CATEGORIA do Químico (as 4 com layout dinâmico
+    conhecido) — prova, com o schema real de cada uma (campos, tipos,
+    opções), que o fluxo campo a campo funciona ponta a ponta e não só para
+    a categoria mais simples. `titulo`/`descricao` ditos pelo modelo são
+    IGNORADOS nesta categoria — o sistema deriva os dois do formulário,
+    mesma regra da tela de abertura do Portal (que esconde os dois campos
+    para o Químico)."""
+    conn = FakeConn()
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=_saida_quimico(categoria), catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        kwargs = amb.criar.await_args.kwargs
+        assert kwargs["departamento_id"] == "dep-quimico-uuid"
+        assert kwargs["dados_formulario"] == _valores_validos(categoria)
+        assert kwargs["titulo"] != "Assunto genérico dito pelo modelo"
+        assert categoria in kwargs["titulo"]
+        assert kwargs["descricao"] != "Descrição genérica dita pelo modelo."
+        assert conn.auditorias[0][2] == "CHAMADO_CRIADO"
+
+
+async def test_quimico_campo_obrigatorio_faltando_pergunta_em_vez_de_criar():
+    """`informacoes_suficientes: true` do modelo não é suficiente sozinho —
+    o código revalida contra o schema real e não deixa passar sem os campos
+    obrigatórios, mesma postura do `regra.erro` do Marketing."""
+    conn = FakeConn()
+    saida = _saida_quimico(CAT_ANALISE, campos_formulario={})
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "PERGUNTA"
+        resposta = amb.responder.await_args.args[1]
+        assert "preencha o campo" in resposta.lower()
+
+
+async def test_quimico_valor_de_select_fora_da_lista_pergunta_de_novo():
+    """Valor de `select` que não bate EXATO com a lista real (alucinação ou
+    interpretação errada do modelo) nunca vira dado gravado."""
+    conn = FakeConn()
+    campos = _valores_validos(CAT_ANALISE) | {"unidade_entrega": "Unidade Que Não Existe"}
+    saida = _saida_quimico(CAT_ANALISE, campos_formulario=campos)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "PERGUNTA"
+        assert "opção inválida" in amb.responder.await_args.args[1].lower()
+
+
+async def test_quimico_checkbox_multi_aceita_mais_de_uma_analise_solicitada():
+    """"Análises solicitadas" é `checkbox_multi` — o modelo devolve uma LISTA
+    com os itens exatos que a pessoa pediu (o bot apresentou as opções
+    numeradas e mapeou a resposta livre de volta para elas)."""
+    conn = FakeConn()
+    campos_analise = campos_da_categoria(CAT_ANALISE)
+    opcoes_analise = next(c for c in campos_analise if c.name == "analises_solicitadas").opcoes
+    escolhidas = [opcoes_analise[0], opcoes_analise[2]]
+    campos = _valores_validos(CAT_ANALISE) | {"analises_solicitadas": escolhidas}
+    saida = _saida_quimico(CAT_ANALISE, campos_formulario=campos)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        assert amb.criar.await_args.kwargs["dados_formulario"]["analises_solicitadas"] == escolhidas
+
+
+async def test_quimico_categoria_sem_layout_dinamico_segue_fluxo_generico():
+    """Departamento Químico sozinho não força o formulário fixo — só as
+    categorias com layout conhecido (`CAMPOS_POR_CATEGORIA`) exigem isso;
+    fora delas, `titulo`/`descricao` do modelo valem normalmente."""
+    conn = FakeConn()
+    saida = _saida_quimico("Dúvida Geral", campos_formulario={})
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        kwargs = amb.criar.await_args.kwargs
+        assert kwargs["titulo"] == "Assunto genérico dito pelo modelo"
+        assert kwargs["dados_formulario"] == {}
+
+
+async def test_quimico_no_teto_de_rodadas_com_campo_faltando_encerra():
+    conn = FakeConn()
+    conn.rodada = 3  # settings usa max_rodadas=4 → esta rodada já é a última
+    saida = _saida_quimico(CAT_ANALISE, campos_formulario={})
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        assert conn.auditorias[0][2] == "ENCERRADO_SEM_CHAMADO"
+
+
+async def test_quimico_desenvolvimento_anexa_aviso_estatico_na_confirmacao():
+    """Aviso fixo de "Solicitação de Desenvolvimento" (rodapé do formulário
+    no Portal) sai também na confirmação do WhatsApp, mesma informação."""
+    conn = FakeConn()
+    saida = _saida_quimico(CAT_DESENVOLVIMENTO)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        resposta = amb.responder.await_args.args[1]
+        assert "gestão de P&D" in resposta
+
+
+async def test_quimico_campos_formulario_confirmados_persistem_entre_rodadas():
+    """Mesma rede de segurança de `_mesclar_campos_confirmados` (setor etc.),
+    agora para o dict aninhado `campos_formulario`: um campo já confirmado
+    numa rodada anterior não se perde se o modelo omitir de novo."""
+    conn = FakeConn()
+    conn.rodada = 1  # próxima rodada processada será a 2
+    todos = _valores_validos(CAT_ANALISE)
+    conn.resultado_confirmado = {
+        "departamento": "Dpto Químico",
+        "categoria": CAT_ANALISE,
+        "campos_formulario": {
+            "unidade_entrega": todos["unidade_entrega"],
+            "identificacao_cliente": todos["identificacao_cliente"],
+        },
+    }
+    faltando = {k: v for k, v in todos.items() if k not in ("unidade_entrega", "identificacao_cliente")}
+    saida = _saida_quimico(CAT_ANALISE, campos_formulario=faltando)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert conn.consultas_campos_confirmados == 1
+        amb.criar.assert_awaited_once()
+        assert amb.criar.await_args.kwargs["dados_formulario"] == todos
+
+
+def test_secao_formulario_quimico_injetada_so_apos_departamento_e_categoria_confirmados():
+    conversa = [{"papel": "usuario", "conteudo": "preciso de uma análise de amostra"}]
+
+    sem_categoria = whatsapp_intake.montar_mensagens(
+        conversa, _CATALOGO_QUIMICO, setores=_SETORES,
+        campos_confirmados={"departamento": "Dpto Químico"},
+    )
+    assert "Formulário do Departamento Químico" not in sem_categoria[1]["content"]
+
+    com_categoria = whatsapp_intake.montar_mensagens(
+        conversa, _CATALOGO_QUIMICO, setores=_SETORES,
+        campos_confirmados={"departamento": "Dpto Químico", "categoria": CAT_ANALISE},
+        campos_formulario_confirmados={"unidade_entrega": "Matriz Canoas/RS"},
+    )
+    texto = com_categoria[1]["content"]
+    assert f'## Formulário do Departamento Químico — categoria "{CAT_ANALISE}"' in texto
+    # Campo já confirmado não é perguntado de novo (não aparece como pendente)...
+    assert "`unidade_entrega`" not in texto
+    # ...mas o campo seguinte, ainda pendente, continua listado.
+    assert "`identificacao_cliente`" in texto
+    # A lista de opções da múltipla escolha vai inteira, numerada.
+    assert "1. Determinação de pH" in texto

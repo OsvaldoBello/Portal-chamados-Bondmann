@@ -7,7 +7,7 @@ como inválido (1 retry; depois ``acao='ERRO'`` silencioso).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -113,6 +113,18 @@ class SaidaWhatsAppIntake(BaseModel):
     # passar.
     data_entrega: str | None = None
     sem_prazo: bool = False
+    # Formulário dinâmico do Departamento Químico (2026-08-21, mesma regra
+    # própria de `app/domain/formularios_quimico.py` — layout por categoria,
+    # já usado pelo Portal). Só relevante quando `departamento` for "Dpto
+    # Químico" E `categoria` tiver um layout dinâmico conhecido. Chave =
+    # `CampoDef.name` do campo (copiado LITERALMENTE do formulário injetado no
+    # prompt), valor = `str` para a maioria dos tipos, `list[str]` para
+    # `checkbox_multi` (ex.: "Análises solicitadas"). Valores de campo `select`
+    # precisam ser cópia EXATA de uma das opções fornecidas — o chamador
+    # revalida com `formularios_quimico.validar_payload`, a mesma função do
+    # Portal, então uma aproximação inventada é sempre rejeitada, nunca vira
+    # dado gravado.
+    campos_formulario: dict[str, Any] = Field(default_factory=dict)
 
 
 class SaidaPasseB(BaseModel):
