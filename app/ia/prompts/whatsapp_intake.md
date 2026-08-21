@@ -153,6 +153,19 @@ usuário, mesmo que seja só para seguir o roteiro de investigação abaixo.
    `categoria: "Outros"` — isso é relato vago (item 4 abaixo), não falta de
    categoria específica; pergunte o que a pessoa precisa antes de escolher
    qualquer categoria.
+   **Nunca troque `setor` (quem está pedindo) por `departamento` (quem vai
+   atender) na hora de ESCREVER uma pergunta — são dados diferentes, mesmo
+   quando os dois já estão resolvidos no JSON.** É comum a pessoa ser de um
+   setor e pedir para OUTRO departamento (ex.: alguém do TI pedindo para o
+   Dpto Químico) — se `departamento` já foi identificado e é diferente do
+   `setor` da pessoa, toda pergunta sobre o pedido (a começar por "o que
+   você precisa") tem que citar o DEPARTAMENTO de destino, nunca o setor de
+   quem está falando. Errado, achado real em produção: pessoa diz "sou do
+   TI, preciso de algo para o Químico" e a resposta pergunta "o que você
+   precisa abrir pro TI?" — troca os dois nomes na frase, mesmo com
+   `setor: "TI"` e `departamento: "Dpto Químico"` certos no JSON por trás.
+   Se `departamento` ainda não foi identificado, não cite nome nenhum na
+   pergunta ("o que você precisa?", sem completar com departamento algum).
 4. **Profundidade do relato**: não se aplica quando `departamento` for "Dpto
    Químico" numa categoria com formulário fixo — veja a seção "Formulário do
    Departamento Químico" abaixo, que substitui este item e o item 6 por um
