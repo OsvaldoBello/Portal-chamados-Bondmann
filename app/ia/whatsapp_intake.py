@@ -294,6 +294,22 @@ def _pede_novo_chamado(texto: str) -> bool:
     return any(chave in alvo for chave in _PEDE_NOVO_CHAMADO)
 
 
+def _quer_reiniciar_pedido(conversa: list[dict[str, Any]]) -> bool:
+    """``True`` quando a ÚLTIMA mensagem do usuário sinaliza (mesmas palavras-
+    chave de :func:`_pede_novo_chamado`) que o pedido em andamento não vale
+    mais — sem isso, os campos "sticky" (`departamento`/`categoria`/
+    `subcategoria`/`campos_formulario` do formulário do Químico) do pedido
+    ANTERIOR continuam sendo injetados como fato pronto e repostos pela rede
+    de segurança mesmo depois de a pessoa mudar de ideia, travando a
+    conversa numa pergunta que não faz mais sentido (achado real em
+    produção, 2026-08-21: bot preso perguntando a região de uma ocorrência
+    depois de a pessoa dizer "quero criar um novo chamado sem ser esse")."""
+    ultima = next((m for m in reversed(conversa) if m.get("papel") == "usuario"), None)
+    if ultima is None:
+        return False
+    return _pede_novo_chamado(str(ultima.get("conteudo") or ""))
+
+
 async def _chamado_recente_para_anexo(
     conn: Any, telefone: str, janela_s: float
 ) -> dict[str, Any] | None:
@@ -1188,6 +1204,14 @@ async def _processar_conversa(conversa_id: str) -> None:
             resultado_anterior = await _resultado_rodada_anterior(conn, conversa_id)
         campos_confirmados = _campos_confirmados(resultado_anterior)
         campos_formulario_confirmados = _campos_formulario_confirmados(resultado_anterior)
+        if _quer_reiniciar_pedido(mensagens_acumuladas):
+            # Descarta os campos sobre O QUE a pessoa quer (destino +
+            # formulário do Químico) — mantém só `setor` (quem ela é),
+            # que continua válido mesmo quando o pedido muda.
+            campos_confirmados = {
+                k: v for k, v in campos_confirmados.items() if k == "setor"
+            }
+            campos_formulario_confirmados = {}
 
     catalogo = await _montar_catalogo(claims)
     if not catalogo:

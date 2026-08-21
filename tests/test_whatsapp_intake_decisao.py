@@ -12,6 +12,7 @@ from app.ia.whatsapp_intake import (
     _LEAD_INS_MULTIPLAS_PERGUNTAS,
     _mesclar_campos_confirmados,
     _pede_novo_chamado,
+    _quer_reiniciar_pedido,
     _saudacao_horario,
     _texto_confirmacao,
     decidir_acao_intake,
@@ -345,3 +346,45 @@ def test_pede_novo_chamado_detecta_variacoes(legenda):
 )
 def test_pede_novo_chamado_nao_dispara_por_engano(legenda):
     assert _pede_novo_chamado(legenda) is False
+
+
+# --- _quer_reiniciar_pedido (achado real em produção, 2026-08-21) ----------
+#
+# Sem isso, o destino (departamento/categoria/campos_formulario do Químico)
+# já confirmado numa rodada anterior ficava grudado pra sempre — mesmo
+# depois de a pessoa dizer que queria outra coisa, o bot continuava
+# perguntando um campo de um formulário que ela já tinha abandonado.
+
+
+def test_quer_reiniciar_pedido_detecta_pela_ultima_mensagem_do_usuario():
+    conversa = [
+        {"papel": "usuario", "conteudo": "quero um relatório de ocorrência pro Químico"},
+        {"papel": "assistente", "conteudo": "Qual é a região?"},
+        {"papel": "usuario", "conteudo": "Quero um novo chamado, esquece esse"},
+    ]
+    assert _quer_reiniciar_pedido(conversa) is True
+
+
+def test_quer_reiniciar_pedido_falso_quando_ultima_mensagem_nao_sinaliza():
+    conversa = [
+        {"papel": "usuario", "conteudo": "quero um relatório de ocorrência pro Químico"},
+        {"papel": "assistente", "conteudo": "Qual é a região?"},
+        {"papel": "usuario", "conteudo": "Gravataí"},
+    ]
+    assert _quer_reiniciar_pedido(conversa) is False
+
+
+def test_quer_reiniciar_pedido_ignora_mensagem_do_assistente_mais_recente():
+    """Só a última mensagem do USUÁRIO conta — uma resposta do bot que por
+    acaso contivesse "novo chamado" (ex.: confirmando algo) não deve disparar
+    o reinício."""
+    conversa = [
+        {"papel": "usuario", "conteudo": "Gravataí"},
+        {"papel": "assistente", "conteudo": "Beleza, e qual o supervisor?"},
+    ]
+    assert _quer_reiniciar_pedido(conversa) is False
+
+
+def test_quer_reiniciar_pedido_sem_mensagem_de_usuario_e_falso():
+    assert _quer_reiniciar_pedido([]) is False
+    assert _quer_reiniciar_pedido([{"papel": "assistente", "conteudo": "Oi"}]) is False

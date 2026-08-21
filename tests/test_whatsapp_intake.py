@@ -1121,6 +1121,40 @@ async def test_campo_confirmado_nao_sobrescreve_valor_novo_do_modelo():
         assert amb.criar.await_args.kwargs["setor"] == "Produção"
 
 
+async def test_pedido_novo_reseta_destino_mas_mantem_setor():
+    """Achado real em produção (2026-08-21): depois do destino (departamento/
+    categoria/campos_formulario do Químico) confirmado, a pessoa dizer que
+    quer um chamado NOVO não pode deixar esses campos grudados pra sempre —
+    o bot ficava preso perguntando um campo (região) de um formulário que a
+    pessoa já tinha abandonado. Só `setor` (quem ela é) continua valendo."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {"regiao": "007-GRAVATAI"},
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "usuario", "conteudo": "sou do TI, quero um relatório de ocorrência pro Químico"},
+        {"papel": "assistente", "conteudo": "Qual é a região?"},
+        {"papel": "usuario", "conteudo": "Quero um novo chamado, esquece esse"},
+    ]
+    saida = SaidaWhatsAppIntake(informacoes_suficientes=False, perguntas=["O que você precisa agora?"])
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado.get("setor") == "TI"  # preservado
+        assert not resultado.get("departamento")  # não reposto pela rede de segurança
+        assert not resultado.get("categoria")
+        assert not resultado.get("campos_formulario")
+
+
 # --- Formulário dinâmico do Departamento Químico ----------------------------
 #
 # Mesma regra própria do Portal (`app/domain/formularios_quimico.py`): cada
