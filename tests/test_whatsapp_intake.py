@@ -1342,6 +1342,39 @@ async def test_quimico_checkbox_multi_aceita_mais_de_uma_analise_solicitada():
         assert amb.criar.await_args.kwargs["dados_formulario"]["analises_solicitadas"] == escolhidas
 
 
+async def test_quimico_checkbox_multi_pergunta_formatada_pelo_codigo():
+    """Achado real em produção (2026-08-21): o modelo escreveu as 8 opções
+    de "Análises solicitadas" numa única linha corrida, ilegível no
+    WhatsApp. Assim que o PRÓXIMO campo pendente é `checkbox_multi`, o
+    CÓDIGO formata a pergunta (opções numeradas, uma por linha de verdade)
+    e ignora o texto que o modelo escreveu — mesmo princípio de
+    `texto_das_perguntas`."""
+    conn = FakeConn()
+    saida = _saida_quimico(
+        CAT_ANALISE,
+        campos_formulario={
+            "unidade_entrega": "Matriz Canoas/RS",
+            "identificacao_cliente": "CLI00002",
+            "descricao_amostra": "Reagente que corroeu alumínio",
+        },
+        perguntas=["Qual a análise? 1. pH 2. Densidade 3. Brix (tudo numa linha só)"],
+        informacoes_suficientes=False,
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        resposta = amb.responder.await_args.args[1]
+        # Texto mal formatado do modelo foi IGNORADO por completo.
+        assert "tudo numa linha só" not in resposta
+        assert "Análises solicitadas" in resposta
+        # Cada opção numerada tem sua própria linha (quebra real, não espaço).
+        assert "\n1. Determinação de pH\n" in resposta
+        assert "\n8. Outra" in resposta
+
+
 async def test_quimico_categoria_sem_layout_dinamico_segue_fluxo_generico():
     """Departamento Químico sozinho não força o formulário fixo — só as
     categorias com layout conhecido (`CAMPOS_POR_CATEGORIA`) exigem isso;

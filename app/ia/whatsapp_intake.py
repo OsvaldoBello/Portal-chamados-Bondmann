@@ -786,13 +786,13 @@ def _linhas_campo_quimico(campo: CampoDef) -> list[str]:
         linhas.append("  " + " | ".join(campo.opcoes))
     elif campo.tipo == "checkbox_multi":
         linhas.append(
-            "  Tipo: múltipla escolha — ao chegar a vez deste campo, apresente TODAS "
-            "as opções abaixo numeradas em uma única pergunta e peça para a pessoa "
-            "responder com os números e/ou os nomes dos itens que quer (pode ser mais "
-            "de um). Na resposta dela, mapeie cada item citado para o texto EXATO da "
+            "  Tipo: múltipla escolha — quando chegar a vez deste campo, o SISTEMA "
+            "substitui sua pergunta pela lista abaixo já formatada (não formate você "
+            "mesmo, não importa o que você escrever em `perguntas` pra esta rodada). "
+            "Só cuide da resposta: quando a pessoa responder (pode citar mais de um "
+            "item, por número ou por nome), mapeie cada um para o texto EXATO da "
             "lista abaixo e preencha uma LISTA com todos eles em `campos_formulario` — "
-            "nunca invente item fora desta lista, e nunca deixe de perguntar por já "
-            "achar que sabe a resposta:"
+            "nunca invente item fora desta lista:"
         )
         linhas += [f"  {i}. {opcao}" for i, opcao in enumerate(campo.opcoes, 1)]
     elif campo.tipo == "date":
@@ -800,6 +800,29 @@ def _linhas_campo_quimico(campo: CampoDef) -> list[str]:
     elif campo.tipo in ("tel", "email", "number"):
         linhas.append(f"  Tipo: {campo.tipo}.")
     return linhas
+
+
+def _pergunta_checkbox_multi_pendente(
+    nome_categoria: str, campos_formulario: dict[str, Any] | None
+) -> str | None:
+    """Se o PRÓXIMO campo pendente (primeiro na ordem do schema que ainda
+    não está em ``campos_formulario``) for do tipo ``checkbox_multi``,
+    devolve o texto PRONTO da pergunta — com as opções numeradas, cada uma
+    na sua própria linha — para SUBSTITUIR o texto que o modelo escreveu.
+    Achado real em produção (2026-08-21): o modelo apresentou as 8 opções
+    de "Análises solicitadas" como uma única linha corrida (sem quebra
+    nenhuma), ilegível no WhatsApp — mesmo princípio de
+    :func:`texto_das_perguntas` (quem formata é o código, não o modelo,
+    porque o modelo não é confiável pra isso). ``None`` quando o próximo
+    campo pendente não é ``checkbox_multi`` (ou não há mais campo
+    pendente) — nesse caso o texto do modelo é usado normalmente."""
+    campos = campos_da_categoria(nome_categoria)
+    preenchidos = campos_formulario or {}
+    proximo = next((c for c in campos if c.name not in preenchidos), None)
+    if proximo is None or proximo.tipo != "checkbox_multi":
+        return None
+    itens = "\n".join(f"{i}. {opcao}" for i, opcao in enumerate(proximo.opcoes, 1))
+    return f"{proximo.label} — pode ser mais de uma, me diga os números ou os nomes:\n{itens}"
 
 
 def _linhas_campos_categoria(nome_categoria: str) -> list[str]:
@@ -1429,6 +1452,16 @@ async def _processar_conversa(conversa_id: str) -> None:
             # TEXTO enviado, nunca descarta dado real já capturado), mas o
             # usuário nunca recebe a mesma mensagem duas vezes.
             pergunta = _TEXTO_CONTINUAR_GENERICO
+
+    if acao == "PERGUNTA" and saida is not None and _eh_departamento_quimico(saida.departamento):
+        # Campo de múltipla escolha do Químico: o código formata a
+        # pergunta (opções numeradas, uma por linha), nunca confia no
+        # modelo pra isso — ver docstring de :func:`_pergunta_checkbox_multi_pendente`.
+        pergunta_checkbox = _pergunta_checkbox_multi_pendente(
+            str(saida.categoria or ""), saida.campos_formulario
+        )
+        if pergunta_checkbox:
+            pergunta = pergunta_checkbox
 
     duracao_ms = int((time.monotonic() - inicio) * 1000)
     resultado = saida.model_dump() if saida is not None else {"erro": erro}
