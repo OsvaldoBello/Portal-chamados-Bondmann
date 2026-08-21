@@ -1216,6 +1216,52 @@ async def test_pedido_novo_reseta_destino_com_frase_de_cancelamento():
         assert not resultado.get("campos_formulario")
 
 
+async def test_pedido_novo_esquece_a_narrativa_antiga_no_prompt():
+    """Pedido do usuário (2026-08-21): zerar os campos "confirmados" não
+    bastava — a transcrição INTEIRA da conversa abandonada (produto, região,
+    gerente...) continuava sendo enviada ao modelo, que se perdia relendo a
+    narrativa antiga e voltava a inferir a categoria/formulário de lá, às
+    vezes reabrindo o pedido que a pessoa acabou de cancelar. Depois do
+    reinício, o prompt enviado ao modelo não pode mais conter nada da
+    conversa anterior à mensagem de reinício — só ela em diante — e
+    `informacoes_suficientes`/apresentação não podem regredir por causa
+    disso."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {"regiao": "007-GRAVATAI"},
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "usuario", "conteudo": "sou do TI, quero um relatório de ocorrência pro Químico"},
+        {"papel": "assistente", "conteudo": "Qual é a região?"},
+        {"papel": "usuario", "conteudo": "Panambi, o gerente é o Wallysson"},
+        {"papel": "assistente", "conteudo": "Qual é o supervisor?"},
+        {"papel": "usuario", "conteudo": "Cancela, não era isso que eu queria"},
+    ]
+    saida = SaidaWhatsAppIntake(informacoes_suficientes=False, perguntas=["O que você precisa agora?"])
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        prompt_enviado = whatsapp_intake.chamar_modelo_estruturado.await_args_list[0].args[0]
+        texto_prompt = json.dumps(prompt_enviado, ensure_ascii=False)
+        assert "Panambi" not in texto_prompt
+        assert "Wallysson" not in texto_prompt
+        assert "Qual é o supervisor?" not in texto_prompt
+        assert "Cancela, não era isso que eu queria" in texto_prompt
+        # não regride pra "primeira mensagem" só por o histórico ter sido cortado:
+        assert "primeira mensagem desta conversa" not in texto_prompt
+
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["historico_desde"] == 4  # índice da mensagem de reinício
+
+
 async def test_pedido_novo_reseta_rodada_efetiva_nao_esbarra_no_teto():
     """Pedido do usuário (2026-08-21): reiniciar o pedido não pode fazer a
     conversa esbarrar no teto de rodadas por causa das rodadas do pedido

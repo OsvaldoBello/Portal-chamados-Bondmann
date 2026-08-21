@@ -392,6 +392,34 @@ def _rodada_efetiva(
     return anterior + 1 if isinstance(anterior, int) else rodada
 
 
+def _indice_historico_desde(
+    conversa: list[dict[str, Any]], resultado_anterior: dict[str, Any] | None, reiniciou: bool
+) -> int:
+    """Índice de ``conversa`` a partir do qual o histórico é MOSTRADO ao
+    modelo nesta rodada e nas seguintes — mesmo padrão sem migration de
+    :func:`_rodada_efetiva` (persistido em ``resultado["historico_desde"]``,
+    carregado de rodada em rodada até o próximo reinício).
+
+    Pedido do usuário (2026-08-21): zerar os campos "confirmados"
+    (:func:`_quer_reiniciar_pedido`) não bastava — a transcrição INTEIRA da
+    conversa abandonada (produto, região, gerente...) continuava sendo
+    enviada ao modelo a cada rodada seguinte, então ele se perdia relendo a
+    narrativa antiga e voltava a inferir a categoria/formulário de lá, às
+    vezes reabrindo o pedido que a pessoa acabou de cancelar. Ao reiniciar,
+    o histórico visível passa a começar NA PRÓPRIA mensagem de reinício —
+    tudo antes é esquecido pelo modelo (mas nunca apagado do banco: a
+    coluna física ``whatsapp_conversas.mensagens_acumuladas`` continua
+    completa; isto só corta o que é ENVIADO ao modelo, para auditoria e
+    histórico humano nada muda)."""
+    if reiniciou:
+        for i in range(len(conversa) - 1, -1, -1):
+            if conversa[i].get("papel") == "usuario":
+                return i
+        return 0
+    anterior = resultado_anterior.get("historico_desde") if resultado_anterior else None
+    return anterior if isinstance(anterior, int) else 0
+
+
 async def _chamado_recente_para_anexo(
     conn: Any, telefone: str, janela_s: float
 ) -> dict[str, Any] | None:
@@ -1141,6 +1169,7 @@ def montar_mensagens(
     setores: list[str] | None = None,
     campos_confirmados: dict[str, Any] | None = None,
     campos_formulario_confirmados: dict[str, Any] | None = None,
+    ja_apresentou: bool | None = None,
 ) -> list[dict[str, Any]]:
     """Mensagens system+user da extração (mesmo formato do motor de triagem).
 
@@ -1155,14 +1184,22 @@ def montar_mensagens(
     `saida.setor` desde a rodada 2, mas o modelo mesmo assim reformulou "qual
     é o seu setor?" nas rodadas 2, 3 e 4 — cada reformulação com texto
     diferente escapava do `_repete_mensagem_anterior` (que só pega repetição
-    EXATA), queimando rodadas do teto à toa."""
+    EXATA), queimando rodadas do teto à toa.
+
+    ``ja_apresentou``, quando informado, VENCE a dedução por conteúdo do
+    ``conversa`` abaixo — necessário desde que ``conversa`` pode chegar
+    CORTADA (:func:`_indice_historico_desde`, reinício de pedido): sem a
+    apresentação no pedaço visível, a dedução por conteúdo concluiria
+    (errado) que é a primeira mensagem da conversa inteira e mandaria a
+    saudação de novo no meio do papo."""
     # Calculado aqui, não deduzido pelo modelo: achado da sessão 2026-08-19,
     # onde o gpt-5.4-mini (pedido pra "ver se já tem linha [assistente] no
     # histórico") continuou repetindo a apresentação idêntica rodada após
     # rodada mesmo com a regra escrita no prompt — inferir estado da conversa
     # a partir do transcript é pedir demais de um modelo pequeno. Um fato
     # pronto, calculado em Python, é muito mais confiável do que uma dedução.
-    ja_apresentou = any(item.get("papel") != "usuario" for item in conversa)
+    if ja_apresentou is None:
+        ja_apresentou = any(item.get("papel") != "usuario" for item in conversa)
     linhas = [
         "## Saudação atual (use EXATAMENTE esta na mensagem de apresentação — "
         "não calcule você mesmo, o relógio é este)",
@@ -1557,6 +1594,7 @@ async def _processar_conversa(conversa_id: str) -> None:
     campos_confirmados: dict[str, Any] = {}
     campos_formulario_confirmados: dict[str, Any] = {}
     rodada_efetiva = rodada
+    historico_desde = 0
     if rodada > 1:
         async with admin_connection() as conn:
             resultado_anterior = await _resultado_rodada_anterior(conn, conversa_id)
@@ -1566,6 +1604,7 @@ async def _processar_conversa(conversa_id: str) -> None:
         )
         reiniciou = _quer_reiniciar_pedido(mensagens_acumuladas)
         rodada_efetiva = _rodada_efetiva(rodada, resultado_anterior, reiniciou)
+        historico_desde = _indice_historico_desde(mensagens_acumuladas, resultado_anterior, reiniciou)
         if reiniciou:
             # Descarta os campos sobre O QUE a pessoa quer (destino +
             # formulário do Químico) — mantém só `setor` (quem ela é),
@@ -1575,6 +1614,13 @@ async def _processar_conversa(conversa_id: str) -> None:
             }
             campos_formulario_confirmados = {}
 
+    # A partir daqui, `conversa_visivel` (não `mensagens_acumuladas`) é o que
+    # vai pro modelo — corta a narrativa de um pedido abandonado quando
+    # reiniciou (:func:`_indice_historico_desde`). `mensagens_acumuladas`
+    # continua completa no banco e segue sendo usada onde o objetivo é outro
+    # (detectar o próprio gatilho de reinício, auditoria).
+    conversa_visivel = mensagens_acumuladas[historico_desde:]
+
     catalogo = await _montar_catalogo(claims)
     if not catalogo:
         log.warning("[WA INTAKE] Nenhum departamento habilitado tem catálogo visível.")
@@ -1583,10 +1629,11 @@ async def _processar_conversa(conversa_id: str) -> None:
         return
 
     setores = await _setores_validos(claims)
-    imagem = await _imagem_da_conversa(mensagens_acumuladas, settings)
+    imagem = await _imagem_da_conversa(conversa_visivel, settings)
     mensagens = montar_mensagens(
-        mensagens_acumuladas, catalogo, imagem, setores,
+        conversa_visivel, catalogo, imagem, setores,
         campos_confirmados, campos_formulario_confirmados,
+        ja_apresentou=rodada > 1,
     )
     inicio = time.monotonic()
     saida, erro, tokens_in, tokens_out = await chamar_modelo_estruturado(
@@ -1601,7 +1648,7 @@ async def _processar_conversa(conversa_id: str) -> None:
     if erro:
         log.warning("[WA INTAKE] Conversa %s sem saída útil: %s", conversa_id, erro)
     saida = _aplicar_campos_confirmados(saida, campos_confirmados, campos_formulario_confirmados)
-    saida = _ajustar_campos_formulario_quimico(saida, mensagens_acumuladas)
+    saida = _ajustar_campos_formulario_quimico(saida, conversa_visivel)
 
     acao = decidir_acao_intake(saida, rodada_efetiva, settings.whatsapp_intake_max_rodadas)
     pergunta = (
@@ -1609,7 +1656,7 @@ async def _processar_conversa(conversa_id: str) -> None:
     )
     repetiu = False
 
-    repete_texto = acao == "PERGUNTA" and _repete_mensagem_anterior(pergunta, mensagens_acumuladas)
+    repete_texto = acao == "PERGUNTA" and _repete_mensagem_anterior(pergunta, conversa_visivel)
     campo_quimico_travado = (
         acao == "PERGUNTA"
         and not repete_texto
@@ -1646,7 +1693,7 @@ async def _processar_conversa(conversa_id: str) -> None:
         saida_retry = _aplicar_campos_confirmados(
             saida_retry, campos_confirmados, campos_formulario_confirmados
         )
-        saida_retry = _ajustar_campos_formulario_quimico(saida_retry, mensagens_acumuladas)
+        saida_retry = _ajustar_campos_formulario_quimico(saida_retry, conversa_visivel)
         acao_retry = decidir_acao_intake(saida_retry, rodada_efetiva, settings.whatsapp_intake_max_rodadas)
         pergunta_retry = (
             texto_das_perguntas(saida_retry.perguntas)
@@ -1654,7 +1701,7 @@ async def _processar_conversa(conversa_id: str) -> None:
             else ""
         )
         ainda_travado = saida_retry is not None and acao_retry == "PERGUNTA" and (
-            _repete_mensagem_anterior(pergunta_retry, mensagens_acumuladas)
+            _repete_mensagem_anterior(pergunta_retry, conversa_visivel)
             or _quimico_travado_no_campo(
                 saida_retry, pergunta_retry, campos_confirmados, campos_formulario_confirmados
             )
@@ -1682,6 +1729,7 @@ async def _processar_conversa(conversa_id: str) -> None:
     duracao_ms = int((time.monotonic() - inicio) * 1000)
     resultado = saida.model_dump() if saida is not None else {"erro": erro}
     resultado["rodada_efetiva"] = rodada_efetiva
+    resultado["historico_desde"] = historico_desde
     if repetiu:
         resultado["retry_anti_repeticao"] = True
 
