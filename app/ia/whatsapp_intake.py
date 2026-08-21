@@ -1207,42 +1207,57 @@ def _campos_formulario_brutos(valores: dict[str, Any] | None) -> dict[str, list[
     return brutos
 
 
-def _campo_novo_preenchido(
+def _campos_novos_desta_rodada(
     confirmados_antes: dict[str, Any], campos_formulario: dict[str, Any] | None
-) -> bool:
-    """``True`` quando ``campos_formulario`` desta rodada tem pelo menos UMA
-    chave preenchida que não estava em ``confirmados_antes`` (a rodada
-    ANTERIOR) — usado para detectar se a rodada avançou o formulário do
-    Químico de verdade, ou só repetiu a mesma pergunta com texto diferente
-    (ver :data:`_LEMBRETE_CAMPO_QUIMICO_TRAVADO`)."""
-    return any(
-        valor not in (None, "", [])
-        and not confirmados_antes.get(chave)
+) -> list[str]:
+    """Nomes das chaves em ``campos_formulario`` desta rodada que NÃO
+    estavam em ``confirmados_antes`` (a rodada ANTERIOR) — usado para
+    detectar se a rodada avançou o formulário do Químico de verdade, ou só
+    repetiu a mesma pergunta (:data:`_LEMBRETE_CAMPO_QUIMICO_TRAVADO`)."""
+    return [
+        chave
         for chave, valor in (campos_formulario or {}).items()
-    )
+        if valor not in (None, "", []) and not confirmados_antes.get(chave)
+    ]
 
 
 def _quimico_travado_no_campo(
     saida: SaidaWhatsAppIntake | None,
+    pergunta: str,
     campos_confirmados: dict[str, Any],
     campos_formulario_confirmados: dict[str, Any],
 ) -> bool:
     """``True`` quando departamento/categoria do Químico JÁ estavam
     confirmados ANTES desta rodada (ou seja, a pergunta da rodada ANTERIOR
     já era, com certeza, sobre um campo específico do formulário — não sobre
-    qual categoria escolher) e mesmo assim esta rodada não avançou nenhum
-    campo novo em `campos_formulario` (:func:`_campo_novo_preenchido`).
-    Exclui de propósito a rodada em que a categoria é decidida agora mesmo
-    (ali `campos_confirmados` ainda não tem `categoria` — ver
+    qual categoria escolher) e a rodada travou de uma das duas formas
+    encontradas ao vivo em produção (2026-08-21): (1) não preencheu NENHUM
+    campo novo em `campos_formulario`, ou (2) preencheu um campo novo mas o
+    TEXTO da pergunta ainda cita o rótulo desse mesmo campo — achado real:
+    `campos_formulario` ganhou `"estado": "RS"` na rodada, mas `perguntas`
+    continuou "Qual é o estado?", perguntando de novo o que acabou de ser
+    respondido no próprio JSON da mesma rodada. Exclui de propósito a
+    rodada em que a categoria é decidida agora mesmo (ali
+    `campos_confirmados` ainda não tem `categoria` — ver
     :func:`_secao_todas_categorias_quimico` — então não perguntar campo
     nenhum ainda é esperado, não é travamento)."""
     if saida is None:
         return False
     if not campos_confirmados or not _eh_departamento_quimico(campos_confirmados.get("departamento")):
         return False
-    if not eh_categoria_quimico(str(campos_confirmados.get("categoria") or "")):
+    nome_categoria = str(campos_confirmados.get("categoria") or "")
+    if not eh_categoria_quimico(nome_categoria):
         return False
-    return not _campo_novo_preenchido(campos_formulario_confirmados, saida.campos_formulario)
+    novos = _campos_novos_desta_rodada(campos_formulario_confirmados, saida.campos_formulario)
+    if not novos:
+        return True
+    alvo = pergunta.strip().casefold()
+    if not alvo:
+        return False
+    return any(
+        campo is not None and campo.label.casefold() in alvo
+        for campo in (_campo_por_nome(nome_categoria, nome) for nome in novos)
+    )
 
 
 async def processar_conversa(conversa_id: str) -> None:
@@ -1350,7 +1365,7 @@ async def _processar_conversa(conversa_id: str) -> None:
     campo_quimico_travado = (
         acao == "PERGUNTA"
         and not repete_texto
-        and _quimico_travado_no_campo(saida, campos_confirmados, campos_formulario_confirmados)
+        and _quimico_travado_no_campo(saida, pergunta, campos_confirmados, campos_formulario_confirmados)
     )
     if repete_texto or campo_quimico_travado:
         # Duas redes de segurança contra a conversa travar pedindo a MESMA
@@ -1391,7 +1406,9 @@ async def _processar_conversa(conversa_id: str) -> None:
         )
         ainda_travado = saida_retry is not None and acao_retry == "PERGUNTA" and (
             _repete_mensagem_anterior(pergunta_retry, mensagens_acumuladas)
-            or _quimico_travado_no_campo(saida_retry, campos_confirmados, campos_formulario_confirmados)
+            or _quimico_travado_no_campo(
+                saida_retry, pergunta_retry, campos_confirmados, campos_formulario_confirmados
+            )
         )
         if saida_retry is not None and not ainda_travado:
             # Tentativa nova resolveu (ou decidiu criar chamado/encerrar) — usa ela.

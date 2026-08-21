@@ -1464,6 +1464,48 @@ async def test_quimico_campo_travado_tenta_de_novo_e_usa_a_nova():
         assert resultado["campos_formulario"]["justificativa"] == "pneus sujos danificam com o tempo"
 
 
+async def test_quimico_pergunta_ainda_cita_campo_que_acabou_de_preencher_tenta_de_novo():
+    """Achado real em produção (2026-08-21), variação do achado acima: desta
+    vez o modelo PREENCHEU o campo novo em `campos_formulario` (ex.:
+    "estado": "RS"), mas o TEXTO da pergunta ainda perguntava por ele
+    ("Qual é o estado?") em vez de avançar pro próximo campo pendente — o
+    dado ficou certo, só o texto que confundia quem estava respondendo."""
+    conn = FakeConn()
+    conn.rodada = 2
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_VISITA,
+        "campos_formulario": {"cidade": "CANOAS"},
+    }
+    travada = _saida_quimico(
+        CAT_VISITA,
+        campos_formulario={"cidade": "CANOAS", "estado": "RS"},  # avançou no DADO...
+        perguntas=["Qual é o estado?"],  # ...mas a pergunta continua sobre o mesmo campo
+        informacoes_suficientes=False,
+    )
+    avancou = _saida_quimico(
+        CAT_VISITA,
+        # `regiao_cliente` NÃO preenchido ainda — é exatamente o campo
+        # perguntado agora, ainda sem resposta, não "avançado" no dado.
+        campos_formulario={"cidade": "CANOAS", "estado": "RS"},
+        perguntas=["Qual é a região do cliente?"],
+        informacoes_suficientes=False,
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[(travada, None, 100, 50), (avancou, None, 80, 40)],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 2
+        resposta = amb.responder.await_args.args[1]
+        assert resposta == "Qual é a região do cliente?"
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["campos_formulario"]["estado"] == "RS"
+
+
 async def test_quimico_campo_travado_duas_vezes_usa_texto_generico():
     """Se a tentativa nova TAMBÉM não avançar nenhum campo, nunca manda a
     mesma pergunta de novo — cai no texto fixo, mas preserva os campos já
