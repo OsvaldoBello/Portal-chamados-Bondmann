@@ -13,6 +13,7 @@ from app.ia.whatsapp_intake import (
     _mesclar_campos_confirmados,
     _pede_novo_chamado,
     _quer_reiniciar_pedido,
+    _rodada_efetiva,
     _saudacao_horario,
     _texto_confirmacao,
     decidir_acao_intake,
@@ -388,3 +389,26 @@ def test_quer_reiniciar_pedido_ignora_mensagem_do_assistente_mais_recente():
 def test_quer_reiniciar_pedido_sem_mensagem_de_usuario_e_falso():
     assert _quer_reiniciar_pedido([]) is False
     assert _quer_reiniciar_pedido([{"papel": "assistente", "conteudo": "Oi"}]) is False
+
+
+# --- _rodada_efetiva (pedido do usuário, 2026-08-21) -------------------
+#
+# O teto de rodadas (`WHATSAPP_INTAKE_MAX_RODADAS`) não pode contar as
+# rodadas de um pedido ABANDONADO contra o pedido novo depois de um
+# reinício — senão alguém que reinicia o pedido algumas vezes esbarra no
+# teto por causa de conversa jogada fora.
+
+
+def test_rodada_efetiva_reinicia_em_1_quando_pessoa_reiniciou_o_pedido():
+    assert _rodada_efetiva(7, {"rodada_efetiva": 5}, reiniciou=True) == 1
+
+
+def test_rodada_efetiva_acumula_a_partir_da_rodada_efetiva_anterior():
+    assert _rodada_efetiva(7, {"rodada_efetiva": 3}, reiniciou=False) == 4
+
+
+def test_rodada_efetiva_sem_historico_usa_a_rodada_crua():
+    """Conversa que nunca reiniciou (`rodada_efetiva` nunca foi gravada) —
+    comportamento idêntico ao de antes desta feature."""
+    assert _rodada_efetiva(7, None, reiniciou=False) == 7
+    assert _rodada_efetiva(7, {}, reiniciou=False) == 7

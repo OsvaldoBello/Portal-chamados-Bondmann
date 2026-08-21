@@ -1155,6 +1155,38 @@ async def test_pedido_novo_reseta_destino_mas_mantem_setor():
         assert not resultado.get("campos_formulario")
 
 
+async def test_pedido_novo_reseta_rodada_efetiva_nao_esbarra_no_teto():
+    """Pedido do usuário (2026-08-21): reiniciar o pedido não pode fazer a
+    conversa esbarrar no teto de rodadas por causa das rodadas do pedido
+    ABANDONADO — o teto reconta a partir de 1 quando a pessoa reinicia."""
+    conn = FakeConn()
+    conn.rodada = 3  # settings usa max_rodadas=4 → sem o fix, a próxima rodada (4) já bateria no teto
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {"regiao": "007-GRAVATAI"},
+        "rodada_efetiva": 3,
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "usuario", "conteudo": "sou do TI, quero um relatório de ocorrência pro Químico"},
+        {"papel": "assistente", "conteudo": "Qual é a região?"},
+        {"papel": "usuario", "conteudo": "Quero um novo chamado, esquece esse"},
+    ]
+    saida = SaidaWhatsAppIntake(informacoes_suficientes=False, perguntas=["O que você precisa agora?"])
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        # Sem o fix, isso seria ENCERRADO_SEM_CHAMADO (rodada crua 4 >= teto 4).
+        assert conn.auditorias[0][2] == "PERGUNTA"
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["rodada_efetiva"] == 1
+
+
 # --- Formulário dinâmico do Departamento Químico ----------------------------
 #
 # Mesma regra própria do Portal (`app/domain/formularios_quimico.py`): cada

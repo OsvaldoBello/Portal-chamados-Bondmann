@@ -332,6 +332,30 @@ def _quer_reiniciar_pedido(conversa: list[dict[str, Any]]) -> bool:
     return _pede_novo_chamado(str(ultima.get("conteudo") or ""))
 
 
+def _rodada_efetiva(
+    rodada: int, resultado_anterior: dict[str, Any] | None, reiniciou: bool
+) -> int:
+    """"Rodada" para efeito do teto de perguntas (``WHATSAPP_INTAKE_MAX_
+    RODADAS``) — NÃO a coluna física ``whatsapp_conversas.rodada`` (essa
+    nunca pode regredir nem ser reaproveitada: é a chave de idempotência de
+    ``ia_whatsapp_intake``, ``UNIQUE(conversa_id, rodada)`` — reescrevê-la
+    faria o próximo INSERT colidir com uma rodada antiga da MESMA conversa
+    e a conversa morrer em "auditada com estado inconsistente"). Em vez
+    disso, uma contagem PARALELA de "rodadas desde o último pedido novo",
+    guardada como só mais um campo em ``resultado`` (mesmo padrão sem
+    migration do resto do mecanismo sticky — ver :func:`_campos_confirmados`).
+
+    Pedido do usuário (2026-08-21): quando a pessoa reinicia o pedido
+    (:func:`_quer_reiniciar_pedido`), o teto de rodadas não pode continuar
+    contando as rodadas do pedido ABANDONADO contra o pedido novo — senão
+    alguém que reinicia algumas vezes esbarra no teto por causa de conversa
+    jogada fora, não do pedido atual."""
+    if reiniciou:
+        return 1
+    anterior = resultado_anterior.get("rodada_efetiva") if resultado_anterior else None
+    return anterior + 1 if isinstance(anterior, int) else rodada
+
+
 async def _chamado_recente_para_anexo(
     conn: Any, telefone: str, janela_s: float
 ) -> dict[str, Any] | None:
@@ -1272,12 +1296,15 @@ async def _processar_conversa(conversa_id: str) -> None:
 
     campos_confirmados: dict[str, Any] = {}
     campos_formulario_confirmados: dict[str, Any] = {}
+    rodada_efetiva = rodada
     if rodada > 1:
         async with admin_connection() as conn:
             resultado_anterior = await _resultado_rodada_anterior(conn, conversa_id)
         campos_confirmados = _campos_confirmados(resultado_anterior)
         campos_formulario_confirmados = _campos_formulario_confirmados(resultado_anterior)
-        if _quer_reiniciar_pedido(mensagens_acumuladas):
+        reiniciou = _quer_reiniciar_pedido(mensagens_acumuladas)
+        rodada_efetiva = _rodada_efetiva(rodada, resultado_anterior, reiniciou)
+        if reiniciou:
             # Descarta os campos sobre O QUE a pessoa quer (destino +
             # formulário do Químico) — mantém só `setor` (quem ela é),
             # que continua válido mesmo quando o pedido muda.
@@ -1313,7 +1340,7 @@ async def _processar_conversa(conversa_id: str) -> None:
         log.warning("[WA INTAKE] Conversa %s sem saída útil: %s", conversa_id, erro)
     saida = _aplicar_campos_confirmados(saida, campos_confirmados, campos_formulario_confirmados)
 
-    acao = decidir_acao_intake(saida, rodada, settings.whatsapp_intake_max_rodadas)
+    acao = decidir_acao_intake(saida, rodada_efetiva, settings.whatsapp_intake_max_rodadas)
     pergunta = (
         texto_das_perguntas(saida.perguntas) if saida is not None and acao == "PERGUNTA" else ""
     )
@@ -1356,7 +1383,7 @@ async def _processar_conversa(conversa_id: str) -> None:
         saida_retry = _aplicar_campos_confirmados(
             saida_retry, campos_confirmados, campos_formulario_confirmados
         )
-        acao_retry = decidir_acao_intake(saida_retry, rodada, settings.whatsapp_intake_max_rodadas)
+        acao_retry = decidir_acao_intake(saida_retry, rodada_efetiva, settings.whatsapp_intake_max_rodadas)
         pergunta_retry = (
             texto_das_perguntas(saida_retry.perguntas)
             if saida_retry is not None and acao_retry == "PERGUNTA"
@@ -1378,6 +1405,7 @@ async def _processar_conversa(conversa_id: str) -> None:
 
     duracao_ms = int((time.monotonic() - inicio) * 1000)
     resultado = saida.model_dump() if saida is not None else {"erro": erro}
+    resultado["rodada_efetiva"] = rodada_efetiva
     if repetiu:
         resultado["retry_anti_repeticao"] = True
 
@@ -1393,7 +1421,7 @@ async def _processar_conversa(conversa_id: str) -> None:
     if acao == "CRIAR_CHAMADO":
         assert saida is not None
         await _criar_chamado_da_conversa(
-            conversa_id, telefone, rodada, perfil, claims, catalogo, setores, saida,
+            conversa_id, telefone, rodada, rodada_efetiva, perfil, claims, catalogo, setores, saida,
             mensagens_acumuladas, settings, resultado, tokens_in, tokens_out, duracao_ms,
         )
         return
@@ -1546,6 +1574,7 @@ async def _criar_chamado_da_conversa(
     conversa_id: str,
     telefone: str,
     rodada: int,
+    rodada_efetiva: int,
     perfil: dict[str, Any],
     claims: dict[str, str],
     catalogo: list[dict[str, Any]],
@@ -1577,7 +1606,7 @@ async def _criar_chamado_da_conversa(
 
     formulario_pendente = await _formulario_rh_pendente(departamento, subcategoria, conversa, settings)
     if formulario_pendente:
-        if rodada >= settings.whatsapp_intake_max_rodadas:
+        if rodada_efetiva >= settings.whatsapp_intake_max_rodadas:
             await _finalizar(conversa_id, telefone, rodada, "ENCERRADO_SEM_CHAMADO",
                              TEXTO_ERRO_GENERICO, settings, resultado, tokens_in, tokens_out, duracao_ms)
             return
@@ -1603,7 +1632,7 @@ async def _criar_chamado_da_conversa(
     # "Região".'), respeitando o mesmo teto de rodadas do resto da conversa.
     formulario_quimico = _validar_formulario_quimico(departamento, categoria, saida)
     if formulario_quimico.erro:
-        if rodada >= settings.whatsapp_intake_max_rodadas:
+        if rodada_efetiva >= settings.whatsapp_intake_max_rodadas:
             await _finalizar(conversa_id, telefone, rodada, "ENCERRADO_SEM_CHAMADO",
                              TEXTO_ERRO_GENERICO, settings, resultado, tokens_in, tokens_out, duracao_ms)
             return
@@ -1646,7 +1675,7 @@ async def _criar_chamado_da_conversa(
             data_entrega=str(saida.data_entrega or "").strip(),
         )
         if regra.erro:
-            if rodada >= settings.whatsapp_intake_max_rodadas:
+            if rodada_efetiva >= settings.whatsapp_intake_max_rodadas:
                 await _finalizar(conversa_id, telefone, rodada, "ENCERRADO_SEM_CHAMADO",
                                  TEXTO_ERRO_GENERICO, settings, resultado, tokens_in, tokens_out, duracao_ms)
                 return
