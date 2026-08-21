@@ -898,7 +898,17 @@ def _secao_formulario_quimico(
         "(os opcionais podem ficar de fora). Grave cada valor coletado em "
         "`campos_formulario` usando EXATAMENTE o `name` indicado como chave — "
         "`titulo`/`descricao` não precisam ser preenchidos por você nesta "
-        "categoria, o sistema os deriva automaticamente do formulário.",
+        "categoria, o sistema os deriva automaticamente do formulário. "
+        "**Releia a ÚLTIMA mensagem do usuário procurando TODOS os campos "
+        "pendentes abaixo, não só o que você acabou de perguntar** — se ela "
+        "responder mais do que foi pedido (ex.: perguntou só o objetivo da "
+        "visita e a pessoa também disse se já teve ocorrência antes), "
+        "preencha TODOS os campos que a resposta já cobre em `campos_formulario` "
+        "nesta mesma rodada, não só o que estava na sua última pergunta — "
+        "isso vale inclusive para campo de escolha única: 'nunca teve "
+        "ocorrência'/'não teve problema antes' etc. tem que virar o valor "
+        "exato 'Não' da lista de opções do campo correspondente, mesmo "
+        "que a pessoa não tenha usado a palavra 'não' explicitamente.",
     ]
     pendentes = [c for c in campos if c.name not in campos_formulario_confirmados]
     for campo in pendentes:
