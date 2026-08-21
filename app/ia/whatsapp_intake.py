@@ -47,6 +47,7 @@ from typing import Any
 from app.config import Settings, get_settings
 from app.db import admin_connection
 from app.domain.formularios_quimico import (
+    CAMPOS_POR_CATEGORIA,
     CampoDef,
     campos_da_categoria,
     eh_categoria_quimico,
@@ -739,6 +740,59 @@ def _linhas_campo_quimico(campo: CampoDef) -> list[str]:
     return linhas
 
 
+def _linhas_campos_categoria(nome_categoria: str) -> list[str]:
+    """Subtítulo + campo a campo cru de UMA categoria do Químico (sem o
+    preâmbulo de instruções) — bloco reaproveitado tanto por
+    :func:`_secao_formulario_quimico` (categoria já confirmada) quanto por
+    :func:`_secao_todas_categorias_quimico` (categoria ainda não decidida,
+    onde repetir o preâmbulo inteiro 4x seria só ruído)."""
+    campos = campos_da_categoria(nome_categoria)
+    if not campos:
+        return []
+    linhas = [f'### Categoria "{nome_categoria}"']
+    for campo in campos:
+        linhas += _linhas_campo_quimico(campo)
+    return linhas
+
+
+def _secao_todas_categorias_quimico() -> list[str]:
+    """Bloco injetado quando `departamento` já é "Dpto Químico" mas a
+    categoria AINDA NÃO foi confirmada em rodada anterior — mostra o
+    formulário de TODAS as categorias com layout conhecido de uma vez.
+
+    Achado real em produção (2026-08-21): pessoa disse, numa frase só, "sou
+    do TI e quero fazer um relatório de ocorrência para o Químico" — o
+    modelo corretamente extraiu `categoria: "Registro de Ocorrência"` NESTA
+    MESMA rodada, mas como a seção de campo a campo só existia (antes desta
+    correção) a partir da rodada SEGUINTE — gated em `campos_confirmados`,
+    que só reflete o que foi extraído em rodada ANTERIOR — o modelo não
+    tinha o formulário disponível ainda e caiu de volta no roteiro genérico,
+    perguntando "o que você precisa registrar?" bem depois de a pessoa já
+    ter dito o suficiente pra começar a coletar o primeiro campo de verdade.
+    Mostrar as 4 categorias de uma vez (custo desprezível: poucos centavos
+    por rodada) resolve isso — assim que o modelo reconhece qual categoria
+    bate, ele já tem o formulário dela na MESMA rodada, sem esperar a
+    próxima."""
+    linhas = [
+        "",
+        "## Formulários do Departamento Químico (categoria ainda não confirmada)",
+        "O departamento já é Dpto Químico, mas a categoria desta conversa ainda "
+        "não foi decidida. Abaixo estão os formulários de TODAS as categorias "
+        "que têm layout fixo — assim que você reconhecer, pelo que a pessoa já "
+        "disse (nesta rodada ou em rodada anterior), qual delas bate com o "
+        "pedido, preencha `categoria` e passe a perguntar OS CAMPOS DAQUELA "
+        "categoria específica, um de cada vez — inclusive dentro desta MESMA "
+        "rodada, sem esperar a próxima só para começar. Se a pessoa já contou "
+        "o suficiente para identificar a categoria E responder o primeiro campo "
+        "dela (ex.: já descreveu a ocorrência ao mesmo tempo que pediu o "
+        "registro), preencha esse campo também em `campos_formulario` nesta "
+        "mesma rodada, em vez de perguntar de novo algo que ela já disse.",
+    ]
+    for nome_categoria in CAMPOS_POR_CATEGORIA:
+        linhas += ["", *_linhas_campos_categoria(nome_categoria)]
+    return linhas
+
+
 def _secao_formulario_quimico(
     nome_categoria: str, campos_formulario_confirmados: dict[str, Any]
 ) -> list[str]:
@@ -894,6 +948,13 @@ def montar_mensagens(
             linhas += _secao_formulario_quimico(
                 categoria_confirmada, campos_formulario_confirmados or {}
             )
+        else:
+            # Departamento já é Químico, mas a categoria só pode ser
+            # decidida NESTA rodada (o modelo lê o histórico completo) — sem
+            # isso a rodada em que a categoria se resolve fica sem o
+            # formulário disponível, caindo no roteiro genérico por 1 rodada
+            # à toa (achado real em produção, 2026-08-21).
+            linhas += _secao_todas_categorias_quimico()
 
     texto = "\n".join(linhas)
     conteudo_usuario: Any = texto

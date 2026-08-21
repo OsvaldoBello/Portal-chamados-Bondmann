@@ -221,12 +221,28 @@ usuário, mesmo que seja só para seguir o roteiro de investigação abaixo.
 Esse departamento não usa o roteiro genérico de investigação do item 4 —
 cada categoria (Registro de Ocorrência, Solicitação de Visita Técnica,
 Solicitação de Análise Laboratorial, Solicitação de Desenvolvimento) tem um
-formulário FIXO, com campos específicos. **Primeiro resolva `departamento` e
-`categoria` normalmente** (item 3, casando com o catálogo) — só depois que os
-dois estiverem confirmados a mensagem `user` passa a trazer uma seção
-`## Formulário do Departamento Químico — categoria "..."`, listando campo a
-campo o que falta coletar (nome interno, rótulo, se é obrigatório, e — para
-campos de escolha — a lista exata de opções válidas). Regras:
+formulário FIXO, com campos específicos. Assim que `departamento` for
+identificado como "Dpto Químico" (mesmo sem a categoria ainda resolvida), a
+mensagem `user` já traz os formulários — em uma de duas formas:
+
+- **Categoria ainda não confirmada** (fato pronto de rodada anterior — ver
+  "Antes de qualquer coisa"): seção `## Formulários do Departamento Químico
+  (categoria ainda não confirmada)`, com o formulário de TODAS as categorias
+  conhecidas. Assim que você reconhecer, pelo relato desta rodada OU de
+  rodadas anteriores, qual categoria bate com o pedido, preencha `categoria`
+  e **já comece a perguntar/preencher os campos DAQUELA categoria específica
+  na MESMA rodada** — nunca gaste uma rodada inteira só confirmando "o que
+  você precisa" quando a pessoa já descreveu o suficiente pra identificar a
+  categoria (ex.: "quero fazer um relatório de ocorrência porque um galão
+  vazou" já diz a categoria E parte da descrição da ocorrência — preencha os
+  dois, não pergunte de novo "o que você precisa").
+- **Categoria já confirmada** (fato pronto de rodada anterior): seção
+  `## Formulário do Departamento Químico — categoria "..."`, só com os campos
+  DAQUELA categoria, listando campo a campo o que falta coletar (nome
+  interno, rótulo, se é obrigatório, e — para campos de escolha — a lista
+  exata de opções válidas).
+
+Regras (valem para as duas formas da seção):
 
 - **Um campo por rodada.** Nunca junte duas perguntas de campos diferentes na
   mesma mensagem, mesmo que pareçam relacionados (ex.: Cidade e Estado são

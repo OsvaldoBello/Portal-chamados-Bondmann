@@ -1352,14 +1352,33 @@ async def test_quimico_campos_formulario_confirmados_persistem_entre_rodadas():
         assert amb.criar.await_args.kwargs["dados_formulario"] == todos
 
 
-def test_secao_formulario_quimico_injetada_so_apos_departamento_e_categoria_confirmados():
-    conversa = [{"papel": "usuario", "conteudo": "preciso de uma análise de amostra"}]
+def test_secao_todas_categorias_quimico_injetada_quando_departamento_confirmado_sem_categoria():
+    """Achado real em produção (2026-08-21): sem isso, a rodada em que a
+    pessoa já diz o suficiente pra identificar a categoria ("sou do TI e
+    quero um relatório de ocorrência pro Químico") fica sem o formulário
+    disponível — o modelo cai de volta no roteiro genérico ("o que você
+    precisa registrar?") por 1 rodada à toa, mesmo já sabendo a resposta.
+    Mostrar as 4 categorias de uma vez resolve isso: assim que a categoria é
+    reconhecida NESTA rodada, o formulário dela já está no prompt."""
+    conversa = [{"papel": "usuario", "conteudo": "quero um relatório de ocorrência pro Químico"}]
 
     sem_categoria = whatsapp_intake.montar_mensagens(
         conversa, _CATALOGO_QUIMICO, setores=_SETORES,
         campos_confirmados={"departamento": "Dpto Químico"},
     )
-    assert "Formulário do Departamento Químico" not in sem_categoria[1]["content"]
+    texto = sem_categoria[1]["content"]
+    assert "## Formulários do Departamento Químico (categoria ainda não confirmada)" in texto
+    # As 4 categorias conhecidas aparecem, não só a mais provável.
+    for categoria in (CAT_OCORRENCIA, CAT_VISITA, CAT_ANALISE, CAT_DESENVOLVIMENTO):
+        assert f'### Categoria "{categoria}"' in texto
+    # Um campo de cada uma, prova que os campos de verdade vieram junto (não
+    # só o título da categoria).
+    assert "`regiao`" in texto  # Registro de Ocorrência
+    assert "`objetivo_desenvolvimento`" in texto  # Solicitação de Desenvolvimento
+
+
+def test_secao_formulario_quimico_injetada_so_apos_departamento_e_categoria_confirmados():
+    conversa = [{"papel": "usuario", "conteudo": "preciso de uma análise de amostra"}]
 
     com_categoria = whatsapp_intake.montar_mensagens(
         conversa, _CATALOGO_QUIMICO, setores=_SETORES,
@@ -1368,6 +1387,8 @@ def test_secao_formulario_quimico_injetada_so_apos_departamento_e_categoria_conf
     )
     texto = com_categoria[1]["content"]
     assert f'## Formulário do Departamento Químico — categoria "{CAT_ANALISE}"' in texto
+    # Categoria já resolvida: volta pra visão de UMA categoria só, não as 4.
+    assert "categoria ainda não confirmada" not in texto
     # Campo já confirmado não é perguntado de novo (não aparece como pendente)...
     assert "`unidade_entrega`" not in texto
     # ...mas o campo seguinte, ainda pendente, continua listado.
