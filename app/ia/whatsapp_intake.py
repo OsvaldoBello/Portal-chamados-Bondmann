@@ -37,6 +37,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -825,6 +826,84 @@ def _pergunta_checkbox_multi_pendente(
     return f"{proximo.label} — pode ser mais de uma, me diga os números ou os nomes:\n{itens}"
 
 
+def _filtrar_campos_formulario_validos(
+    nome_categoria: str | None, campos_formulario: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Mantém só as chaves que são campos REAIS do schema da categoria —
+    descarta variações inventadas pelo modelo (ex.: ``objetivo_das_analises``
+    em vez de ``objetivo_analises``) ANTES de elas virarem fato "sticky" pra
+    sempre. Achado real em produção (2026-08-21): sem isso, cada rodada em
+    que o modelo inventa uma chave nova acumula lixo permanente na seção
+    "já confirmados" injetada no prompt (nunca é limpo, só cresce) — mesmas
+    chaves reais já são filtradas no fim por ``validar_payload``, mas só ALI;
+    filtrar cedo evita a poluição do prompt nas rodadas seguintes."""
+    nomes_validos = {c.name for c in campos_da_categoria(nome_categoria or "")}
+    if not nomes_validos:
+        return dict(campos_formulario or {})
+    return {k: v for k, v in (campos_formulario or {}).items() if k in nomes_validos}
+
+
+_NUMEROS_RE = re.compile(r"\d+")
+
+
+def _mapear_resposta_numerica_checkbox(
+    texto: str, opcoes: tuple[str, ...]
+) -> list[str] | None:
+    """Extrai números citados em ``texto`` (ex.: "1 e 4", "1, 3 e 5") e
+    mapeia para os itens correspondentes de ``opcoes`` (1-indexado, mesma
+    numeração mostrada por :func:`_pergunta_checkbox_multi_pendente`).
+    ``None`` quando não há nenhum número válido (1..len(opcoes)) no texto —
+    não é resposta numérica, não tenta adivinhar. Ordem de aparição no
+    texto, sem duplicar item repetido."""
+    numeros = [int(n) for n in _NUMEROS_RE.findall(texto)]
+    validos = [n for n in numeros if 1 <= n <= len(opcoes)]
+    if not validos:
+        return None
+    escolhidas: list[str] = []
+    for n in validos:
+        opcao = opcoes[n - 1]
+        if opcao not in escolhidas:
+            escolhidas.append(opcao)
+    return escolhidas
+
+
+def _ajustar_campos_formulario_quimico(
+    saida: SaidaWhatsAppIntake | None, conversa: list[dict[str, Any]]
+) -> SaidaWhatsAppIntake | None:
+    """Duas redes de segurança sobre ``saida.campos_formulario``, aplicadas
+    logo após a saída do modelo (antes de qualquer decisão): (1) descarta
+    chaves que não são campos reais da categoria (:func:`_filtrar_campos_
+    formulario_validos`); (2) se o PRÓXIMO campo pendente for
+    ``checkbox_multi`` e ainda não tiver sido preenchido, tenta mapear a
+    ÚLTIMA mensagem do usuário por número (:func:`_mapear_resposta_numerica_
+    checkbox`) e preenche o campo em código — achado real em produção
+    (2026-08-21): a pessoa respondeu "1 e 4" duas rodadas seguidas, o
+    modelo reconheceu isso na própria `descricao` ("Análises já mencionadas
+    anteriormente: 1 e 4") mas nunca preencheu `campos_formulario`, travando
+    a conversa pedindo a mesma coisa pra sempre. Não mexe em nada fora do
+    Químico, nem quando o texto não é claramente uma resposta numérica
+    (nesse caso a extração livre do modelo continua sendo a única fonte)."""
+    if saida is None or not _eh_departamento_quimico(saida.departamento):
+        return saida
+    nome_categoria = str(saida.categoria or "")
+    campos_formulario = _filtrar_campos_formulario_validos(nome_categoria, saida.campos_formulario)
+
+    campos = campos_da_categoria(nome_categoria)
+    proximo = next((c for c in campos if c.name not in campos_formulario), None)
+    if proximo is not None and proximo.tipo == "checkbox_multi":
+        ultima = next((m for m in reversed(conversa) if m.get("papel") == "usuario"), None)
+        texto = str((ultima or {}).get("conteudo") or "")
+        mapeadas = _mapear_resposta_numerica_checkbox(texto, proximo.opcoes)
+        if mapeadas:
+            campos_formulario = {**campos_formulario, proximo.name: mapeadas}
+
+    if campos_formulario == saida.campos_formulario:
+        return saida
+    dados = saida.model_dump()
+    dados["campos_formulario"] = campos_formulario
+    return SaidaWhatsAppIntake(**dados)
+
+
 def _linhas_campos_categoria(nome_categoria: str) -> list[str]:
     """Subtítulo + campo a campo cru de UMA categoria do Químico (sem o
     preâmbulo de instruções) — bloco reaproveitado tanto por
@@ -1387,6 +1466,7 @@ async def _processar_conversa(conversa_id: str) -> None:
     if erro:
         log.warning("[WA INTAKE] Conversa %s sem saída útil: %s", conversa_id, erro)
     saida = _aplicar_campos_confirmados(saida, campos_confirmados, campos_formulario_confirmados)
+    saida = _ajustar_campos_formulario_quimico(saida, mensagens_acumuladas)
 
     acao = decidir_acao_intake(saida, rodada_efetiva, settings.whatsapp_intake_max_rodadas)
     pergunta = (
@@ -1431,6 +1511,7 @@ async def _processar_conversa(conversa_id: str) -> None:
         saida_retry = _aplicar_campos_confirmados(
             saida_retry, campos_confirmados, campos_formulario_confirmados
         )
+        saida_retry = _ajustar_campos_formulario_quimico(saida_retry, mensagens_acumuladas)
         acao_retry = decidir_acao_intake(saida_retry, rodada_efetiva, settings.whatsapp_intake_max_rodadas)
         pergunta_retry = (
             texto_das_perguntas(saida_retry.perguntas)

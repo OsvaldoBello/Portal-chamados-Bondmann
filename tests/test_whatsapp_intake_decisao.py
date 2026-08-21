@@ -10,6 +10,8 @@ from app.ia.schemas import SaidaWhatsAppIntake
 from app.ia.whatsapp_intake import (
     _EMOJIS_CONFIRMACAO,
     _LEAD_INS_MULTIPLAS_PERGUNTAS,
+    _filtrar_campos_formulario_validos,
+    _mapear_resposta_numerica_checkbox,
     _mesclar_campos_confirmados,
     _pede_novo_chamado,
     _quer_reiniciar_pedido,
@@ -412,3 +414,62 @@ def test_rodada_efetiva_sem_historico_usa_a_rodada_crua():
     comportamento idêntico ao de antes desta feature."""
     assert _rodada_efetiva(7, None, reiniciou=False) == 7
     assert _rodada_efetiva(7, {}, reiniciou=False) == 7
+
+
+# --- _mapear_resposta_numerica_checkbox (achado real em produção, 2026-08-21) --
+#
+# Rede de segurança em código: a pessoa respondeu "1 e 4" duas rodadas
+# seguidas a uma pergunta de múltipla escolha e o modelo nunca preencheu
+# `campos_formulario`, mesmo reconhecendo a resposta na própria `descricao`.
+
+
+def test_mapear_resposta_numerica_checkbox_com_conectivo():
+    opcoes = ("pH", "Densidade", "Brix", "Corrosão", "Microbiana")
+    assert _mapear_resposta_numerica_checkbox("1 e 4", opcoes) == ["pH", "Corrosão"]
+
+
+def test_mapear_resposta_numerica_checkbox_com_virgula():
+    opcoes = ("pH", "Densidade", "Brix", "Corrosão", "Microbiana")
+    assert _mapear_resposta_numerica_checkbox("1, 3 e 5", opcoes) == ["pH", "Brix", "Microbiana"]
+
+
+def test_mapear_resposta_numerica_checkbox_sem_numero_e_none():
+    """Texto sem número nenhum não é resposta numérica — não tenta adivinhar."""
+    opcoes = ("pH", "Densidade")
+    assert _mapear_resposta_numerica_checkbox("as duas primeiras", opcoes) is None
+    assert _mapear_resposta_numerica_checkbox("", opcoes) is None
+
+
+def test_mapear_resposta_numerica_checkbox_ignora_numero_fora_do_intervalo():
+    """Número citado que não corresponde a nenhuma opção (0, ou maior que a
+    lista) é descartado — só os válidos entram no resultado."""
+    opcoes = ("pH", "Densidade", "Brix")
+    assert _mapear_resposta_numerica_checkbox("0, 2 e 9", opcoes) == ["Densidade"]
+
+
+def test_mapear_resposta_numerica_checkbox_sem_duplicar_item_repetido():
+    opcoes = ("pH", "Densidade")
+    assert _mapear_resposta_numerica_checkbox("1, 1 e 1", opcoes) == ["pH"]
+
+
+# --- _filtrar_campos_formulario_validos ------------------------------------
+
+
+def test_filtrar_campos_formulario_validos_descarta_chave_inventada():
+    """Achado real: o modelo inventou `objetivo_das_analises` além do campo
+    real `objetivo_analises` — a chave inventada some, a real fica."""
+    limpo = _filtrar_campos_formulario_validos(
+        "Solicitação de Análise Laboratorial",
+        {"objetivo_analises": "x", "objetivo_das_analises": "x"},
+    )
+    assert limpo == {"objetivo_analises": "x"}
+
+
+def test_filtrar_campos_formulario_validos_categoria_desconhecida_mantem_tudo():
+    """Categoria sem schema conhecido (fora do Químico, ou uma categoria
+    futura sem layout dinâmico) não tem como saber o que é válido — mantém
+    como veio, sem filtrar (mesma regra de `campos_da_categoria` devolvendo
+    tupla vazia pra categoria desconhecida)."""
+    dados = {"qualquer_coisa": "x"}
+    assert _filtrar_campos_formulario_validos("Categoria Fantasma", dados) == dados
+    assert _filtrar_campos_formulario_validos(None, dados) == dados

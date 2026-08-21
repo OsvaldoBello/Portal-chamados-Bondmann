@@ -1375,6 +1375,42 @@ async def test_quimico_checkbox_multi_pergunta_formatada_pelo_codigo():
         assert "\n8. Outra" in resposta
 
 
+async def test_quimico_checkbox_multi_resposta_numerica_preenchida_por_codigo_quando_modelo_falha():
+    """Achado real em produção (2026-08-21): a pessoa respondeu "1 e 4" a uma
+    pergunta de múltipla escolha e o modelo nunca preencheu
+    `campos_formulario["analises_solicitadas"]`, mesmo reconhecendo a
+    resposta na própria `descricao` ("Análises já mencionadas: 1 e 4") —
+    travando a conversa pedindo a mesma coisa pra sempre. Rede de segurança
+    em código: quando o próximo campo pendente é `checkbox_multi` e ainda
+    está vazio, mapeia a ÚLTIMA mensagem do usuário por número contra as
+    opções reais e preenche direto, sem depender do modelo pra essa parte."""
+    conn = FakeConn()
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Análises solicitadas ...:\n1. Determinação de pH\n..."},
+        {"papel": "usuario", "conteudo": "1 e 4"},
+    ]
+    opcoes_analise = next(
+        c for c in campos_da_categoria(CAT_ANALISE) if c.name == "analises_solicitadas"
+    ).opcoes
+    campos = {
+        "unidade_entrega": "Matriz Canoas/RS",
+        "identificacao_cliente": "CLI00002",
+        "descricao_amostra": "Reagente que corroeu alumínio",
+        "objetivo_analises": "Identificar o reagente",
+        # "analises_solicitadas" ausente de propósito — o modelo "esqueceu".
+    }
+    saida = _saida_quimico(CAT_ANALISE, campos_formulario=campos)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        dados = amb.criar.await_args.kwargs["dados_formulario"]
+        assert dados["analises_solicitadas"] == [opcoes_analise[0], opcoes_analise[3]]
+
+
 async def test_quimico_categoria_sem_layout_dinamico_segue_fluxo_generico():
     """Departamento Químico sozinho não força o formulário fixo — só as
     categorias com layout conhecido (`CAMPOS_POR_CATEGORIA`) exigem isso;
