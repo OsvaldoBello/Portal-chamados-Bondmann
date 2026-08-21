@@ -870,19 +870,28 @@ def _mapear_resposta_numerica_checkbox(
 def _ajustar_campos_formulario_quimico(
     saida: SaidaWhatsAppIntake | None, conversa: list[dict[str, Any]]
 ) -> SaidaWhatsAppIntake | None:
-    """Duas redes de segurança sobre ``saida.campos_formulario``, aplicadas
-    logo após a saída do modelo (antes de qualquer decisão): (1) descarta
-    chaves que não são campos reais da categoria (:func:`_filtrar_campos_
-    formulario_validos`); (2) se o PRÓXIMO campo pendente for
-    ``checkbox_multi`` e ainda não tiver sido preenchido, tenta mapear a
-    ÚLTIMA mensagem do usuário por número (:func:`_mapear_resposta_numerica_
-    checkbox`) e preenche o campo em código — achado real em produção
-    (2026-08-21): a pessoa respondeu "1 e 4" duas rodadas seguidas, o
-    modelo reconheceu isso na própria `descricao` ("Análises já mencionadas
-    anteriormente: 1 e 4") mas nunca preencheu `campos_formulario`, travando
-    a conversa pedindo a mesma coisa pra sempre. Não mexe em nada fora do
-    Químico, nem quando o texto não é claramente uma resposta numérica
-    (nesse caso a extração livre do modelo continua sendo a única fonte)."""
+    """Três redes de segurança sobre a saída do Químico, aplicadas logo após
+    a saída do modelo (antes de qualquer decisão): (1) descarta chaves que
+    não são campos reais da categoria em ``campos_formulario``
+    (:func:`_filtrar_campos_formulario_validos`); (2) se o PRÓXIMO campo
+    pendente for ``checkbox_multi`` e ainda não tiver sido preenchido, tenta
+    mapear a ÚLTIMA mensagem do usuário por número
+    (:func:`_mapear_resposta_numerica_checkbox`) e preenche o campo em
+    código — achado real em produção (2026-08-21): a pessoa respondeu "1 e
+    4" duas rodadas seguidas, o modelo reconheceu isso na própria
+    `descricao` ("Análises já mencionadas anteriormente: 1 e 4") mas nunca
+    preencheu `campos_formulario`, travando a conversa pedindo a mesma
+    coisa pra sempre; (3) se o formulário resultante já está COMPLETO e
+    VÁLIDO (mesma checagem de :func:`validar_payload_quimico` usada na
+    criação do chamado), força `informacoes_suficientes: true` mesmo que o
+    modelo tenha dito `false` — achado real na mesma sessão: depois de (2)
+    preencher o último campo faltante, `informacoes_suficientes` do modelo
+    continuou `false` e a pergunta seguinte repetia a mesma coisa já
+    resolvida, mesmo com o formulário 100% pronto pra criar o chamado. Não
+    mexe em nada fora do Químico, nem quando o texto não é claramente uma
+    resposta numérica (nesse caso a extração livre do modelo continua sendo
+    a única fonte) — só LIGA `informacoes_suficientes`, nunca desliga (não
+    sobrepõe um `true` genuíno do modelo por segurança)."""
     if saida is None or not _eh_departamento_quimico(saida.departamento):
         return saida
     nome_categoria = str(saida.categoria or "")
@@ -897,10 +906,21 @@ def _ajustar_campos_formulario_quimico(
         if mapeadas:
             campos_formulario = {**campos_formulario, proximo.name: mapeadas}
 
-    if campos_formulario == saida.campos_formulario:
+    informacoes_suficientes = saida.informacoes_suficientes
+    if not informacoes_suficientes and eh_categoria_quimico(nome_categoria):
+        brutos = _campos_formulario_brutos(campos_formulario)
+        ok, erro_validacao, _limpo = validar_payload_quimico(nome_categoria, brutos)
+        if ok and not erro_validacao:
+            informacoes_suficientes = True
+
+    if (
+        campos_formulario == saida.campos_formulario
+        and informacoes_suficientes == saida.informacoes_suficientes
+    ):
         return saida
     dados = saida.model_dump()
     dados["campos_formulario"] = campos_formulario
+    dados["informacoes_suficientes"] = informacoes_suficientes
     return SaidaWhatsAppIntake(**dados)
 
 

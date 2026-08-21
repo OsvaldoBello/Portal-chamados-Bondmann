@@ -1411,6 +1411,37 @@ async def test_quimico_checkbox_multi_resposta_numerica_preenchida_por_codigo_qu
         assert dados["analises_solicitadas"] == [opcoes_analise[0], opcoes_analise[3]]
 
 
+async def test_quimico_formulario_completo_cria_chamado_mesmo_com_informacoes_suficientes_false():
+    """Achado real em produção (2026-08-21), na sequência do teste acima:
+    depois da rede de segurança preencher o último campo faltante
+    (`analises_solicitadas`), o modelo continuou dizendo
+    `informacoes_suficientes: false` e repetindo a mesma pergunta já
+    resolvida — mesmo com o formulário 100% completo e válido. O código
+    força `informacoes_suficientes: true` quando `validar_payload` (a MESMA
+    validação usada na criação) já aprovaria o formulário resultante."""
+    conn = FakeConn()
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Análises solicitadas ...:\n1. Determinação de pH\n..."},
+        {"papel": "usuario", "conteudo": "1 e 4"},
+    ]
+    campos = {
+        "unidade_entrega": "Matriz Canoas/RS",
+        "identificacao_cliente": "CLI00002",
+        "descricao_amostra": "Reagente que corroeu alumínio",
+        "objetivo_analises": "Identificar o reagente",
+        # "analises_solicitadas" ausente — a rede de segurança numérica preenche.
+    }
+    saida = _saida_quimico(CAT_ANALISE, campos_formulario=campos, informacoes_suficientes=False)
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_awaited_once()
+        assert conn.auditorias[0][2] == "CHAMADO_CRIADO"
+
+
 async def test_quimico_categoria_sem_layout_dinamico_segue_fluxo_generico():
     """Departamento Químico sozinho não força o formulário fixo — só as
     categorias com layout conhecido (`CAMPOS_POR_CATEGORIA`) exigem isso;
