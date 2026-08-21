@@ -800,6 +800,16 @@ def _linhas_campo_quimico(campo: CampoDef) -> list[str]:
         linhas.append("  Tipo: data — converta a resposta para o formato AAAA-MM-DD.")
     elif campo.tipo in ("tel", "email", "number"):
         linhas.append(f"  Tipo: {campo.tipo}.")
+    if campo.min_chars:
+        linhas.append(
+            f"  Precisa ter pelo menos {campo.min_chars} caracteres — se a "
+            "resposta vier mais curta que isso, NÃO preencha o campo ainda: "
+            "peça de novo explicando que precisa do valor completo (achado "
+            "real em produção, 2026-08-21: sem este aviso, o modelo aceitava "
+            "um valor curto demais, a validação estrutural rejeitava em "
+            "silêncio e a conversa nunca fechava, mesmo com o campo "
+            "\"preenchido\")."
+        )
     return linhas
 
 
@@ -1003,7 +1013,16 @@ def _secao_formulario_quimico(
     ordem do schema, pulando o que já foi confirmado em rodada anterior.
     Categoria do Químico sem layout dinâmico conhecido (ex.: uma futura
     categoria "Outros") devolve lista vazia — a conversa segue o roteiro
-    genérico de título/descrição, igual aos demais departamentos."""
+    genérico de título/descrição, igual aos demais departamentos.
+
+    Achado real em produção (2026-08-21): listar os campos pendentes na
+    ordem do schema não bastava — o modelo escolhia livremente qual deles
+    perguntar a cada rodada e às vezes voltava pra um campo anterior da
+    lista (ex.: perguntar "supervisor" de novo depois de já ter coletado
+    campos bem mais abaixo), o que também piorava o mapeamento errado de
+    resposta pra campo. Por isso o bloco agora nomeia explicitamente qual É
+    o próximo campo (o primeiro pendente) antes de listar todos — a ordem
+    deixa de ser uma dedução do modelo."""
     campos = campos_da_categoria(nome_categoria)
     if not campos:
         return []
@@ -1052,6 +1071,22 @@ def _secao_formulario_quimico(
         "preencha — deixe pendente e pergunte depois.",
     ]
     pendentes = [c for c in campos if c.name not in campos_formulario_confirmados]
+    if pendentes:
+        proximo = pendentes[0]
+        linhas.append(
+            f'**Pergunte AGORA sobre `{proximo.name}` ("{proximo.label}") — é o '
+            "PRIMEIRO campo pendente da lista abaixo, na ordem em que aparecem. "
+            "Regra dura, sem exceção: siga essa ordem sempre — nunca pule pra um "
+            "campo mais abaixo na lista nem volte pra perguntar um campo antes "
+            "deste, mesmo que a resposta anterior pareça mais relacionada a outro "
+            "campo. Só sai deste campo quando a ÚLTIMA mensagem da pessoa já "
+            "responder ele (aí sim a vez passa pro próximo pendente da lista, na "
+            "mesma ordem). Achado real em produção (2026-08-21): sem esta regra, "
+            'o modelo pulava pra frente e voltava pra campos já passados (ex.: '
+            "perguntar \"supervisor\" de novo depois de já ter coletado campos "
+            "mais abaixo na lista), o que também aumentava erro de mapear a "
+            "resposta errada no campo errado."
+        )
     for campo in pendentes:
         linhas += _linhas_campo_quimico(campo)
     if campos_formulario_confirmados:
@@ -1270,17 +1305,41 @@ def _campos_confirmados(resultado: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _campos_formulario_confirmados(resultado: dict[str, Any] | None) -> dict[str, Any]:
+def _campos_formulario_confirmados(
+    resultado: dict[str, Any] | None, nome_categoria: str | None = None
+) -> dict[str, Any]:
     """Campos do formulário dinâmico do Químico (``campos_formulario``) já
     extraídos em rodada anterior — mesma fonte e mesmo motivo de
     :func:`_campos_confirmados`, só que sobre um dict aninhado em vez de
-    chaves escalares fixas (o conjunto de campos muda por categoria)."""
+    chaves escalares fixas (o conjunto de campos muda por categoria).
+
+    Acha real em produção (2026-08-21): sem revalidar ``min_chars`` aqui, um
+    valor curto demais gravado numa rodada (ex.: "Lote" com 5 caracteres
+    quando o campo exige 13) ficava "confirmado" pra sempre — nunca mais
+    entrava na lista de pendentes (:func:`_secao_formulario_quimico`), então
+    nunca mais era perguntado de novo, mesmo com
+    ``formularios_quimico.validar_payload`` reprovando o valor em silêncio a
+    cada rodada seguinte. Descartar aqui devolve o campo pra lista de
+    pendentes, na mesma ordem de sempre."""
     if not resultado:
         return {}
     campos = resultado.get("campos_formulario")
     if not isinstance(campos, dict):
         return {}
-    return {chave: valor for chave, valor in campos.items() if valor not in (None, "", [])}
+    confirmados = {chave: valor for chave, valor in campos.items() if valor not in (None, "", [])}
+    if not nome_categoria:
+        return confirmados
+    definicoes = {c.name: c for c in campos_da_categoria(nome_categoria)}
+    return {
+        chave: valor
+        for chave, valor in confirmados.items()
+        if not (
+            isinstance(valor, str)
+            and (campo := definicoes.get(chave)) is not None
+            and campo.min_chars
+            and len(valor) < campo.min_chars
+        )
+    }
 
 
 def _mesclar_campos_confirmados(
@@ -1467,7 +1526,9 @@ async def _processar_conversa(conversa_id: str) -> None:
         async with admin_connection() as conn:
             resultado_anterior = await _resultado_rodada_anterior(conn, conversa_id)
         campos_confirmados = _campos_confirmados(resultado_anterior)
-        campos_formulario_confirmados = _campos_formulario_confirmados(resultado_anterior)
+        campos_formulario_confirmados = _campos_formulario_confirmados(
+            resultado_anterior, campos_confirmados.get("categoria")
+        )
         reiniciou = _quer_reiniciar_pedido(mensagens_acumuladas)
         rodada_efetiva = _rodada_efetiva(rodada, resultado_anterior, reiniciou)
         if reiniciou:
