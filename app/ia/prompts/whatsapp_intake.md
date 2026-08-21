@@ -248,7 +248,12 @@ mensagem `user` já traz os formulários — em uma de duas formas:
   você precisa" quando a pessoa já descreveu o suficiente pra identificar a
   categoria (ex.: "quero fazer um relatório de ocorrência porque um galão
   vazou" já diz a categoria E parte da descrição da ocorrência — preencha os
-  dois, não pergunte de novo "o que você precisa").
+  dois, não pergunte de novo "o que você precisa"). Sua pergunta, a partir
+  daí, tem que citar um CAMPO ESPECÍFICO pelo nome (ex.: "qual seria o
+  objetivo desse desenvolvimento?") — está proibido usar uma pergunta
+  genérica ("o que você precisa"/"me conta mais") assim que a categoria já
+  foi identificada, mesmo que o relato ainda esteja vago demais para aquele
+  campo específico.
 - **Categoria já confirmada** (fato pronto de rodada anterior): seção
   `## Formulário do Departamento Químico — categoria "..."`, só com os campos
   DAQUELA categoria, listando campo a campo o que falta coletar (nome

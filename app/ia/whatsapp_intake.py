@@ -796,13 +796,21 @@ def _secao_todas_categorias_quimico() -> list[str]:
         "não foi decidida. Abaixo estão os formulários de TODAS as categorias "
         "que têm layout fixo — assim que você reconhecer, pelo que a pessoa já "
         "disse (nesta rodada ou em rodada anterior), qual delas bate com o "
-        "pedido, preencha `categoria` e passe a perguntar OS CAMPOS DAQUELA "
-        "categoria específica, um de cada vez — inclusive dentro desta MESMA "
-        "rodada, sem esperar a próxima só para começar. Se a pessoa já contou "
-        "o suficiente para identificar a categoria E responder o primeiro campo "
-        "dela (ex.: já descreveu a ocorrência ao mesmo tempo que pediu o "
-        "registro), preencha esse campo também em `campos_formulario` nesta "
-        "mesma rodada, em vez de perguntar de novo algo que ela já disse.",
+        "pedido, preencha `categoria` e a sua pergunta desta MESMA rodada "
+        "TEM que ser sobre um campo ESPECÍFICO do formulário daquela "
+        "categoria (comece pelo primeiro campo da lista dela) — está "
+        "PROIBIDO usar uma pergunta genérica tipo 'o que você precisa'/'me "
+        "conta mais sobre isso' depois de já ter identificado a categoria; "
+        "cite o campo pelo nome (ex.: 'qual seria o objetivo desse "
+        "desenvolvimento?' — nunca 'o que você precisa nesse chamado?'). Se "
+        "a pessoa já contou o suficiente para identificar a categoria E "
+        "responder o primeiro campo dela (mesmo que resumido — ex.: já "
+        "descreveu a ocorrência ao mesmo tempo que pediu o registro), "
+        "preencha esse campo em `campos_formulario` nesta mesma rodada e "
+        "sua pergunta passa a ser sobre o PRÓXIMO campo pendente, nunca "
+        "sobre o mesmo campo que ela já tocou (mesma regra de 'não insista "
+        "num ponto já respondido' do roteiro genérico) nem sobre nada "
+        "genérico.",
     ]
     for nome_categoria in CAMPOS_POR_CATEGORIA:
         linhas += ["", *_linhas_campos_categoria(nome_categoria)]
@@ -829,8 +837,13 @@ def _secao_formulario_quimico(
         f'## Formulário do Departamento Químico — categoria "{nome_categoria}"',
         "Esta categoria tem um formulário fixo: em vez do roteiro genérico de "
         "investigação, colete EXATAMENTE os campos abaixo, respeitando o tipo de "
-        "cada um. Pergunte só UM campo por rodada (nunca junte dois campos numa "
-        "mesma pergunta, mesmo que pareçam relacionados) — exceto o de múltipla "
+        "cada um. Pergunte só UM campo por rodada, citando o campo pelo nome "
+        "(ex.: 'qual seria o objetivo desse desenvolvimento?') — está PROIBIDO "
+        "usar uma pergunta genérica tipo 'o que você precisa'/'me conta mais "
+        "sobre isso' aqui, mesmo que a resposta anterior tenha sido vaga: toda "
+        "pergunta desta seção é sobre um campo específico da lista abaixo. "
+        "Nunca junte dois campos na mesma pergunta, mesmo que pareçam "
+        "relacionados — exceto o de múltipla "
         "escolha, que já é uma pergunta única com várias opções. Pule qualquer "
         'campo listado em "já confirmados" abaixo — perguntar de novo o que já foi '
         "respondido é o mesmo erro grave de repetir a pergunta do setor. "
