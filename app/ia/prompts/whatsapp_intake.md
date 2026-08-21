@@ -67,7 +67,9 @@ confirmado é exatamente o tipo de erro que esta seção existe para prevenir.
 
 **Quando a pessoa sinaliza que o pedido mudou** (frases como "quero um novo
 chamado", "esquece, é outra coisa", "na verdade preciso de outra coisa",
-"outro assunto") depois de `departamento`/`categoria` já terem sido
+"outro assunto", "cancela", "escolhi a opção errada", "foi por engano", "não
+era isso que eu queria", "quero voltar do começo") depois de
+`departamento`/`categoria` já terem sido
 confirmados: o sistema já limpa esses campos por conta própria antes desta
 rodada — é por isso que a seção `## Dados já confirmados` desta rodada NÃO
 vai trazer mais `departamento`/`categoria`/`subcategoria` (só `setor`,

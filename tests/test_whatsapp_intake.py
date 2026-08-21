@@ -1155,6 +1155,67 @@ async def test_pedido_novo_reseta_destino_mas_mantem_setor():
         assert not resultado.get("campos_formulario")
 
 
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "cancela esse chamado",
+        "Cancela, por favor",
+        "escolhi errado a opção",
+        "acho que escolhi a opção errada",
+        "foi por engano, desculpa",
+        "não era isso que eu queria",
+        "nao era isso que eu queria",
+        "não é isso, me confundi",
+        "quero voltar do começo",
+        "quero voltar do comeco",
+        "vamos recomeçar",
+        "quero recomecar do zero",
+    ],
+)
+def test_pede_novo_chamado_reconhece_cancelamento_e_arrependimento(texto):
+    """Pedido do usuário (2026-08-21): a detecção de reinício só cobria
+    variações de "novo chamado" — alguém dizendo só "cancela" ou "não era
+    isso que eu queria" não disparava o reset, deixando categoria/formulário
+    do pedido abandonado grudados na conversa."""
+    assert whatsapp_intake._pede_novo_chamado(texto) is True
+
+
+def test_pede_novo_chamado_nao_reconhece_texto_sem_sinal_de_reinicio():
+    assert whatsapp_intake._pede_novo_chamado("o computador não liga mais") is False
+
+
+async def test_pedido_novo_reseta_destino_com_frase_de_cancelamento():
+    """Mesmo cenário de :func:`test_pedido_novo_reseta_destino_mas_mantem_setor`,
+    mas com uma frase de cancelamento em vez de "novo chamado" — prova que o
+    reset não depende só daquela expressão específica."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {"regiao": "007-GRAVATAI"},
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "usuario", "conteudo": "sou do TI, quero um relatório de ocorrência pro Químico"},
+        {"papel": "assistente", "conteudo": "Qual é a região?"},
+        {"papel": "usuario", "conteudo": "Cancela, não era isso que eu queria"},
+    ]
+    saida = SaidaWhatsAppIntake(informacoes_suficientes=False, perguntas=["O que você precisa agora?"])
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado.get("setor") == "TI"  # preservado
+        assert not resultado.get("departamento")  # não reposto pela rede de segurança
+        assert not resultado.get("categoria")
+        assert not resultado.get("campos_formulario")
+
+
 async def test_pedido_novo_reseta_rodada_efetiva_nao_esbarra_no_teto():
     """Pedido do usuário (2026-08-21): reiniciar o pedido não pode fazer a
     conversa esbarrar no teto de rodadas por causa das rodadas do pedido

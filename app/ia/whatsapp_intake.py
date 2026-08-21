@@ -306,13 +306,48 @@ _PEDE_NOVO_CHAMADO = (
     "outro assunto",
     "assunto diferente",
     "abrir outro",
+    "outra coisa",
+    "cancela",
+    "opção errada",
+    "opcao errada",
+    "escolhi errado",
+    "escolhi errada",
+    "escolha errada",
+    "por engano",
+    "esquece",
+    "deixa pra lá",
+    "deixa pra la",
+    "não era isso",
+    "nao era isso",
+    "não é isso",
+    "nao e isso",
+    "não quero isso",
+    "nao quero isso",
+    "recome",  # recomeçar/recomecar/recomeço, sem depender do acento
+    "do começo",
+    "do comeco",
+    "do início",
+    "do inicio",
+    "do zero",
+    "não era o que eu",
+    "nao era o que eu",
 )
 
 
 def _pede_novo_chamado(texto: str) -> bool:
-    """``True`` quando a legenda da mídia diz explicitamente que é pra um
-    chamado novo (função pura, comparação por substring sem caixa/espaços
-    nas pontas — mesmo estilo de :func:`_repete_mensagem_anterior`)."""
+    """``True`` quando o texto sinaliza, por palavra-chave, que o pedido em
+    andamento não vale mais — cancelamento explícito ("cancela"), opção
+    errada ("escolhi errado", "por engano"), arrependimento ("não era
+    isso"/"não é isso") ou pedido de reinício (função pura, comparação por
+    substring sem caixa/espaços nas pontas — mesmo estilo de
+    :func:`_repete_mensagem_anterior`). Usada tanto na legenda de mídia
+    quanto na última mensagem de texto do usuário (:func:`_quer_reiniciar_
+    pedido`).
+
+    Pedido do usuário (2026-08-21): a lista original só cobria variações de
+    "novo chamado" — alguém dizendo só "cancela" ou "não era isso que eu
+    queria" não disparava o reinício, então os campos do pedido abandonado
+    (categoria/formulário do Químico) continuavam grudados na conversa."""
     alvo = (texto or "").strip().casefold()
     return any(chave in alvo for chave in _PEDE_NOVO_CHAMADO)
 
