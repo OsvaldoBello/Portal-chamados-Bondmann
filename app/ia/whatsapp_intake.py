@@ -978,7 +978,14 @@ def _secao_todas_categorias_quimico() -> list[str]:
         "sua pergunta passa a ser sobre o PRÓXIMO campo pendente, nunca "
         "sobre o mesmo campo que ela já tocou (mesma regra de 'não insista "
         "num ponto já respondido' do roteiro genérico) nem sobre nada "
-        "genérico.",
+        "genérico. **Regra dura, sem exceção:** só preencha um campo "
+        "\"de brinde\" quando a mensagem da pessoa CLARAMENTE contém a "
+        "resposta pra ELE especificamente — nunca copie o valor de outro "
+        "campo já preenchido pra dentro de um campo diferente só pra "
+        "'avançar' (ex.: nome da empresa não é resposta válida pra 'nome do "
+        "contato'; cidade/região não é resposta válida pra 'setor do "
+        "contato'). Na dúvida se a resposta é sobre aquele campo "
+        "específico, NÃO preencha — deixe pendente e pergunte depois.",
     ]
     for nome_categoria in CAMPOS_POR_CATEGORIA:
         linhas += ["", *_linhas_campos_categoria(nome_categoria)]
@@ -1030,7 +1037,19 @@ def _secao_formulario_quimico(
         "isso vale inclusive para campo de escolha única: 'nunca teve "
         "ocorrência'/'não teve problema antes' etc. tem que virar o valor "
         "exato 'Não' da lista de opções do campo correspondente, mesmo "
-        "que a pessoa não tenha usado a palavra 'não' explicitamente.",
+        "que a pessoa não tenha usado a palavra 'não' explicitamente. "
+        "**Regra dura, sem exceção:** só preencha um campo \"de brinde\" "
+        "quando a mensagem da pessoa CLARAMENTE contém a resposta pra ELE "
+        "especificamente — nunca copie o valor de outro campo já "
+        "preenchido pra dentro de um campo diferente só pra 'avançar' "
+        "(ex.: nome da empresa não é resposta válida pra 'nome do "
+        "contato'; cidade/região não é resposta válida pra 'setor do "
+        "contato'). Achado real em produção: o modelo copiou o nome da "
+        "empresa pro campo \"Nome do Contato\" e o nome da cidade pro campo "
+        "\"Setor\" só porque estavam preenchidos em campos vizinhos — isso é "
+        "inventar dado, proibido mesmo com boa intenção de 'ajudar'. Na "
+        "dúvida se a resposta é sobre aquele campo específico, NÃO "
+        "preencha — deixe pendente e pergunte depois.",
     ]
     pendentes = [c for c in campos if c.name not in campos_formulario_confirmados]
     for campo in pendentes:

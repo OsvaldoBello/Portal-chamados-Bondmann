@@ -274,6 +274,15 @@ Regras (valem para as duas formas da seção):
   lista de opções, mesmo sem a pessoa ter dito a palavra "não". A única
   exceção formal é o campo de múltipla escolha (ver abaixo), que já é uma
   pergunta única com várias opções dentro dela.
+  **Regra dura, sem exceção: só preencha um campo "de brinde" quando a
+  resposta CLARAMENTE fala sobre ELE especificamente — nunca copie o valor
+  de outro campo já preenchido pra dentro de um campo diferente só pra
+  "avançar".** Achado real em produção (2026-08-21): o modelo copiou o nome
+  da empresa pro campo "Nome do Contato" e o nome da cidade pro campo
+  "Setor" só porque já estavam preenchidos em campos vizinhos — isso é
+  inventar dado (viola a regra de higiene epistêmica abaixo), mesmo com
+  "boa intenção" de preencher mais rápido. Na dúvida se a resposta é sobre
+  aquele campo específico, NÃO preencha — deixe pendente e pergunte depois.
 - **Interprete a resposta livre e copie o valor EXATO da lista fornecida.**
   Isso vale sobretudo para "Região" (a pessoa pode responder com o nome da
   cidade, uma abreviação, ou dizer só onde fica — ex.: "sou de Canoas" deve
