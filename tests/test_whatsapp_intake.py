@@ -1409,7 +1409,13 @@ async def test_quimico_campo_obrigatorio_faltando_pergunta_em_vez_de_criar():
         amb.criar.assert_not_awaited()
         assert conn.auditorias[0][2] == "PERGUNTA"
         resposta = amb.responder.await_args.args[1]
-        assert "preencha o campo" in resposta.lower()
+        # Achado real em produção (2026-08-21): o texto técnico de
+        # validar_payload ("Preencha o campo...") ia direto pro usuário —
+        # a mensagem agora é reescrita numa pergunta natural, mas ainda
+        # precisa citar o campo certo e (quando aplicável) as opções.
+        assert "ainda preciso saber" in resposta.lower()
+        assert "unidade de entrega da amostra" in resposta.lower()
+        assert "preencha o campo" not in resposta.lower()
 
 
 async def test_quimico_valor_de_select_fora_da_lista_pergunta_de_novo():
@@ -1426,7 +1432,13 @@ async def test_quimico_valor_de_select_fora_da_lista_pergunta_de_novo():
 
         amb.criar.assert_not_awaited()
         assert conn.auditorias[0][2] == "PERGUNTA"
-        assert "opção inválida" in amb.responder.await_args.args[1].lower()
+        resposta = amb.responder.await_args.args[1].lower()
+        # Mensagem reescrita (mesmo achado do teste anterior) — cita o
+        # campo certo e as opções válidas, sem o texto técnico cru.
+        assert "não consegui casar sua resposta" in resposta
+        assert "unidade de entrega da amostra" in resposta
+        assert "matriz canoas/rs" in resposta
+        assert "opção inválida" not in resposta
 
 
 async def test_quimico_checkbox_multi_aceita_mais_de_uma_analise_solicitada():

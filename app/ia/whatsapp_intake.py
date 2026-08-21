@@ -829,6 +829,58 @@ def _campo_por_nome(nome_categoria: str, nome_campo: str) -> CampoDef | None:
     return next((c for c in campos_da_categoria(nome_categoria) if c.name == nome_campo), None)
 
 
+def _campo_por_rotulo(nome_categoria: str, rotulo: str) -> CampoDef | None:
+    return next((c for c in campos_da_categoria(nome_categoria) if c.label == rotulo), None)
+
+
+_ROTULO_ENTRE_ASPAS_RE = re.compile(r'"([^"]+)"')
+
+
+def _reescrever_erro_formulario_quimico(nome_categoria: str, erro: str) -> str:
+    """Reescreve o texto técnico de ``formularios_quimico.validar_payload``
+    (pensado pro form web do Portal — ex.: ``Opção inválida no campo
+    "Região".``) numa pergunta natural pro WhatsApp.
+
+    Achado real em produção (2026-08-21): quando o modelo dizia
+    `informacoes_suficientes: true` com um valor que não batia exatamente
+    com o schema (ex.: "Panambi" solto no campo "Região", que exige o
+    código exato da lista), o erro técnico ia DIRETO pro usuário como se
+    fosse a pergunta do bot — quebra total do tom da conversa (regra de
+    ouro do prompt: "nunca soe como formulário"), pior ainda quando isso
+    acontecia bem no meio do fluxo de reinício de pedido, parecendo que o
+    bot tinha travado.
+
+    Toda mensagem de ``validar_payload`` cita o rótulo do campo entre
+    aspas — usa isso pra achar o :class:`CampoDef` e reconstruir uma
+    pergunta com as opções válidas quando fizer sentido (select/múltipla
+    escolha), sem duplicar a lógica de validação em si. Campo não
+    encontrado (erro futuro, mudança de texto) ⇒ devolve o texto original:
+    nunca fica pior do que o comportamento anterior."""
+    match = _ROTULO_ENTRE_ASPAS_RE.search(erro)
+    campo = _campo_por_rotulo(nome_categoria, match.group(1)) if match else None
+    if campo is None:
+        return erro
+    campo_vazio = erro.startswith(("Preencha o campo", "Selecione ao menos uma opção"))
+    if campo.tipo in ("select", "checkbox_multi") and campo.opcoes:
+        opcoes = ", ".join(campo.opcoes)
+        if campo_vazio:
+            return f'Ainda preciso saber "{campo.label}". Pode ser uma destas: {opcoes}'
+        return (
+            f'Não consegui casar sua resposta com uma opção válida de "{campo.label}". '
+            f"Pode ser uma destas: {opcoes}"
+        )
+    if campo.min_chars and "caracteres" in erro:
+        return (
+            f'O valor que você me passou pra "{campo.label}" ficou curto demais — '
+            f"preciso de pelo menos {campo.min_chars} caracteres, pode confirmar o valor completo?"
+        )
+    if campo.tipo == "email" and not campo_vazio:
+        return f'O e-mail que você me passou não parece válido — pode confirmar "{campo.label}"?'
+    if campo.tipo == "date" and not campo_vazio:
+        return f'Não entendi a data de "{campo.label}" — pode me passar de novo (dia/mês/ano)?'
+    return f'Ainda preciso de "{campo.label}" pra completar o registro.'
+
+
 def _linhas_campo_quimico(campo: CampoDef) -> list[str]:
     """Descrição de UM campo do formulário dinâmico do Químico, no formato que
     o modelo recebe no prompt — inclui a lista de opções literal para
@@ -1882,7 +1934,10 @@ def _validar_formulario_quimico(
     brutos = _campos_formulario_brutos(saida.campos_formulario)
     ok, erro, limpo = validar_payload_quimico(nome_categoria, brutos)
     if not ok:
-        return _FormularioQuimico(dados_formulario={}, titulo="", descricao="", observacao="", erro=erro)
+        erro_natural = _reescrever_erro_formulario_quimico(nome_categoria, erro or "")
+        return _FormularioQuimico(
+            dados_formulario={}, titulo="", descricao="", observacao="", erro=erro_natural
+        )
     if not limpo:
         return _SEM_FORMULARIO_QUIMICO
     titulo, descricao = titulo_e_descricao_automaticos(nome_categoria, limpo)
