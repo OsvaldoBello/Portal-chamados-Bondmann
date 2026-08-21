@@ -1386,6 +1386,84 @@ async def test_quimico_campos_formulario_confirmados_persistem_entre_rodadas():
         assert amb.criar.await_args.kwargs["dados_formulario"] == todos
 
 
+async def test_quimico_campo_travado_tenta_de_novo_e_usa_a_nova():
+    """Achado real em produção (2026-08-21): a pessoa responde um campo do
+    formulário do Químico claramente (ex.: a justificativa do
+    desenvolvimento), mas o modelo não preenche `campos_formulario` nem
+    avança — só troca a frase de abertura da MESMA pergunta, o que escapa
+    da detecção de repetição EXATA (`_repete_mensagem_anterior`). O código
+    detecta pela FALTA de campo novo e tenta de novo antes de mandar ao
+    usuário — mesmo padrão de `test_resposta_repetida_tenta_de_novo_e_usa_a_nova`."""
+    conn = FakeConn()
+    conn.rodada = 2
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_DESENVOLVIMENTO,
+        "campos_formulario": {"objetivo_desenvolvimento": "produto pra limpar pneu"},
+    }
+    travada = _saida_quimico(
+        CAT_DESENVOLVIMENTO,
+        campos_formulario={"objetivo_desenvolvimento": "produto pra limpar pneu"},  # sem avanço
+        perguntas=["Qual seria a justificativa desse desenvolvimento?"],
+        informacoes_suficientes=False,
+    )
+    avancou = _saida_quimico(
+        CAT_DESENVOLVIMENTO,
+        campos_formulario={
+            "objetivo_desenvolvimento": "produto pra limpar pneu",
+            "justificativa": "pneus sujos danificam com o tempo",
+        },
+        perguntas=["Qual seria o mercado-alvo?"],
+        informacoes_suficientes=False,
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[(travada, None, 100, 50), (avancou, None, 80, 40)],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 2
+        resposta = amb.responder.await_args.args[1]
+        assert resposta == "Qual seria o mercado-alvo?"
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["retry_anti_repeticao"] is True
+        assert resultado["campos_formulario"]["justificativa"] == "pneus sujos danificam com o tempo"
+
+
+async def test_quimico_campo_travado_duas_vezes_usa_texto_generico():
+    """Se a tentativa nova TAMBÉM não avançar nenhum campo, nunca manda a
+    mesma pergunta de novo — cai no texto fixo, mas preserva os campos já
+    confirmados (mesmo padrão de `test_resposta_repetida_duas_vezes_usa_texto_generico`)."""
+    conn = FakeConn()
+    conn.rodada = 2
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_DESENVOLVIMENTO,
+        "campos_formulario": {"objetivo_desenvolvimento": "produto pra limpar pneu"},
+    }
+    travada = _saida_quimico(
+        CAT_DESENVOLVIMENTO,
+        campos_formulario={"objetivo_desenvolvimento": "produto pra limpar pneu"},
+        perguntas=["Qual seria a justificativa desse desenvolvimento?"],
+        informacoes_suficientes=False,
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[(travada, None, 100, 50), (travada, None, 90, 45)],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 2
+        resposta = amb.responder.await_args.args[1]
+        assert resposta == whatsapp_intake._TEXTO_CONTINUAR_GENERICO
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["campos_formulario"]["objetivo_desenvolvimento"] == "produto pra limpar pneu"
+
+
 def test_secao_todas_categorias_quimico_injetada_quando_departamento_confirmado_sem_categoria():
     """Achado real em produção (2026-08-21): sem isso, a rodada em que a
     pessoa já diz o suficiente pra identificar a categoria ("sou do TI e

@@ -92,6 +92,28 @@ _TEXTO_CONTINUAR_GENERICO = (
     "Só um instante! Pode me contar de novo, rapidinho, o que você precisa? "
     "Quero ter certeza de que anotei certinho."
 )
+# Segunda rede de segurança, específica do formulário dinâmico do Químico
+# (achado real em produção, 2026-08-21): a pessoa responde claramente o
+# campo pendente (ex.: a justificativa do desenvolvimento, numa frase longa
+# e completa), mas o modelo não preenche `campos_formulario` nem avança —
+# só repete a MESMA pergunta com uma frase de abertura diferente ("Beleza."
+# em vez de "Pra eu seguir,"), o que escapa de `_repete_mensagem_anterior`
+# (só pega repetição EXATA). Sem isso a conversa trava pedindo o mesmo campo
+# pra sempre, até estourar o teto de rodadas.
+_LEMBRETE_CAMPO_QUIMICO_TRAVADO = {
+    "role": "system",
+    "content": (
+        "Você pediu um campo do formulário do Químico e a pessoa JÁ RESPONDEU "
+        "na última mensagem [usuário] do histórico — mas sua resposta anterior "
+        "não preencheu esse campo em `campos_formulario` nem avançou para o "
+        "próximo, o que trava a conversa pedindo a mesma coisa pra sempre. Isso "
+        "é proibido. Releia a ÚLTIMA linha [usuário]: ela é a resposta ao campo "
+        "que você pediu por último. Preencha esse campo em `campos_formulario` "
+        "com o que ela disse (resuma se for longo, mas não descarte) e sua "
+        "pergunta desta rodada passa a ser sobre o PRÓXIMO campo pendente da "
+        "lista — nunca repita a pergunta sobre o campo que ela já respondeu."
+    ),
+}
 # Margem antes de considerar uma conversa "travada" na reconciliação — evita
 # corrida com a task recém-disparada (mesmo papel de `_MARGEM_ORFAO` na
 # triagem, onde 1 min já se mostrou suficiente em produção).
@@ -1161,6 +1183,44 @@ def _campos_formulario_brutos(valores: dict[str, Any] | None) -> dict[str, list[
     return brutos
 
 
+def _campo_novo_preenchido(
+    confirmados_antes: dict[str, Any], campos_formulario: dict[str, Any] | None
+) -> bool:
+    """``True`` quando ``campos_formulario`` desta rodada tem pelo menos UMA
+    chave preenchida que não estava em ``confirmados_antes`` (a rodada
+    ANTERIOR) — usado para detectar se a rodada avançou o formulário do
+    Químico de verdade, ou só repetiu a mesma pergunta com texto diferente
+    (ver :data:`_LEMBRETE_CAMPO_QUIMICO_TRAVADO`)."""
+    return any(
+        valor not in (None, "", [])
+        and not confirmados_antes.get(chave)
+        for chave, valor in (campos_formulario or {}).items()
+    )
+
+
+def _quimico_travado_no_campo(
+    saida: SaidaWhatsAppIntake | None,
+    campos_confirmados: dict[str, Any],
+    campos_formulario_confirmados: dict[str, Any],
+) -> bool:
+    """``True`` quando departamento/categoria do Químico JÁ estavam
+    confirmados ANTES desta rodada (ou seja, a pergunta da rodada ANTERIOR
+    já era, com certeza, sobre um campo específico do formulário — não sobre
+    qual categoria escolher) e mesmo assim esta rodada não avançou nenhum
+    campo novo em `campos_formulario` (:func:`_campo_novo_preenchido`).
+    Exclui de propósito a rodada em que a categoria é decidida agora mesmo
+    (ali `campos_confirmados` ainda não tem `categoria` — ver
+    :func:`_secao_todas_categorias_quimico` — então não perguntar campo
+    nenhum ainda é esperado, não é travamento)."""
+    if saida is None:
+        return False
+    if not campos_confirmados or not _eh_departamento_quimico(campos_confirmados.get("departamento")):
+        return False
+    if not eh_categoria_quimico(str(campos_confirmados.get("categoria") or "")):
+        return False
+    return not _campo_novo_preenchido(campos_formulario_confirmados, saida.campos_formulario)
+
+
 async def processar_conversa(conversa_id: str) -> None:
     """Roda uma rodada de extração e executa a ação decidida. Nunca lança."""
     try:
@@ -1259,18 +1319,31 @@ async def _processar_conversa(conversa_id: str) -> None:
     )
     repetiu = False
 
-    if acao == "PERGUNTA" and _repete_mensagem_anterior(pergunta, mensagens_acumuladas):
-        # Achado em produção (2026-08-19): mesmo com o estado da conversa
-        # injetado como fato, o modelo às vezes trava repetindo a
-        # apresentação — nunca manda isso ao usuário; tenta de novo com
-        # reforço explícito antes de desistir (ver constantes no topo).
+    repete_texto = acao == "PERGUNTA" and _repete_mensagem_anterior(pergunta, mensagens_acumuladas)
+    campo_quimico_travado = (
+        acao == "PERGUNTA"
+        and not repete_texto
+        and _quimico_travado_no_campo(saida, campos_confirmados, campos_formulario_confirmados)
+    )
+    if repete_texto or campo_quimico_travado:
+        # Duas redes de segurança contra a conversa travar pedindo a MESMA
+        # coisa pra sempre: (1) achado em produção 2026-08-19 — mesmo com o
+        # estado da conversa injetado como fato, o modelo às vezes repete a
+        # apresentação com texto IDÊNTICO; (2) achado em produção 2026-08-21,
+        # específico do formulário do Químico — a pessoa responde um campo
+        # claramente, mas o modelo não preenche `campos_formulario` nem
+        # avança, só troca a frase de abertura da MESMA pergunta (não pega
+        # em (1), que só compara texto exato). Tenta de novo com reforço
+        # explícito antes de desistir (ver constantes no topo).
         log.warning(
-            "[WA INTAKE] Conversa %s rodada %s: resposta repetida, tentando de novo.",
+            "[WA INTAKE] Conversa %s rodada %s: %s, tentando de novo.",
             conversa_id, rodada,
+            "resposta repetida" if repete_texto else "campo do Químico não avançou",
         )
         repetiu = True
+        reforco = _LEMBRETE_ANTI_REPETICAO if repete_texto else _LEMBRETE_CAMPO_QUIMICO_TRAVADO
         saida_retry, _erro_retry, tokens_in_retry, tokens_out_retry = await chamar_modelo_estruturado(
-            [*mensagens, _LEMBRETE_ANTI_REPETICAO],
+            [*mensagens, reforco],
             model=settings.whatsapp_intake_model,
             api_key=settings.ia_triagem_api_key,
             base_url=settings.ia_triagem_base_url,
@@ -1289,14 +1362,15 @@ async def _processar_conversa(conversa_id: str) -> None:
             if saida_retry is not None and acao_retry == "PERGUNTA"
             else ""
         )
-        if saida_retry is not None and (
-            acao_retry != "PERGUNTA"
-            or not _repete_mensagem_anterior(pergunta_retry, mensagens_acumuladas)
-        ):
+        ainda_travado = saida_retry is not None and acao_retry == "PERGUNTA" and (
+            _repete_mensagem_anterior(pergunta_retry, mensagens_acumuladas)
+            or _quimico_travado_no_campo(saida_retry, campos_confirmados, campos_formulario_confirmados)
+        )
+        if saida_retry is not None and not ainda_travado:
             # Tentativa nova resolveu (ou decidiu criar chamado/encerrar) — usa ela.
             saida, acao, pergunta = saida_retry, acao_retry, pergunta_retry
         else:
-            # Repetiu de novo (ou a tentativa falhou): mantém o `setor`/demais
+            # Travou de novo (ou a tentativa falhou): mantém o `setor`/demais
             # campos já extraídos por `saida` (a rede de segurança troca só o
             # TEXTO enviado, nunca descarta dado real já capturado), mas o
             # usuário nunca recebe a mesma mensagem duas vezes.
