@@ -1478,6 +1478,31 @@ def test_remove_copias_entre_campos_preserva_valores_genuinamente_diferentes():
     assert whatsapp_intake._remover_copias_entre_campos(entrada) == entrada
 
 
+def test_remove_valores_invalidos_de_select_descarta_opcao_de_outro_campo():
+    """Achado real em produção (2026-08-21): o modelo preencheu "Supervisor"
+    com um nome que só existe na lista de "Gerente" (e ainda com erro de
+    grafia) — sem checagem por campo, isso ficava gravado sem erro nenhum
+    por várias rodadas, só sendo pego bem depois na validação final."""
+    entrada = {
+        "regiao": "007-GRAVATAI",  # opção real, mantido
+        "supervisor": "WALLYSSON ALEXANDRO DE ANDRADE MEDEIROS",  # só existe (parecido) em Gerente
+        "produto": "DEGRAX 25",  # opção real, mantido
+    }
+    limpo = whatsapp_intake._remover_valores_invalidos_de_select(CAT_OCORRENCIA, entrada)
+    assert "supervisor" not in limpo
+    assert limpo["regiao"] == "007-GRAVATAI"
+    assert limpo["produto"] == "DEGRAX 25"
+
+
+def test_remove_valores_invalidos_de_select_preserva_checkbox_multi_parcialmente_valido():
+    campo_analises = next(
+        c for c in campos_da_categoria(CAT_ANALISE) if c.tipo == "checkbox_multi"
+    )
+    entrada = {campo_analises.name: [campo_analises.opcoes[0], "Opção Inventada Pelo Modelo"]}
+    limpo = whatsapp_intake._remover_valores_invalidos_de_select(CAT_ANALISE, entrada)
+    assert limpo[campo_analises.name] == [campo_analises.opcoes[0]]
+
+
 async def test_quimico_pergunta_reformulada_sobre_campo_ja_preenchido_e_pega():
     """Reproduz o achado real em produção (2026-08-21, captura de tela do
     usuário): rodada anterior perguntou "Qual é o nome da empresa do
@@ -1553,7 +1578,11 @@ async def test_quimico_campo_obrigatorio_faltando_pergunta_em_vez_de_criar():
 
 async def test_quimico_valor_de_select_fora_da_lista_pergunta_de_novo():
     """Valor de `select` que não bate EXATO com a lista real (alucinação ou
-    interpretação errada do modelo) nunca vira dado gravado."""
+    interpretação errada do modelo) nunca vira dado gravado — descartado já
+    por :func:`whatsapp_intake._remover_valores_invalidos_de_select`
+    (achado real em produção 2026-08-21), antes mesmo de chegar na
+    validação final: o campo volta a ficar pendente, não "com valor
+    errado"."""
     conn = FakeConn()
     campos = _valores_validos(CAT_ANALISE) | {"unidade_entrega": "Unidade Que Não Existe"}
     saida = _saida_quimico(CAT_ANALISE, campos_formulario=campos)
@@ -1566,9 +1595,8 @@ async def test_quimico_valor_de_select_fora_da_lista_pergunta_de_novo():
         amb.criar.assert_not_awaited()
         assert conn.auditorias[0][2] == "PERGUNTA"
         resposta = amb.responder.await_args.args[1].lower()
-        # Mensagem reescrita (mesmo achado do teste anterior) — cita o
-        # campo certo e as opções válidas, sem o texto técnico cru.
-        assert "não consegui casar sua resposta" in resposta
+        resultado = json.loads(conn.auditorias[0][3])
+        assert "unidade_entrega" not in (resultado.get("campos_formulario") or {})
         assert "unidade de entrega da amostra" in resposta
         assert "matriz canoas/rs" in resposta
         assert "opção inválida" not in resposta

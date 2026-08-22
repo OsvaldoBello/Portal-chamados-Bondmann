@@ -1077,10 +1077,44 @@ def _remover_copias_entre_campos(campos_formulario: dict[str, Any]) -> dict[str,
     return limpo
 
 
+def _remover_valores_invalidos_de_select(
+    nome_categoria: str, campos_formulario: dict[str, Any]
+) -> dict[str, Any]:
+    """Descarta o valor de um campo ``select``/``checkbox_multi`` que não
+    bate EXATAMENTE com nenhuma opção real do schema.
+
+    Achado real em produção (2026-08-21): o modelo preencheu "Supervisor"
+    (schema: `_SUPERVISORES`) com um nome que só existe na lista de
+    "Gerente" (`_GERENTES`) — e ainda com um erro de grafia ("ALEXANDRO"
+    em vez de "ALEXSSANDRO"), então nem sequer batia com a lista certa.
+    Sem esta rede, o valor inválido ficava gravado em `campos_formulario`
+    por VÁRIAS rodadas sem gerar erro nenhum — só era pego bem depois, na
+    validação final de `validar_payload` (na hora de tentar criar o
+    chamado). Descartar aqui devolve o campo pra lista de pendentes na
+    PRÓXIMA rodada, imediatamente após o valor ruim ter sido gravado."""
+    if not campos_formulario:
+        return campos_formulario
+    definicoes = {c.name: c for c in campos_da_categoria(nome_categoria)}
+    limpo = dict(campos_formulario)
+    for nome, valor in campos_formulario.items():
+        campo = definicoes.get(nome)
+        if campo is None or not campo.opcoes:
+            continue
+        if campo.tipo == "select" and isinstance(valor, str) and valor not in campo.opcoes:
+            del limpo[nome]
+        elif campo.tipo == "checkbox_multi" and isinstance(valor, list):
+            validas = [v for v in valor if v in campo.opcoes]
+            if validas:
+                limpo[nome] = validas
+            else:
+                del limpo[nome]
+    return limpo
+
+
 def _ajustar_campos_formulario_quimico(
     saida: SaidaWhatsAppIntake | None, conversa: list[dict[str, Any]]
 ) -> SaidaWhatsAppIntake | None:
-    """Quatro redes de segurança sobre a saída do Químico, aplicadas logo
+    """Cinco redes de segurança sobre a saída do Químico, aplicadas logo
     após a saída do modelo (antes de qualquer decisão): (1) descarta chaves
     que não são campos reais da categoria em ``campos_formulario``
     (:func:`_filtrar_campos_formulario_validos`); (1.5) descarta um campo
@@ -1088,7 +1122,12 @@ def _ajustar_campos_formulario_quimico(
     (:func:`_remover_copias_entre_campos`) — achado real em produção
     (2026-08-21): mesmo com a "regra dura" no prompt contra isso, o modelo
     copiava o nome da empresa pro campo do contato, ou o código da região
-    pra cidade; (2) se o PRÓXIMO campo pendente for ``checkbox_multi`` e
+    pra cidade; (1.7) descarta um valor de `select`/`checkbox_multi` que
+    não bate EXATO com nenhuma opção real
+    (:func:`_remover_valores_invalidos_de_select`) — achado real em
+    produção (2026-08-21): "Supervisor" preenchido com um nome que só
+    existe na lista de "Gerente", sem gerar erro nenhum por várias
+    rodadas; (2) se o PRÓXIMO campo pendente for ``checkbox_multi`` e
     ainda não tiver sido preenchido, tenta mapear a ÚLTIMA mensagem do
     usuário por número (:func:`_mapear_resposta_numerica_checkbox`) e
     preenche o campo em código — achado real em produção (2026-08-21): a
@@ -1112,6 +1151,7 @@ def _ajustar_campos_formulario_quimico(
     nome_categoria = str(saida.categoria or "")
     campos_formulario = _filtrar_campos_formulario_validos(nome_categoria, saida.campos_formulario)
     campos_formulario = _remover_copias_entre_campos(campos_formulario)
+    campos_formulario = _remover_valores_invalidos_de_select(nome_categoria, campos_formulario)
 
     campos = campos_da_categoria(nome_categoria)
     proximo = next((c for c in campos if c.name not in campos_formulario), None)
