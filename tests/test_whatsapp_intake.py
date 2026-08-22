@@ -1337,9 +1337,19 @@ def _valores_validos(nome_categoria: str) -> dict[str, str | list[str]]:
         elif campo.tipo == "number":
             valores[campo.name] = "1"
         else:
-            texto = "Texto de teste bem detalhado para preencher o campo. "
-            texto = (texto * ((campo.min_chars // len(texto)) + 1))[: max(campo.min_chars, 20)]
-            valores[campo.name] = texto
+            # Texto DISTINTO por campo, com o nome do campo LOGO NO INÍCIO
+            # (não só um template genérico repetido) — dois campos de texto
+            # com o mesmo valor disparariam de propósito a rede de segurança
+            # _remover_copias_entre_campos; o nome no início garante que a
+            # distinção sobrevive ao truncamento em `max(min_chars, len(base))`
+            # pros campos sem min_chars (a diferença só aparecendo mais pra
+            # frente não seria suficiente). `.strip()` no final evita
+            # divergir do valor limpo por `validar_payload` (que sempre
+            # `.strip()`a a resposta), sem o quê o truncamento podia deixar
+            # um espaço sobrando só de um lado.
+            base = f"{campo.name} teste"
+            texto = (base + " ") * ((campo.min_chars // (len(base) + 1)) + 1)
+            valores[campo.name] = texto[: max(campo.min_chars, len(base))].strip()
     return valores
 
 
@@ -1392,6 +1402,129 @@ async def test_quimico_formulario_completo_cria_chamado_com_titulo_e_descricao_d
         assert categoria in kwargs["titulo"]
         assert kwargs["descricao"] != "Descrição genérica dita pelo modelo."
         assert conn.auditorias[0][2] == "CHAMADO_CRIADO"
+
+
+def test_rotulo_chat_deixa_claro_que_e_do_contato_do_cliente():
+    """Pedido do usuário (2026-08-21): "Cargo"/"Setor"/"Fone"/"E-mail" são
+    rótulos ambíguos numa conversa linear de WhatsApp (parecem ser sobre
+    quem está no chat, não sobre o contato do lado do cliente) — só o texto
+    mostrado no chat muda; o schema (`CampoDef.label`, fonte única também
+    do Portal, que já agrupa isso visualmente numa seção própria) continua
+    intacto."""
+    campos = {c.name: c for c in campos_da_categoria(CAT_OCORRENCIA)}
+    assert whatsapp_intake._rotulo_chat(campos["cargo"]) == "Cargo do contato do cliente"
+    assert whatsapp_intake._rotulo_chat(campos["setor_contato"]) == "Setor do contato do cliente"
+    assert whatsapp_intake._rotulo_chat(campos["fone"]) == "Telefone do contato do cliente"
+    assert whatsapp_intake._rotulo_chat(campos["email"]) == "E-mail do contato do cliente"
+    assert (
+        whatsapp_intake._rotulo_chat(campos["nome_contato_cliente"])
+        == "Nome do contato do cliente"
+    )
+    # Schema original nunca muda — o Portal continua mostrando "Cargo" cru
+    # (a seção "Contato do Cliente" do form web já desambigua visualmente).
+    assert campos["cargo"].label == "Cargo"
+    # Campo sem override (ex.: região) não é afetado.
+    assert whatsapp_intake._rotulo_chat(campos["regiao"]) == campos["regiao"].label
+
+
+def test_rotulo_mencionado_em_tolera_parafrase_natural_do_modelo():
+    """Achado real em produção (2026-08-21): a checagem antiga exigia a
+    substring EXATA do rótulo ("Nome da Empresa (Cliente)") dentro da
+    pergunta — uma pergunta parafraseada com naturalidade ("qual é o nome
+    da empresa DO cliente?", com "do" a mais e sem os parênteses) não batia,
+    deixando passar uma repetição que a rede de segurança deveria ter
+    pego."""
+    campo = next(
+        c for c in campos_da_categoria(CAT_OCORRENCIA) if c.name == "nome_empresa_cliente"
+    )
+    assert whatsapp_intake._rotulo_mencionado_em(
+        campo, "qual é o nome da empresa do cliente?"
+    )
+    assert whatsapp_intake._rotulo_mencionado_em(campo, "qual é o nome da empresa?")
+    assert not whatsapp_intake._rotulo_mencionado_em(campo, "qual é o supervisor?")
+
+
+def test_remove_copias_entre_campos_descarta_valor_copiado_do_vizinho():
+    """Achado real em produção (2026-08-21): mesmo com a "regra dura" no
+    prompt contra copiar valor de campo vizinho, o modelo copiou o nome da
+    empresa pro campo do contato e o código da região pra cidade — a rede
+    de segurança estrutural descarta esses casos (nunca os dois campos
+    genuinamente iguais), mas nunca mexe num par que veio de fato diferente
+    (mesmo se coincidentemente igual em letra maiúscula/minúscula, o que
+    aqui é tratado como igual de propósito — nomes reais não colidem por
+    acaso)."""
+    entrada = {
+        "nome_empresa_cliente": "Alumínios Ltda",
+        "nome_contato_cliente": "Alumínios Ltda",  # copiado por engano
+        "regiao": "054-CANOAS",
+        "cidade": "054-CANOAS",  # copiado por engano
+        "cargo": "Comprador",  # campo sem par, nunca mexe
+    }
+    limpo = whatsapp_intake._remover_copias_entre_campos(entrada)
+    assert "nome_contato_cliente" not in limpo
+    assert "cidade" not in limpo
+    assert limpo["nome_empresa_cliente"] == "Alumínios Ltda"
+    assert limpo["regiao"] == "054-CANOAS"
+    assert limpo["cargo"] == "Comprador"
+
+
+def test_remove_copias_entre_campos_preserva_valores_genuinamente_diferentes():
+    entrada = {
+        "nome_empresa_cliente": "Alumínios Ltda",
+        "nome_contato_cliente": "Rodrigo Silva",
+        "regiao": "054-CANOAS",
+        "cidade": "Canoas",
+    }
+    assert whatsapp_intake._remover_copias_entre_campos(entrada) == entrada
+
+
+async def test_quimico_pergunta_reformulada_sobre_campo_ja_preenchido_e_pega():
+    """Reproduz o achado real em produção (2026-08-21, captura de tela do
+    usuário): rodada anterior perguntou "Qual é o nome da empresa do
+    cliente? Preciso disso pra seguir com o registro."; a pessoa respondeu;
+    o modelo preencheu `nome_empresa_cliente` corretamente MAS repetiu a
+    mesma pergunta, só que reformulada mais curta ("Qual é o nome da
+    empresa do cliente?") — a checagem antiga (substring exata do rótulo)
+    não pegava isso porque a frase do modelo tem "do" a mais e não tem os
+    parênteses do rótulo oficial. Com :func:`_rotulo_mencionado_em`, a rede
+    de segurança reconhece que ainda é sobre o mesmo campo e tenta de novo."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {"regiao": "054-CANOAS"},
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é o nome da empresa do cliente? Preciso disso pra seguir com o registro."},
+        {"papel": "usuario", "conteudo": "Aluminio LTDA empresas"},
+    ]
+    primeira_tentativa = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={"regiao": "054-CANOAS", "nome_empresa_cliente": "Aluminio LTDA empresas"},
+        informacoes_suficientes=False,
+        perguntas=["Qual é o nome da empresa do cliente?"],
+    )
+    segunda_tentativa = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={"regiao": "054-CANOAS", "nome_empresa_cliente": "Aluminio LTDA empresas"},
+        informacoes_suficientes=False,
+        perguntas=["Qual é o código do cliente?"],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[
+            (primeira_tentativa, None, 100, 50),
+            (segunda_tentativa, None, 100, 50),
+        ],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 2
+        resposta = amb.responder.await_args.args[1]
+        assert "empresa" not in resposta.lower()
 
 
 async def test_quimico_campo_obrigatorio_faltando_pergunta_em_vez_de_criar():

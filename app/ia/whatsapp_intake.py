@@ -833,6 +833,58 @@ def _campo_por_rotulo(nome_categoria: str, rotulo: str) -> CampoDef | None:
     return next((c for c in campos_da_categoria(nome_categoria) if c.label == rotulo), None)
 
 
+# Achado real em produção (2026-08-21): "Cargo"/"Setor"/"Fone"/"E-mail" são
+# rótulos claros no form web do Portal (agrupados visualmente numa seção
+# "Contato do Cliente"), mas sem esse agrupamento visual o WhatsApp é uma
+# conversa linear — perguntar só "Qual é o cargo?" no meio de uma sequência
+# sobre a OCORRÊNCIA soa como se fosse sobre a pessoa que está no chat, não
+# sobre o contato do lado do cliente. Só afeta o texto mostrado no chat
+# (rótulo pro modelo/usuário); o schema em `formularios_quimico.py`
+# (`CampoDef.label`, fonte única também do Portal) não muda.
+_ROTULO_CHAT_CONTATO_CLIENTE = {
+    "nome_contato_cliente": "Nome do contato do cliente",
+    "cargo": "Cargo do contato do cliente",
+    "setor_contato": "Setor do contato do cliente",
+    "fone": "Telefone do contato do cliente",
+    "email": "E-mail do contato do cliente",
+}
+
+
+def _rotulo_chat(campo: CampoDef) -> str:
+    return _ROTULO_CHAT_CONTATO_CLIENTE.get(campo.name, campo.label)
+
+
+_STOPWORDS_ROTULO = frozenset({"do", "da", "de", "dos", "das", "que", "com", "por", "sem", "no", "na"})
+_PALAVRA_RE = re.compile(r"[a-zà-öø-ÿ]+")
+
+
+def _rotulo_mencionado_em(campo: CampoDef, alvo_casefold: str) -> bool:
+    """``True`` quando o texto ``alvo_casefold`` (já em minúsculas) menciona
+    o rótulo de ``campo`` — usado por :func:`_quimico_travado_no_campo` pra
+    detectar se a pergunta ainda é sobre um campo já respondido nesta
+    própria rodada.
+
+    Achado real em produção (2026-08-21): comparar substring EXATA do
+    rótulo (ex.: ``"Nome da Empresa (Cliente)"``) contra uma pergunta
+    escrita naturalmente pelo modelo (ex.: "qual é o nome da empresa DO
+    cliente?") falha por causa de uma palavra a mais/a menos ou de
+    parênteses — o modelo é instruído a soar natural (regra de tom do
+    prompt), então nunca escreve o rótulo cru. Achado ao vivo, mesma
+    sessão: essa falha silenciosa deixou passar uma repetição da pergunta
+    da empresa que a checagem deveria ter pego. Em vez de substring exata,
+    considera "mencionado" quando TODAS as palavras significativas do
+    rótulo (sem o que está entre parênteses, sem stopwords curtas)
+    aparecem em ``alvo_casefold``, em qualquer ordem — tolera "do"/"da" a
+    mais, reordenação, etc."""
+    rotulo = _rotulo_chat(campo)
+    sem_parenteses = re.sub(r"\([^)]*\)", "", rotulo)
+    palavras = [
+        p for p in _PALAVRA_RE.findall(sem_parenteses.casefold())
+        if len(p) > 2 and p not in _STOPWORDS_ROTULO
+    ]
+    return bool(palavras) and all(p in alvo_casefold for p in palavras)
+
+
 _ROTULO_ENTRE_ASPAS_RE = re.compile(r'"([^"]+)"')
 
 
@@ -860,25 +912,26 @@ def _reescrever_erro_formulario_quimico(nome_categoria: str, erro: str) -> str:
     campo = _campo_por_rotulo(nome_categoria, match.group(1)) if match else None
     if campo is None:
         return erro
+    rotulo = _rotulo_chat(campo)
     campo_vazio = erro.startswith(("Preencha o campo", "Selecione ao menos uma opção"))
     if campo.tipo in ("select", "checkbox_multi") and campo.opcoes:
         opcoes = ", ".join(campo.opcoes)
         if campo_vazio:
-            return f'Ainda preciso saber "{campo.label}". Pode ser uma destas: {opcoes}'
+            return f'Ainda preciso saber "{rotulo}". Pode ser uma destas: {opcoes}'
         return (
-            f'Não consegui casar sua resposta com uma opção válida de "{campo.label}". '
+            f'Não consegui casar sua resposta com uma opção válida de "{rotulo}". '
             f"Pode ser uma destas: {opcoes}"
         )
     if campo.min_chars and "caracteres" in erro:
         return (
-            f'O valor que você me passou pra "{campo.label}" ficou curto demais — '
+            f'O valor que você me passou pra "{rotulo}" ficou curto demais — '
             f"preciso de pelo menos {campo.min_chars} caracteres, pode confirmar o valor completo?"
         )
     if campo.tipo == "email" and not campo_vazio:
-        return f'O e-mail que você me passou não parece válido — pode confirmar "{campo.label}"?'
+        return f'O e-mail que você me passou não parece válido — pode confirmar "{rotulo}"?'
     if campo.tipo == "date" and not campo_vazio:
-        return f'Não entendi a data de "{campo.label}" — pode me passar de novo (dia/mês/ano)?'
-    return f'Ainda preciso de "{campo.label}" pra completar o registro.'
+        return f'Não entendi a data de "{rotulo}" — pode me passar de novo (dia/mês/ano)?'
+    return f'Ainda preciso de "{rotulo}" pra completar o registro.'
 
 
 def _linhas_campo_quimico(campo: CampoDef) -> list[str]:
@@ -888,7 +941,7 @@ def _linhas_campo_quimico(campo: CampoDef) -> list[str]:
     fora da lista é rejeitado por `formularios_quimico.validar_payload` no
     código, então dar a lista pronta evita ida e volta perguntando de novo)."""
     obrigatorio = "obrigatório" if campo.obrigatorio else "opcional"
-    linhas = [f'- `{campo.name}` — "{campo.label}" ({obrigatorio})']
+    linhas = [f'- `{campo.name}` — "{_rotulo_chat(campo)}" ({obrigatorio})']
     if campo.ajuda:
         linhas.append(f"  Contexto: {campo.ajuda}")
     if campo.tipo == "select":
@@ -948,7 +1001,7 @@ def _pergunta_checkbox_multi_pendente(
     if proximo is None or proximo.tipo != "checkbox_multi":
         return None
     itens = "\n".join(f"{i}. {opcao}" for i, opcao in enumerate(proximo.opcoes, 1))
-    return f"{proximo.label} — pode ser mais de uma, me diga os números ou os nomes:\n{itens}"
+    return f"{_rotulo_chat(proximo)} — pode ser mais de uma, me diga os números ou os nomes:\n{itens}"
 
 
 def _filtrar_campos_formulario_validos(
@@ -992,35 +1045,73 @@ def _mapear_resposta_numerica_checkbox(
     return escolhidas
 
 
+# achado real em produção (2026-08-21): mesmo com a "regra dura" no prompt
+# contra copiar valor de campo vizinho pra preencher campo "de brinde", o
+# modelo copiou o nome da empresa pro campo do contato e o código da
+# região pra cidade. Pares onde os dois campos NUNCA podem ter o mesmo
+# valor de verdade — rede estrutural, não promessa de prompt.
+_PARES_NAO_PODEM_SER_IGUAIS: tuple[tuple[str, str], ...] = (
+    ("nome_contato_cliente", "nome_empresa_cliente"),
+    ("cidade", "regiao"),
+)
+
+
+def _remover_copias_entre_campos(campos_formulario: dict[str, Any]) -> dict[str, Any]:
+    """Descarta um campo cujo valor é IDÊNTICO ao de outro campo do par em
+    :data:`_PARES_NAO_PODEM_SER_IGUAIS` — o campo volta a ser pendente
+    (reentra na lista de perguntas da próxima rodada) em vez de ficar
+    gravado com um valor que quase certamente foi copiado por engano."""
+    if not campos_formulario:
+        return campos_formulario
+    limpo = dict(campos_formulario)
+    for campo, campo_ref in _PARES_NAO_PODEM_SER_IGUAIS:
+        valor = limpo.get(campo)
+        valor_ref = limpo.get(campo_ref)
+        if (
+            isinstance(valor, str)
+            and isinstance(valor_ref, str)
+            and valor.strip()
+            and valor.strip().casefold() == valor_ref.strip().casefold()
+        ):
+            del limpo[campo]
+    return limpo
+
+
 def _ajustar_campos_formulario_quimico(
     saida: SaidaWhatsAppIntake | None, conversa: list[dict[str, Any]]
 ) -> SaidaWhatsAppIntake | None:
-    """Três redes de segurança sobre a saída do Químico, aplicadas logo após
-    a saída do modelo (antes de qualquer decisão): (1) descarta chaves que
-    não são campos reais da categoria em ``campos_formulario``
-    (:func:`_filtrar_campos_formulario_validos`); (2) se o PRÓXIMO campo
-    pendente for ``checkbox_multi`` e ainda não tiver sido preenchido, tenta
-    mapear a ÚLTIMA mensagem do usuário por número
-    (:func:`_mapear_resposta_numerica_checkbox`) e preenche o campo em
-    código — achado real em produção (2026-08-21): a pessoa respondeu "1 e
-    4" duas rodadas seguidas, o modelo reconheceu isso na própria
-    `descricao` ("Análises já mencionadas anteriormente: 1 e 4") mas nunca
-    preencheu `campos_formulario`, travando a conversa pedindo a mesma
-    coisa pra sempre; (3) se o formulário resultante já está COMPLETO e
-    VÁLIDO (mesma checagem de :func:`validar_payload_quimico` usada na
-    criação do chamado), força `informacoes_suficientes: true` mesmo que o
-    modelo tenha dito `false` — achado real na mesma sessão: depois de (2)
-    preencher o último campo faltante, `informacoes_suficientes` do modelo
-    continuou `false` e a pergunta seguinte repetia a mesma coisa já
-    resolvida, mesmo com o formulário 100% pronto pra criar o chamado. Não
-    mexe em nada fora do Químico, nem quando o texto não é claramente uma
-    resposta numérica (nesse caso a extração livre do modelo continua sendo
-    a única fonte) — só LIGA `informacoes_suficientes`, nunca desliga (não
-    sobrepõe um `true` genuíno do modelo por segurança)."""
+    """Quatro redes de segurança sobre a saída do Químico, aplicadas logo
+    após a saída do modelo (antes de qualquer decisão): (1) descarta chaves
+    que não são campos reais da categoria em ``campos_formulario``
+    (:func:`_filtrar_campos_formulario_validos`); (1.5) descarta um campo
+    cujo valor é cópia idêntica de outro campo vizinho
+    (:func:`_remover_copias_entre_campos`) — achado real em produção
+    (2026-08-21): mesmo com a "regra dura" no prompt contra isso, o modelo
+    copiava o nome da empresa pro campo do contato, ou o código da região
+    pra cidade; (2) se o PRÓXIMO campo pendente for ``checkbox_multi`` e
+    ainda não tiver sido preenchido, tenta mapear a ÚLTIMA mensagem do
+    usuário por número (:func:`_mapear_resposta_numerica_checkbox`) e
+    preenche o campo em código — achado real em produção (2026-08-21): a
+    pessoa respondeu "1 e 4" duas rodadas seguidas, o modelo reconheceu
+    isso na própria `descricao` ("Análises já mencionadas anteriormente: 1
+    e 4") mas nunca preencheu `campos_formulario`, travando a conversa
+    pedindo a mesma coisa pra sempre; (3) se o formulário resultante já
+    está COMPLETO e VÁLIDO (mesma checagem de
+    :func:`validar_payload_quimico` usada na criação do chamado), força
+    `informacoes_suficientes: true` mesmo que o modelo tenha dito `false`
+    — achado real na mesma sessão: depois de (2) preencher o último campo
+    faltante, `informacoes_suficientes` do modelo continuou `false` e a
+    pergunta seguinte repetia a mesma coisa já resolvida, mesmo com o
+    formulário 100% pronto pra criar o chamado. Não mexe em nada fora do
+    Químico, nem quando o texto não é claramente uma resposta numérica
+    (nesse caso a extração livre do modelo continua sendo a única fonte)
+    — só LIGA `informacoes_suficientes`, nunca desliga (não sobrepõe um
+    `true` genuíno do modelo por segurança)."""
     if saida is None or not _eh_departamento_quimico(saida.departamento):
         return saida
     nome_categoria = str(saida.categoria or "")
     campos_formulario = _filtrar_campos_formulario_validos(nome_categoria, saida.campos_formulario)
+    campos_formulario = _remover_copias_entre_campos(campos_formulario)
 
     campos = campos_da_categoria(nome_categoria)
     proximo = next((c for c in campos if c.name not in campos_formulario), None)
@@ -1189,7 +1280,7 @@ def _secao_formulario_quimico(
     if pendentes:
         proximo = pendentes[0]
         linhas.append(
-            f'**Pergunte AGORA sobre `{proximo.name}` ("{proximo.label}") — é o '
+            f'**Pergunte AGORA sobre `{proximo.name}` ("{_rotulo_chat(proximo)}") — é o '
             "PRIMEIRO campo pendente da lista abaixo, na ordem em que aparecem. "
             "Regra dura, sem exceção: siga essa ordem sempre — nunca pule pra um "
             "campo mais abaixo na lista nem volte pra perguntar um campo antes "
@@ -1208,7 +1299,7 @@ def _secao_formulario_quimico(
         linhas += ["", "### Campos deste formulário já confirmados (não pergunte de novo)"]
         for nome_campo, valor in campos_formulario_confirmados.items():
             campo_def = _campo_por_nome(nome_categoria, nome_campo)
-            rotulo = campo_def.label if campo_def else nome_campo
+            rotulo = _rotulo_chat(campo_def) if campo_def else nome_campo
             texto_valor = "; ".join(valor) if isinstance(valor, list) else str(valor)
             linhas.append(f"- {rotulo}: {texto_valor}")
     return linhas
@@ -1589,7 +1680,7 @@ def _quimico_travado_no_campo(
     if not alvo:
         return False
     return any(
-        campo is not None and campo.label.casefold() in alvo
+        campo is not None and _rotulo_mencionado_em(campo, alvo)
         for campo in (_campo_por_nome(nome_categoria, nome) for nome in novos)
     )
 
