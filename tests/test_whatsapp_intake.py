@@ -1646,6 +1646,59 @@ async def test_quimico_progresso_real_nao_cai_na_mensagem_totalmente_generica():
         assert resultado["campos_formulario"]["supervisor"] == "ROGERIO DA COSTA CARDOSO"
 
 
+async def test_quimico_campo_omitido_pelo_modelo_tambem_nao_cai_no_generico():
+    """Reproduz ao vivo em produção (2026-08-24, terceira variante do mesmo
+    dia): "osvaldo" não tem nenhuma semelhança com nenhum Supervisor real —
+    diferente do caso "roger" (valor válido) e do caso "Roberto"/"Wallysson"
+    (valor inválido mas TENTADO), aqui o modelo simplesmente NÃO incluiu
+    `supervisor` em `campos_formulario` nas duas tentativas (nem a original,
+    nem o retry) — `_campo_invalido_selecionado` não pega esse caso (só pega
+    quando o modelo tenta um valor e erra) e não há "campo novo" nesta
+    rodada (nada foi capturado), então a versão anterior do fallback caía
+    na mensagem totalmente genérica mesmo assim. Como a categoria já é
+    conhecida, o código sabe com certeza que `supervisor` é o próximo campo
+    pendente — deve perguntar por ele com as opções, não a mensagem
+    genérica."""
+    conn = FakeConn()
+    conn.rodada = 1
+    campos_sem_supervisor = {
+        "regiao": "038-SANTA MARIA",
+        "produto": "DEGRAX 25",
+        "codigo_cliente": "CLI20244",
+        "descricao_situacao": "O produto Degrax 25 corroeu a estrutura metálica do cliente.",
+    }
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": campos_sem_supervisor,
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é o Supervisor?"},
+        {"papel": "usuario", "conteudo": "osvaldo"},
+    ]
+    tentativa = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario=dict(campos_sem_supervisor),  # supervisor NÃO incluído
+        informacoes_suficientes=False,
+        perguntas=["Só um instante! Pode me contar de novo, rapidinho, o que você precisa?"],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[
+            (tentativa, None, 100, 50),
+            (tentativa, None, 100, 50),  # retry produz a mesma coisa, ainda travado
+        ],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        resposta = amb.responder.await_args.args[1]
+        assert resposta != whatsapp_intake._TEXTO_CONTINUAR_GENERICO
+        assert "supervisor" in resposta.lower()
+
+
 async def test_quimico_valor_de_select_fora_da_lista_pergunta_de_novo():
     """Valor de `select` que não bate EXATO com a lista real (alucinação ou
     interpretação errada do modelo) nunca vira dado gravado — descartado já
@@ -1723,6 +1776,57 @@ async def test_quimico_valor_invalido_nao_para_de_pedir_o_campo_certo():
         # A auditoria tem que bater com o que foi mandado de verdade.
         resultado = json.loads(conn.auditorias[0][3])
         assert resultado["perguntas"] == [resposta]
+
+
+@pytest.mark.parametrize(
+    "categoria,nome_campo",
+    [
+        (categoria, campo.name)
+        for categoria in (CAT_OCORRENCIA, CAT_VISITA, CAT_ANALISE, CAT_DESENVOLVIMENTO)
+        for campo in campos_da_categoria(categoria)
+        if campo.opcoes
+    ],
+)
+async def test_quimico_todo_campo_com_lista_fechada_rejeita_valor_fora_dela(categoria, nome_campo):
+    """Pedido do usuário (2026-08-24): comprova, pra TODO campo `select`/
+    `checkbox_multi` das 4 categorias do Químico (não só Supervisor, já
+    coberto ao vivo), que um valor fora da lista real (1) nunca vira dado
+    gravado, (2) nunca gasta uma segunda chamada ao modelo — já se sabe que
+    é inútil, (3) a resposta pergunta de novo citando o MESMO campo, e (4)
+    os demais campos (todos válidos) sobrevivem intactos. Lista de campos
+    gerada do schema real via `campos_da_categoria`, não hardcoded — não
+    quebra se o formulário ganhar/perder campo com lista fechada."""
+    conn = FakeConn()
+    campo = next(c for c in campos_da_categoria(categoria) if c.name == nome_campo)
+    valores = _valores_validos(categoria)
+    valores[nome_campo] = (
+        ["Opção Que Não Existe Em Lugar Nenhum"]
+        if campo.tipo == "checkbox_multi"
+        else "Valor Que Não Existe Em Lugar Nenhum"
+    )
+    saida = _saida_quimico(
+        categoria, campos_formulario=valores, informacoes_suficientes=False,
+        perguntas=[f"Confirma {campo.label}?"],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        # Sem retry desperdiçado — o código já sabe que o valor é inválido.
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 1
+        amb.criar.assert_not_awaited()
+        resposta = amb.responder.await_args.args[1]
+        assert resposta != whatsapp_intake._TEXTO_CONTINUAR_GENERICO
+        assert "não existe em lugar nenhum" in resposta.lower()
+
+        resultado = json.loads(conn.auditorias[0][3])
+        campos_gravados = resultado.get("campos_formulario") or {}
+        assert nome_campo not in campos_gravados
+        for outro_campo, valor_esperado in valores.items():
+            if outro_campo != nome_campo:
+                assert campos_gravados.get(outro_campo) == valor_esperado
 
 
 async def test_quimico_checkbox_multi_aceita_mais_de_uma_analise_solicitada():
@@ -2009,10 +2113,13 @@ async def test_quimico_pergunta_ainda_cita_campo_que_acabou_de_preencher_tenta_d
         assert resultado["campos_formulario"]["estado"] == "RS"
 
 
-async def test_quimico_campo_travado_duas_vezes_usa_texto_generico():
+async def test_quimico_campo_travado_duas_vezes_pergunta_proximo_campo():
     """Se a tentativa nova TAMBÉM não avançar nenhum campo, nunca manda a
-    mesma pergunta de novo — cai no texto fixo, mas preserva os campos já
-    confirmados (mesmo padrão de `test_resposta_repetida_duas_vezes_usa_texto_generico`)."""
+    mesma pergunta de novo — mas, com a categoria já conhecida (achados
+    2026-08-24, ver docstring de :func:`whatsapp_intake._pergunta_campo_pendente_fallback`),
+    a resposta cita o PRÓXIMO campo pendente do schema em vez do texto
+    totalmente genérico (que fazia a pessoa achar que precisava recomeçar
+    do zero). Preserva os campos já confirmados de qualquer forma."""
     conn = FakeConn()
     conn.rodada = 2
     conn.resultado_confirmado = {
@@ -2036,7 +2143,8 @@ async def test_quimico_campo_travado_duas_vezes_usa_texto_generico():
 
         assert whatsapp_intake.chamar_modelo_estruturado.await_count == 2
         resposta = amb.responder.await_args.args[1]
-        assert resposta == whatsapp_intake._TEXTO_CONTINUAR_GENERICO
+        assert resposta != whatsapp_intake._TEXTO_CONTINUAR_GENERICO
+        assert "justificativa" in resposta.lower()
         resultado = json.loads(conn.auditorias[0][3])
         assert resultado["campos_formulario"]["objetivo_desenvolvimento"] == "produto pra limpar pneu"
 

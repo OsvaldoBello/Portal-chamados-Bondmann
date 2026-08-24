@@ -1163,23 +1163,30 @@ def _pergunta_campo_pendente_fallback(
     nome_categoria: str, campos_formulario: dict[str, Any] | None
 ) -> str | None:
     """Pergunta pronta (código) sobre o PRÓXIMO campo pendente, usada como
-    fallback quando a rede anti-repetição/travamento não confia no texto do
-    modelo (nem no da tentativa original, nem no do retry) mas o formulário
-    TEVE progresso real nesta rodada — ``None`` quando não há mais campo
-    pendente (formulário completo) ou a categoria não tem schema conhecido.
+    fallback sempre que a rede anti-repetição/travamento não confia no
+    texto do modelo (nem no da tentativa original, nem no do retry) — mas a
+    categoria do Químico já é conhecida, então já se sabe com certeza qual é
+    o próximo campo real. ``None`` só quando não há mais campo pendente
+    (formulário completo) ou a categoria ainda não tem schema decidido —
+    nesses casos o chamador cai na mensagem totalmente genérica.
 
-    Achado real em produção (2026-08-24): "roger" foi corretamente casado
-    com "ROGERIO DA COSTA CARDOSO" (valor válido) em `campos_formulario`,
-    mas o modelo repetiu o texto EXATO de "Qual é o Supervisor?" (provável
-    tentativa de confirmar a pessoa certa) — isso disparou
-    `_repete_mensagem_anterior`, o retry produziu algo que ainda mencionava
-    "Supervisor" (pegou em `_quimico_travado_no_campo`), e a conversa caía
-    na mensagem TOTALMENTE genérica `_TEXTO_CONTINUAR_GENERICO` mesmo com o
-    dado certo já capturado — pior ainda, o usuário respondia de novo o que
-    já tinha sido entendido, achando que o bot esqueceu tudo. Como já se
-    sabe com certeza qual é o próximo campo real (schema, não modelo), vale
-    mais perguntar ele diretamente do que arriscar mais uma rodada confusa
-    do modelo."""
+    NÃO afirma "anotado" nem qualquer outra coisa sobre a rodada anterior
+    (ao contrário de uma primeira versão desta função) — o motivo do
+    travamento pode ser tanto progresso real perdido (dado válido, texto
+    repetido) quanto nenhum progresso (campo genuinamente sem resposta
+    reconhecível ainda), e afirmar "anotado" no segundo caso mentiria pro
+    usuário. Mesmo tom neutro de `_reescrever_erro_formulario_quimico`.
+
+    Três achados reais em produção no mesmo dia (2026-08-24) motivaram
+    tratar isto sem depender de progresso: (1) "roger" → valor válido, mas
+    o modelo repetiu o texto exato de uma pergunta anterior; (2) "osvaldo"
+    → o modelo nem tentou casar com nenhuma opção real, só omitiu o campo
+    (`_campo_invalido_selecionado` não pega esse caso — só pega quando o
+    modelo TENTA um valor errado); (3) qualquer outra combinação que ainda
+    assim não produz um texto novo confiável. Em todos, a mensagem
+    totalmente genérica fazia a pessoa achar que precisava recomeçar do
+    zero — perguntar direto pelo campo certo (com as opções, quando houver)
+    é sempre melhor do que arriscar mais uma rodada confusa do modelo."""
     campos = campos_da_categoria(nome_categoria)
     preenchidos = campos_formulario or {}
     proximo = next((c for c in campos if c.name not in preenchidos), None)
@@ -1188,9 +1195,9 @@ def _pergunta_campo_pendente_fallback(
     if proximo.tipo == "checkbox_multi":
         return _pergunta_checkbox_multi_pendente(nome_categoria, campos_formulario)
     if proximo.opcoes:
-        itens = "\n".join(f"{i}. {opcao}" for i, opcao in enumerate(proximo.opcoes, 1))
-        return f"Certo, anotado! Agora, {_rotulo_chat(proximo)}? Opções:\n{itens}"
-    return f"Certo, anotado! Agora, {_rotulo_chat(proximo)}?"
+        opcoes = ", ".join(proximo.opcoes)
+        return f'Ainda preciso saber "{_rotulo_chat(proximo)}". Pode ser uma destas: {opcoes}'
+    return f'Ainda preciso de "{_rotulo_chat(proximo)}" pra completar o registro.'
 
 
 def _ajustar_campos_formulario_quimico(
@@ -1995,22 +2002,25 @@ async def _processar_conversa(conversa_id: str) -> None:
         else:
             # Travou de novo (ou a tentativa falhou): mantém o `setor`/demais
             # campos já extraídos por `saida` (a rede de segurança troca só o
-            # TEXTO enviado, nunca descarta dado real já capturado), mas o
-            # usuário nunca recebe a mesma mensagem duas vezes. Se HOUVE
-            # progresso real nesta rodada (um campo novo válido foi
-            # capturado — só o TEXTO da pergunta que travou), pergunta
-            # direto pelo PRÓXIMO campo pendente do schema em vez da
-            # mensagem totalmente genérica (achado 2026-08-24: "roger" foi
-            # casado certo com um supervisor válido, mas a mensagem
-            # genérica fez a pessoa achar que precisava recomeçar do zero).
-            novos_desta_rodada = (
-                _campos_novos_desta_rodada(campos_formulario_confirmados, saida.campos_formulario)
-                if saida is not None and _eh_departamento_quimico(saida.departamento)
-                else []
-            )
+            # TEXTO enviado, nunca descarta dado real já capturado). Sempre
+            # que a categoria do Químico já é conhecida, já se sabe com
+            # certeza qual é o PRÓXIMO campo pendente do schema — não vale a
+            # pena arriscar mais rodada de modelo nem cair na mensagem
+            # totalmente genérica, que faz a pessoa achar que precisa
+            # recomeçar do zero. Isso cobre TRÊS variantes achadas ao vivo
+            # em produção (2026-08-24): (1) valor válido mas o texto repetiu
+            # uma pergunta anterior ("roger" → supervisor válido); (2) o
+            # modelo nem tentou casar a resposta com nenhuma opção real e
+            # simplesmente omitiu o campo ("osvaldo", nome sem nenhuma
+            # semelhança com a lista de supervisores) — `campo_invalido`
+            # acima só pega quando o modelo TENTA um valor errado, não
+            # quando desiste sem tentar; (3) qualquer outra combinação das
+            # duas redes de segurança que ainda assim não produz um texto
+            # novo confiável. Só cai na mensagem totalmente genérica quando
+            # nem a categoria é conhecida ainda (schema indisponível).
             pergunta_fallback = (
                 _pergunta_campo_pendente_fallback(str(saida.categoria or ""), saida.campos_formulario)
-                if novos_desta_rodada and saida is not None
+                if saida is not None and _eh_departamento_quimico(saida.departamento)
                 else None
             )
             pergunta = pergunta_fallback or _TEXTO_CONTINUAR_GENERICO
