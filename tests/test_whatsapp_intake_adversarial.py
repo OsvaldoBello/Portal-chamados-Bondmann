@@ -668,3 +668,65 @@ def test_valor_copiado_entre_campos_vizinhos_e_descartado(campo_a, campo_b):
     )
     assert campo_a not in limpo
     assert limpo[campo_b] == "MESMO VALOR"
+
+
+async def test_rodada_sem_pergunta_nao_mata_formulario_em_andamento():
+    """Achado da simulação adversarial (2026-08-24), o pior de todos: o modelo
+    devolveu `perguntas: []` na rodada 11 de uma conversa do Químico, e a
+    pessoa — que já tinha respondido setor, região, cidade, empresa e a
+    descrição da ocorrência — recebeu "desculpa, deu um problema aqui do meu
+    lado" e perdeu TUDO. Como o código sabe qual é o próximo campo pendente,
+    a rodada tem que virar pergunta, não encerramento."""
+    conn = FakeConn()
+    conn.rodada = 1
+    ja_respondidos = {
+        "regiao": "048-INDAIATUBA",
+        "supervisor": "ELIEZER JERKE",
+        "gerente": "ANDRE LUIZ MANDELLI",
+        "nome_empresa_cliente": "Alumínios Garden LTDA",
+    }
+    conn.resultado_confirmado = {
+        "setor": "Logística",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": ja_respondidos,
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é a cidade?"},
+        {"papel": "usuario", "conteudo": "campinas"},
+    ]
+    sem_pergunta = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario=dict(ja_respondidos),
+        informacoes_suficientes=False,
+        perguntas=[],  # o modelo não formulou NENHUMA pergunta
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=sem_pergunta, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        resposta = amb.responder.await_args.args[1]
+        assert resposta != whatsapp_intake.TEXTO_ERRO_GENERICO
+        assert conn.auditorias[0][2] == "PERGUNTA", "encerrou em vez de perguntar"
+        # Nada do que a pessoa já respondeu pode se perder.
+        resultado = json.loads(conn.auditorias[0][3])
+        for chave, valor in ja_respondidos.items():
+            assert resultado["campos_formulario"].get(chave) == valor
+
+
+async def test_assunto_fora_do_escopo_ainda_encerra():
+    """A retomada acima não pode ressuscitar conversa que deve mesmo morrer."""
+    conn = FakeConn()
+    fora = _saida_quimico(
+        CAT_OCORRENCIA, campos_formulario={}, informacoes_suficientes=False,
+        perguntas=[], assunto_fora_do_escopo=True,
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=fora, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+        assert conn.auditorias[0][2] == "ENCERRADO_SEM_CHAMADO"
+        amb.criar.assert_not_awaited()

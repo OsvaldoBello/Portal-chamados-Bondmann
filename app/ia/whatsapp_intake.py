@@ -2349,6 +2349,7 @@ async def _processar_conversa(conversa_id: str) -> None:
     pergunta = (
         texto_das_perguntas(saida.perguntas) if saida is not None and acao == "PERGUNTA" else ""
     )
+
     repetiu = False
 
     # Achado real em produção (2026-08-24), ver docstring de
@@ -2571,6 +2572,38 @@ async def _processar_conversa(conversa_id: str) -> None:
         )
         if pergunta_checkbox:
             pergunta = pergunta_checkbox
+
+    # ÚLTIMA rede, depois de todo o retry: rodada sem pergunta nenhuma não
+    # pode matar um formulário em andamento. Achado pela simulação
+    # adversarial (2026-08-24): o modelo devolveu `perguntas: []` na rodada
+    # 11 de uma conversa do Químico; `decidir_acao_intake` (corretamente,
+    # pelo que ele sabe) encerrou em ENCERRAR_SEM_CHAMADO, e a pessoa — que
+    # já tinha respondido setor, região, cidade, empresa e a descrição da
+    # ocorrência — recebeu "desculpa, deu um problema aqui do meu lado" e
+    # perdeu TUDO. Como o código sabe exatamente qual é o próximo campo
+    # pendente do schema, a rodada vira uma pergunta normal. Fica DEPOIS do
+    # bloco de retry de propósito: ali `acao` é reatribuída a partir da
+    # tentativa nova, o que desfazia esta retomada quando o modelo repetia a
+    # saída sem pergunta. Não afeta encerramento legítimo — assunto fora do
+    # escopo e teto de rodadas continuam encerrando, e sem `saida` não há
+    # formulário a retomar.
+    if (
+        acao == "ENCERRAR_SEM_CHAMADO"
+        and saida is not None
+        and not saida.assunto_fora_do_escopo
+        and rodada_efetiva < settings.whatsapp_intake_max_rodadas
+        and _eh_departamento_quimico(saida.departamento)
+    ):
+        retomada = _pergunta_campo_pendente_fallback(
+            str(saida.categoria or ""), saida.campos_formulario
+        )
+        if retomada and not _repete_mensagem_anterior(retomada, conversa_visivel):
+            log.warning(
+                "[WA INTAKE] Conversa %s rodada %s: modelo não formulou pergunta "
+                "com formulário em andamento — retomando pelo campo pendente.",
+                conversa_id, rodada,
+            )
+            acao, pergunta = "PERGUNTA", retomada
 
     duracao_ms = int((time.monotonic() - inicio) * 1000)
     resultado = saida.model_dump() if saida is not None else {"erro": erro}
