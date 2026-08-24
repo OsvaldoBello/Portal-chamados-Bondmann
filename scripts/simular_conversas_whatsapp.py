@@ -218,7 +218,11 @@ async def _ambiente_simulado(sim: ConversaSim):
     async def _responder(telefone: str, texto: str) -> None:
         sim.enviadas.append(texto)
 
-    async def _criar(**kwargs):
+    async def _criar(*args, **kwargs):
+        # `ChamadosRepo.criar` recebe `claims` POSICIONALMENTE — sem o *args
+        # aqui o mock levantava TypeError, `processar_conversa` engolia como
+        # "conversa falhou" e NENHUM cenário conseguia criar chamado. Erro do
+        # simulador que por um tempo mascarou o resultado real.
         sim.chamado_criado = kwargs
         return {"id": "chamado-simulado-uuid", "codigo": "BOND-2026-SIMUL"}
 
@@ -300,18 +304,26 @@ async def _resposta_persona(cenario: Cenario, historico: list[dict[str, Any]]) -
             ),
         },
     ]
-    saida, erro, _ti, _to = await chamar_modelo_estruturado(
-        mensagens,
-        model=st.whatsapp_intake_model,
-        api_key=st.ia_triagem_api_key,
-        base_url=st.ia_triagem_base_url,
-        timeout_s=st.whatsapp_intake_timeout_s,
-        max_tokens=300,
-        schema=RespostaPersona,
-    )
-    if saida is None:
-        raise RuntimeError(f"persona sem saída: {erro}")
-    return saida.mensagem.strip()
+    # Backoff próprio: rodar 20 conversas seguidas estoura o rate limit da
+    # OpenAI (429) — sem isto, 12 dos 20 cenários morreram por erro de
+    # infraestrutura, não por bug do bot, e contaminaram a medição.
+    erro = None
+    for tentativa in range(5):
+        saida, erro, _ti, _to = await chamar_modelo_estruturado(
+            mensagens,
+            model=st.whatsapp_intake_model,
+            api_key=st.ia_triagem_api_key,
+            base_url=st.ia_triagem_base_url,
+            timeout_s=st.whatsapp_intake_timeout_s,
+            max_tokens=300,
+            schema=RespostaPersona,
+        )
+        if saida is not None:
+            return saida.mensagem.strip()
+        if "429" not in str(erro):
+            break
+        await asyncio.sleep(2 ** tentativa * 5)
+    raise RuntimeError(f"persona sem saída: {erro}")
 
 
 def _checar_invariantes(

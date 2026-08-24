@@ -1612,11 +1612,19 @@ def _pergunta_campo_pendente_fallback(
         return f'{prefixo}Ainda preciso saber "{rotulo}". Escolha uma das opções abaixo:\n{itens}'
     # Campo de texto livre: nada a "reconhecer" — quando a resposta anterior
     # não serviu, o que falta é explicar melhor O QUE se espera, não acusar
-    # a resposta de inválida.
+    # a resposta de inválida. O texto VARIA conforme o campo (usa a ajuda do
+    # schema quando existe) justamente para não virar a próxima mensagem
+    # repetida: a simulação adversarial (2026-08-24) mostrou a primeira
+    # versão desta frase, fixa, sendo reenviada palavra por palavra três
+    # rodadas seguidas — o mesmo defeito que ela deveria corrigir.
     if tentativa_rejeitada:
+        if proximo.ajuda:
+            return (
+                f'Ainda me falta "{rotulo}". Pra te ajudar: {proximo.ajuda}'
+            )
         return (
-            f'Ainda me falta "{rotulo}". Pode detalhar um pouco mais, '
-            "com esse nível de detalhe?"
+            f'Ainda me falta "{rotulo}" — não consegui aproveitar '
+            f'"{tentativa_rejeitada}" pra isso. Pode escrever com mais detalhe?'
         )
     return f'Ainda preciso de "{rotulo}" pra completar o registro.'
 
@@ -2033,28 +2041,68 @@ async def _imagem_da_conversa(conversa: list[dict[str, Any]], settings: Settings
 _CAMPOS_STICKY = ("setor", "departamento", "categoria", "subcategoria", "data_entrega", "sem_prazo")
 
 
+# Quantas rodadas para trás procurar um `resultado` com estado de verdade.
+# Cobre uma sequência curta de falhas de provedor sem virar varredura da
+# conversa inteira (ver :func:`_resultado_rodada_anterior`).
+_MAX_RODADAS_ATRAS_ESTADO = 5
+
+
+def _resultado_tem_estado(resultado: dict[str, Any] | None) -> bool:
+    """``True`` quando o ``resultado`` carrega algum dado aproveitável — a
+    rodada de uma falha de provedor grava só ``{"erro": ...}``, sem nenhum
+    campo."""
+    if not resultado:
+        return False
+    if resultado.get("campos_formulario"):
+        return True
+    return any(resultado.get(campo) for campo in _CAMPOS_STICKY)
+
+
 async def _resultado_rodada_anterior(conn: Any, conversa_id: str) -> dict[str, Any] | None:
     """``resultado`` (JSON) da rodada mais recente já auditada desta conversa
-    (``ia_whatsapp_intake.resultado``, gravado a cada rodada por
-    :func:`_finalizar`) — ``None`` na primeira rodada, quando nada foi
-    extraído ainda. Fonte única para as duas derivações de "fato pronto" que
-    a rodada seguinte recebe (:func:`_campos_confirmados` e
-    :func:`_campos_formulario_confirmados`) — uma consulta só, não duas."""
-    linha = await conn.fetchrow(
+    que AINDA CARREGA ESTADO (``ia_whatsapp_intake.resultado``, gravado a
+    cada rodada por :func:`_finalizar`) — ``None`` na primeira rodada, quando
+    nada foi extraído ainda. Fonte única para as duas derivações de "fato
+    pronto" que a rodada seguinte recebe (:func:`_campos_confirmados` e
+    :func:`_campos_formulario_confirmados`) — uma consulta só, não duas.
+
+    Pula rodadas SEM estado em vez de parar na última. Achado pela simulação
+    adversarial (2026-08-24): quando o provedor devolve erro (429, timeout,
+    JSON inválido), a rodada é auditada com ``{"erro": ...}`` e nenhum campo;
+    lendo cegamente só a última linha, a rodada seguinte enxergava "nada
+    confirmado" e a conversa INTEIRA era zerada — setor, departamento,
+    categoria e todo o formulário já preenchido. Uma pessoa que tinha
+    respondido nove perguntas voltava à estaca zero por causa de um soluço
+    de rede, sem nunca entender por quê. Olhar algumas rodadas para trás
+    (:data:`_MAX_RODADAS_ATRAS_ESTADO`) atravessa a falha sem perder nada, e
+    continua sendo UMA consulta por rodada (invariante testado)."""
+    linhas = await conn.fetch(
         """
         SELECT resultado FROM ia_whatsapp_intake
          WHERE conversa_id = $1::uuid
          ORDER BY rodada DESC
-         LIMIT 1
+         LIMIT $2
         """,
         conversa_id,
+        _MAX_RODADAS_ATRAS_ESTADO,
     )
-    if linha is None:
+    if not linhas:
         return None
-    resultado = linha["resultado"]
-    if isinstance(resultado, str):
-        resultado = json.loads(resultado)
-    return resultado if isinstance(resultado, dict) else None
+    primeiro: dict[str, Any] | None = None
+    for linha in linhas:
+        resultado = linha["resultado"]
+        if isinstance(resultado, str):
+            resultado = json.loads(resultado)
+        if not isinstance(resultado, dict):
+            continue
+        if primeiro is None:
+            primeiro = resultado
+        if _resultado_tem_estado(resultado):
+            return resultado
+    # Nenhuma das rodadas recentes tem estado — devolve a mais recente
+    # mesmo assim (comportamento anterior), para não mudar nada no caso
+    # em que a conversa genuinamente ainda não extraiu nada.
+    return primeiro
 
 
 def _campos_confirmados(resultado: dict[str, Any] | None) -> dict[str, Any]:

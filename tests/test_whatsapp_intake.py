@@ -162,6 +162,10 @@ class FakeConn:
         # Campos confirmados em rodada anterior pra `_campos_confirmados`
         # devolver — `None` (default) = nada extraído ainda.
         self.resultado_confirmado: dict | None = None
+        # Rodadas ANTERIORES à `resultado_confirmado`, da mais recente para a
+        # mais antiga — usadas pelos testes que exercitam a travessia de uma
+        # rodada sem estado (falha de provedor) até a última rodada boa.
+        self.resultados_anteriores: list[dict] = []
         self.consultas_campos_confirmados = 0
 
     async def fetchval(self, sql: str, *args):
@@ -191,14 +195,23 @@ class FakeConn:
             return dict(_PERFIL)
         if "FROM whatsapp_conversas wc" in sql:
             return dict(self.chamado_recente) if self.chamado_recente else None
-        if "SELECT resultado FROM ia_whatsapp_intake" in sql:
-            self.consultas_campos_confirmados += 1
-            if self.resultado_confirmado is None:
-                return None
-            return {"resultado": json.dumps(self.resultado_confirmado, ensure_ascii=False)}
         raise AssertionError(f"fetchrow inesperado: {sql}")
 
     async def fetch(self, sql: str, *args):
+        if "SELECT resultado FROM ia_whatsapp_intake" in sql:
+            # Uma consulta por rodada, agora devolvendo as N rodadas mais
+            # recentes — `_resultado_rodada_anterior` pula as que não têm
+            # estado (rodada de erro de provedor) em vez de parar na última.
+            self.consultas_campos_confirmados += 1
+            linhas = [
+                {"resultado": json.dumps(r, ensure_ascii=False)}
+                for r in self.resultados_anteriores
+            ]
+            if self.resultado_confirmado is not None:
+                linhas.insert(
+                    0, {"resultado": json.dumps(self.resultado_confirmado, ensure_ascii=False)}
+                )
+            return linhas
         raise AssertionError(f"fetch inesperado: {sql}")
 
     async def execute(self, sql: str, *args):

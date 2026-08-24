@@ -475,8 +475,12 @@ async def test_campo_de_texto_livre_nunca_e_acusado_de_invalido(categoria, nome_
     ) as amb:
         await whatsapp_intake.processar_conversa("conversa-uuid")
         resposta = amb.responder.await_args.args[1]
+        # O defeito era ACUSAR a resposta de inválida num campo onde qualquer
+        # texto serve. Citar o que a pessoa escreveu é o oposto disso: mostra
+        # que o bot ouviu, e ajuda a entender o que ainda falta. O que não
+        # pode é a mensagem SER só o eco (coberto pelo invariante I2).
         assert "não é reconhecido" not in resposta.lower()
-        assert resposta_usuario not in resposta
+        assert resposta.strip().casefold() != resposta_usuario.strip().casefold()
         _checar_invariantes(conn, amb, categoria, confirmados_antes=anteriores)
 
 
@@ -730,3 +734,59 @@ async def test_assunto_fora_do_escopo_ainda_encerra():
         await whatsapp_intake.processar_conversa("conversa-uuid")
         assert conn.auditorias[0][2] == "ENCERRADO_SEM_CHAMADO"
         amb.criar.assert_not_awaited()
+
+
+async def test_falha_transitoria_do_provedor_nao_zera_a_conversa():
+    """Achado da simulação adversarial (2026-08-24), bug de PRODUÇÃO grave:
+    quando o provedor devolve erro (429, timeout, JSON inválido), a rodada é
+    auditada com `{"erro": ...}` e NENHUM campo. Lendo cegamente só a última
+    linha da auditoria, a rodada seguinte enxergava "nada confirmado" e a
+    conversa inteira era zerada — setor, departamento, categoria e todo o
+    formulário já preenchido. Uma pessoa que respondeu nove perguntas voltava
+    à estaca zero por causa de um soluço de rede."""
+    conn = FakeConn()
+    conn.rodada = 3
+    ja_respondidos = {
+        "regiao": "028-SP-NORTE/OESTE",
+        "supervisor": "EQUIPE DIRETA SP",
+        "nome_empresa_cliente": "Metalúrgica Alfa",
+    }
+    # A rodada MAIS RECENTE é a que falhou (só `erro`, sem campo nenhum).
+    conn.resultado_confirmado = {"erro": "provedor: 429 Too Many Requests"}
+    # A anterior a ela tinha o estado real da conversa.
+    conn.resultados_anteriores = [
+        {
+            "setor": "Logística",
+            "departamento": "Dpto Químico",
+            "categoria": CAT_OCORRENCIA,
+            "campos_formulario": ja_respondidos,
+        }
+    ]
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é a cidade?"},
+        {"papel": "usuario", "conteudo": "campinas"},
+    ]
+    saida = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={"cidade": "Campinas"},  # o modelo só devolveu o campo novo
+        informacoes_suficientes=False,
+        perguntas=["Qual é o nome do contato?"],
+        setor="",  # e esqueceu de repetir o setor — tem que vir do confirmado
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        resultado = json.loads(conn.auditorias[0][3])
+        # Tudo que já tinha sido respondido atravessa a rodada que falhou.
+        for chave, valor in ja_respondidos.items():
+            assert resultado["campos_formulario"].get(chave) == valor, (
+                f"{chave} se perdeu por causa da rodada com erro de provedor"
+            )
+        assert resultado["campos_formulario"]["cidade"] == "Campinas"
+        assert resultado["setor"] == "Logística"
+        assert resultado["categoria"] == CAT_OCORRENCIA
+        # A invariante de UMA consulta por rodada continua valendo.
+        assert conn.consultas_campos_confirmados == 1
