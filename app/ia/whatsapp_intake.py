@@ -1186,17 +1186,40 @@ def _valor_select_sem_respaldo_textual(
     return proximo, valor
 
 
+# Acima disso, listar TODAS as opções cruas no chat polui em vez de ajudar
+# (achado real em produção 2026-08-24: campo "Região" tem 114 opções — a
+# mensagem virou um muro de texto ilegível no WhatsApp, ver captura de tela
+# do usuário). Abaixo do limite, listar numerado ajuda mais do que
+# atrapalha (ex.: Gerente com só 4 opções, mesmo padrão do checkbox_multi
+# de "Análises solicitadas" com 8). Acima do limite, melhor confiar na
+# extração livre do modelo na próxima rodada — mesmo comportamento natural
+# de antes destas redes de segurança existirem (o modelo já reconhece bem
+# "Bento Gonçalves" → "009-BENTO GONCALVES" sem ver a lista).
+_LIMITE_OPCOES_LISTAVEIS = 12
+
+
+def _opcoes_numeradas_ou_none(campo: CampoDef) -> str | None:
+    """Lista numerada das opções de ``campo``, uma por linha — ``None``
+    quando a lista é grande demais pra caber num chat de WhatsApp sem
+    virar ruído (ver :data:`_LIMITE_OPCOES_LISTAVEIS`)."""
+    if len(campo.opcoes) > _LIMITE_OPCOES_LISTAVEIS:
+        return None
+    return "\n".join(f"{i}. {opcao}" for i, opcao in enumerate(campo.opcoes, 1))
+
+
 def _pergunta_valor_sem_respaldo(campo: CampoDef, texto_usuario: str) -> str:
     """Pergunta de correção pronta (código) quando o valor casado pelo
     modelo não tem respaldo no texto da pessoa — cita o que ELA escreveu
     (não o valor inventado pelo modelo, que confundiria: é tecnicamente
     válido, só não é o que ela quis dizer)."""
-    itens = "\n".join(f"{i}. {opcao}" for i, opcao in enumerate(campo.opcoes, 1))
-    return (
+    base = (
         f'Não consegui confirmar que "{texto_usuario.strip()}" corresponde a um(a) '
-        f"{_rotulo_chat(campo)} válido(a). Escolha uma das opções abaixo "
-        f"(pode responder o número ou o nome):\n{itens}"
+        f"{_rotulo_chat(campo)} válido(a)."
     )
+    itens = _opcoes_numeradas_ou_none(campo)
+    if itens is None:
+        return f"{base} Pode me dizer de novo, com o nome mais completo/oficial possível?"
+    return f"{base} Escolha uma das opções abaixo (pode responder o número ou o nome):\n{itens}"
 
 
 def _campo_invalido_selecionado(
@@ -1239,12 +1262,12 @@ def _pergunta_valor_invalido_select(campo: CampoDef, valor_digitado: str) -> str
     :func:`_pergunta_checkbox_multi_pendente`) quando o valor que a pessoa
     deu pra um campo ``select``/``checkbox_multi`` não bate com nenhuma
     opção real. Lista as opções numeradas pra facilitar responder por
-    número, igual ao formato do checkbox múltiplo."""
-    itens = "\n".join(f"{i}. {opcao}" for i, opcao in enumerate(campo.opcoes, 1))
-    return (
-        f'"{valor_digitado}" não é uma opção válida para {_rotulo_chat(campo)}. '
-        f"Escolha uma das opções abaixo (pode responder o número ou o nome):\n{itens}"
-    )
+    número — só quando a lista cabe num chat (:data:`_LIMITE_OPCOES_LISTAVEIS`)."""
+    base = f'"{valor_digitado}" não é uma opção válida para {_rotulo_chat(campo)}.'
+    itens = _opcoes_numeradas_ou_none(campo)
+    if itens is None:
+        return f"{base} Pode me dizer de novo, com o nome mais completo/oficial possível?"
+    return f"{base} Escolha uma das opções abaixo (pode responder o número ou o nome):\n{itens}"
 
 
 def _setor_igual_departamento_pela_primeira_vez(
@@ -1276,12 +1299,27 @@ def _setor_igual_departamento_pela_primeira_vez(
     return bool(setor) and bool(departamento) and setor == departamento
 
 
-def _pergunta_confirmar_setor(departamento: str) -> str:
+def _pergunta_confirmar_setor(departamento: str, *, ja_perguntado: bool = False) -> str:
     """Pergunta de confirmação pronta (código) quando `setor` e
     `departamento` colidem pela primeira vez — ver docstring de
     :func:`_setor_igual_departamento_pela_primeira_vez`. Não afirma nem
     "sim" nem "não": pede pra pessoa mesma desambiguar, porque as duas
-    respostas são legítimas."""
+    respostas são legítimas.
+
+    ``ja_perguntado=True`` escala pra uma pergunta mais direta — achado
+    real em produção (2026-08-24): a pergunta binária original ("faz
+    parte OU só pedindo pra") ficava sem resposta clara quando a pessoa
+    só confirmava a metade "só pedindo pra" sem nunca nomear o PRÓPRIO
+    setor (ex.: "estou pedindo um chamado para o departamento quimico") —
+    sem checagem de repetição própria, a MESMA pergunta binária era
+    reenviada palavra por palavra, confundindo ainda mais. A versão
+    direta larga a moldura binária e pede só o nome do setor."""
+    if ja_perguntado:
+        return (
+            f'Ainda preciso saber isso pra abrir certo: qual é o SEU setor '
+            f'(não o "{departamento}", que é só o destino do chamado)? '
+            "Pode me dizer o nome dele."
+        )
     return (
         f'Só confirmando: você faz parte do "{departamento}", ou está só '
         f'pedindo um chamado PARA o "{departamento}"? Se for de outro '
@@ -1325,8 +1363,11 @@ def _pergunta_campo_pendente_fallback(
     if proximo.tipo == "checkbox_multi":
         return _pergunta_checkbox_multi_pendente(nome_categoria, campos_formulario)
     if proximo.opcoes:
-        opcoes = ", ".join(proximo.opcoes)
-        return f'Ainda preciso saber "{_rotulo_chat(proximo)}". Pode ser uma destas: {opcoes}'
+        rotulo = _rotulo_chat(proximo)
+        itens = _opcoes_numeradas_ou_none(proximo)
+        if itens is None:
+            return f'Ainda preciso saber "{rotulo}".'
+        return f'Ainda preciso saber "{rotulo}". Escolha uma das opções abaixo:\n{itens}'
     return f'Ainda preciso de "{_rotulo_chat(proximo)}" pra completar o registro.'
 
 
@@ -2081,7 +2122,10 @@ async def _processar_conversa(conversa_id: str) -> None:
     if setor_ambiguo:
         assert saida is not None
         dados = saida.model_dump()
-        pergunta = _pergunta_confirmar_setor(str(dados["departamento"]))
+        departamento_txt = str(dados["departamento"])
+        pergunta_binaria = _pergunta_confirmar_setor(departamento_txt)
+        ja_perguntado = _repete_mensagem_anterior(pergunta_binaria, conversa_visivel)
+        pergunta = _pergunta_confirmar_setor(departamento_txt, ja_perguntado=ja_perguntado)
         dados["setor"] = ""
         dados["informacoes_suficientes"] = False
         saida = SaidaWhatsAppIntake(**dados)

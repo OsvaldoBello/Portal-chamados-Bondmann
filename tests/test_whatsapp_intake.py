@@ -2024,6 +2024,132 @@ async def test_quimico_todo_campo_com_lista_fechada_rejeita_valor_fora_dela(cate
                 assert campos_gravados.get(outro_campo) == valor_esperado
 
 
+@pytest.mark.parametrize(
+    "categoria,nome_campo",
+    [
+        (categoria, campo.name)
+        for categoria in (CAT_OCORRENCIA, CAT_VISITA, CAT_ANALISE, CAT_DESENVOLVIMENTO)
+        for campo in campos_da_categoria(categoria)
+        if campo.opcoes and len(campo.opcoes) <= whatsapp_intake._LIMITE_OPCOES_LISTAVEIS
+    ],
+)
+async def test_quimico_campo_com_lista_pequena_ainda_lista_opcoes(categoria, nome_campo):
+    """Contrapartida do teste de lista grande: campo com poucas opções
+    (≤ `_LIMITE_OPCOES_LISTAVEIS`, ex.: Gerente com 4) CONTINUA listando
+    tudo numerado — só listas grandes (Região com 114) que passam a não
+    listar. Prova que o limite não afeta os campos pequenos, onde listar
+    genuinamente ajuda."""
+    conn = FakeConn()
+    campo = next(c for c in campos_da_categoria(categoria) if c.name == nome_campo)
+    valores = _valores_validos(categoria)
+    valores[nome_campo] = (
+        ["Opção Que Não Existe Em Lugar Nenhum"]
+        if campo.tipo == "checkbox_multi"
+        else "Valor Que Não Existe Em Lugar Nenhum"
+    )
+    saida = _saida_quimico(
+        categoria, campos_formulario=valores, informacoes_suficientes=False,
+        perguntas=[f"Confirma {campo.label}?"],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        resposta = amb.responder.await_args.args[1]
+        for opcao in campo.opcoes:
+            assert opcao in resposta
+
+
+async def test_quimico_campo_com_lista_grande_nao_polui_o_chat():
+    """Reproduz ao vivo em produção (2026-08-24, sétimo achado do dia): o
+    campo "Região" tem 114 opções — quando a rodada trava (mesma situação
+    do teste "osvaldo": modelo repete a mesma pergunta sem preencher
+    nada), `_pergunta_campo_pendente_fallback` despejou a lista INTEIRA
+    como texto corrido numa mensagem só, virando um muro de texto
+    ilegível no WhatsApp (captura de tela do usuário). Acima de
+    `_LIMITE_OPCOES_LISTAVEIS`, a pergunta não deve listar as opções — só
+    pedir o campo, confiando na extração livre do modelo na próxima
+    rodada (mesmo comportamento de antes das redes de segurança
+    existirem)."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {},
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é a região?"},
+        {"papel": "usuario", "conteudo": "não sei bem, deixa eu ver"},
+    ]
+    travada = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={},  # nada preenchido — modelo não reconheceu a resposta
+        informacoes_suficientes=False,
+        perguntas=["Qual é a região?"],  # repete a mesma pergunta, exato
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[(travada, None, 100, 50), (travada, None, 90, 45)],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 2
+        resposta = amb.responder.await_args.args[1]
+        assert "região" in resposta.lower()
+        assert "COLOMBO" not in resposta
+        assert "VENDA DIRETA" not in resposta
+        assert len(resposta) < 200
+
+
+async def test_setor_ambiguo_repetido_escala_para_pergunta_direta():
+    """Reproduz ao vivo em produção (2026-08-24, oitavo achado do dia): a
+    pessoa respondeu "estou pedindo um chamado para o departamento
+    quimico" à pergunta binária de confirmação de setor — meio-resposta
+    que esclarece que NÃO é do Químico, mas nunca nomeia o setor real.
+    Sem checagem de repetição própria, `_pergunta_confirmar_setor` era
+    reenviada palavra por palavra (captura de tela do usuário mostra a
+    MESMA pergunta duas vezes seguidas). Quando a pergunta binária já foi
+    feita antes (está no histórico), a segunda vez deve escalar pra uma
+    pergunta direta ("qual é o SEU setor?"), nunca repetir a binária."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.mensagens_acumuladas = [
+        {
+            "papel": "assistente",
+            "conteudo": (
+                'Só confirmando: você faz parte do "Dpto Químico", ou está só '
+                'pedindo um chamado PARA o "Dpto Químico"? Se for de outro '
+                "setor, me diga qual."
+            ),
+        },
+        {"papel": "usuario", "conteudo": "estou pedindo um chamado para o departamento quimico"},
+    ]
+    saida = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={},
+        setor="Dpto Químico",
+        departamento="Dpto Químico",
+        informacoes_suficientes=False,
+        perguntas=["Beleza, qual é a ocorrência?"],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        resposta = amb.responder.await_args.args[1]
+        assert "faz parte" not in resposta.lower()  # não repete a pergunta binária
+        assert "seu setor" in resposta.lower()
+        resultado = json.loads(conn.auditorias[0][3])
+        assert not resultado.get("setor")
+
+
 async def test_quimico_checkbox_multi_aceita_mais_de_uma_analise_solicitada():
     """"Análises solicitadas" é `checkbox_multi` — o modelo devolve uma LISTA
     com os itens exatos que a pessoa pediu (o bot apresentou as opções
