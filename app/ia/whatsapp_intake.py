@@ -1018,9 +1018,13 @@ def _pergunta_checkbox_multi_pendente(
     :func:`texto_das_perguntas` (quem formata é o código, não o modelo,
     porque o modelo não é confiável pra isso). ``None`` quando o próximo
     campo pendente não é ``checkbox_multi`` (ou não há mais campo
-    pendente) — nesse caso o texto do modelo é usado normalmente."""
+    pendente) — nesse caso o texto do modelo é usado normalmente.
+    ``campos_formulario`` filtrado por valor genuinamente preenchido —
+    mesmo motivo de :func:`_pergunta_campo_pendente_fallback`."""
     campos = campos_da_categoria(nome_categoria)
-    preenchidos = campos_formulario or {}
+    preenchidos = {
+        k: v for k, v in (campos_formulario or {}).items() if v not in (None, "", [])
+    }
     proximo = next((c for c in campos if c.name not in preenchidos), None)
     if proximo is None or proximo.tipo != "checkbox_multi":
         return None
@@ -1241,17 +1245,30 @@ def _campo_invalido_selecionado(
     o travamento (nenhum campo novo confirmado) e tentava de novo com o
     modelo, mas ele repetia o mesmo pulo — a conversa acabava presa num
     loop da mensagem genérica `_TEXTO_CONTINUAR_GENERICO`, sem nunca dizer
-    qual campo era o problema nem quais eram as opções válidas."""
+    qual campo era o problema nem quais eram as opções válidas.
+
+    Varre ``campos_da_categoria`` (ORDEM DO SCHEMA), não
+    ``campos_formulario_bruto.items()`` (ordem em que o MODELO escreveu o
+    JSON) — achado real em produção (2026-08-24): numa rodada confusa, o
+    modelo devolveu uma dúzia de campos nunca perguntados com string
+    vazia (inclusive um `"produto": ""` bem no fim do dict, bem depois de
+    "Gerente" na ordem do formulário) — varrendo na ordem do dict, essa
+    entrada vazia era encontrada e citada como "campo inválido" ANTES do
+    Gerente genuinamente pendente, que nem chegou a ser mencionado.
+    Valores vazios (string vazia, lista vazia) NUNCA contam como "tentativa
+    inválida" — são tratados como ausentes (mesmo critério de
+    :func:`_campos_novos_desta_rodada`), não como erro."""
     if not campos_formulario_bruto:
         return None
-    definicoes = {c.name: c for c in campos_da_categoria(nome_categoria)}
-    for nome, valor in campos_formulario_bruto.items():
-        campo = definicoes.get(nome)
-        if campo is None or not campo.opcoes:
+    for campo in campos_da_categoria(nome_categoria):
+        if not campo.opcoes:
+            continue
+        valor = campos_formulario_bruto.get(campo.name)
+        if valor in (None, "", []):
             continue
         if campo.tipo == "select" and isinstance(valor, str) and valor not in campo.opcoes:
             return campo, valor
-        if campo.tipo == "checkbox_multi" and isinstance(valor, list) and valor:
+        if campo.tipo == "checkbox_multi" and isinstance(valor, list):
             if not any(v in campo.opcoes for v in valor):
                 return campo, ", ".join(str(v) for v in valor)
     return None
@@ -1271,7 +1288,9 @@ def _pergunta_valor_invalido_select(campo: CampoDef, valor_digitado: str) -> str
 
 
 def _setor_igual_departamento_pela_primeira_vez(
-    saida: SaidaWhatsAppIntake | None, campos_confirmados: dict[str, Any]
+    saida: SaidaWhatsAppIntake | None,
+    campos_confirmados: dict[str, Any],
+    campos_formulario_confirmados: dict[str, Any],
 ) -> bool:
     """``True`` quando ``setor`` (o setor de QUEM PEDE) e ``departamento``
     (o DESTINO do chamado) resolveram pro MESMO valor NESTA rodada, e
@@ -1285,6 +1304,20 @@ def _setor_igual_departamento_pela_primeira_vez(
     estabelecido (não uma decisão nova), reabrir a pergunta toda vez
     incomodaria sem necessidade.
 
+    Também não dispara quando o formulário dinâmico do Químico JÁ tem
+    algum campo confirmado (``campos_formulario_confirmados`` não vazio)
+    — achado real em produção (2026-08-24): mesmo depois de já ter
+    avançado vários campos (Região, Supervisor, Nome da Empresa...), o
+    modelo às vezes re-deriva `setor="Dpto Químico"` de uma frase antiga
+    ("para o setor de departamento quimico") ainda visível no histórico —
+    disparar a confirmação NO MEIO do formulário sequestra a rodada
+    inteira e engole a resposta real que a pessoa tinha acabado de dar pro
+    campo pendente de verdade (ex.: "bruno tiara" pro Gerente virou uma
+    pergunta de setor, perdendo a resposta). Uma vez que o formulário já
+    começou a ser preenchido, a ambiguidade de setor deixa de valer a
+    pena reabrir — se `setor` nunca se resolver, `decidir_acao_intake` já
+    impede criar o chamado sem ele (`saida.setor` obrigatório).
+
     Achado real em produção (2026-08-24): "Preciso registar uma ocorrencia
     para o setor de departamento quimico" — pessoa do setor **TI** (visto
     no cadastro) pedindo um chamado PRO Dpto Químico, mas o modelo
@@ -1292,7 +1325,7 @@ def _setor_igual_departamento_pela_primeira_vez(
     descrever o destino, não a origem. `_casar_setor` não pega isso porque
     "Dpto Químico" É um setor real e ativo — o valor bate com a lista, só
     é o setor errado pra esta pessoa especificamente."""
-    if saida is None or campos_confirmados.get("setor"):
+    if saida is None or campos_confirmados.get("setor") or campos_formulario_confirmados:
         return False
     setor = (saida.setor or "").strip().casefold()
     departamento = (saida.departamento or "").strip().casefold()
@@ -1367,9 +1400,19 @@ def _pergunta_campo_pendente_fallback(
     assim não produz um texto novo confiável. Em todos, a mensagem
     totalmente genérica fazia a pessoa achar que precisava recomeçar do
     zero — perguntar direto pelo campo certo (com as opções, quando houver)
-    é sempre melhor do que arriscar mais uma rodada confusa do modelo."""
+    é sempre melhor do que arriscar mais uma rodada confusa do modelo.
+
+    ``campos_formulario`` é filtrado por valor genuinamente preenchido
+    (nunca string/lista vazia) antes de decidir o "próximo pendente" —
+    achado real em produção (2026-08-24, mesma rodada confusa da nota de
+    :func:`_campo_invalido_selecionado`): campo com CHAVE presente mas
+    valor `""` (nunca perguntado, o modelo só "chutou" o dict inteiro)
+    contava como "já respondido" sem este filtro, pulando na frente o
+    campo genuinamente pendente."""
     campos = campos_da_categoria(nome_categoria)
-    preenchidos = campos_formulario or {}
+    preenchidos = {
+        k: v for k, v in (campos_formulario or {}).items() if v not in (None, "", [])
+    }
     proximo = next((c for c in campos if c.name not in preenchidos), None)
     if proximo is None:
         return None
@@ -1428,7 +1471,8 @@ def _ajustar_campos_formulario_quimico(
     campos_formulario = _remover_valores_invalidos_de_select(nome_categoria, campos_formulario)
 
     campos = campos_da_categoria(nome_categoria)
-    proximo = next((c for c in campos if c.name not in campos_formulario), None)
+    preenchidos = {k: v for k, v in campos_formulario.items() if v not in (None, "", [])}
+    proximo = next((c for c in campos if c.name not in preenchidos), None)
     if proximo is not None and proximo.tipo == "checkbox_multi":
         ultima = next((m for m in reversed(conversa) if m.get("papel") == "usuario"), None)
         texto = str((ultima or {}).get("conteudo") or "")
@@ -2122,7 +2166,9 @@ async def _processar_conversa(conversa_id: str) -> None:
     # rodar nenhuma das checagens abaixo nesta rodada.
     setor_ambiguo = (
         acao in ("PERGUNTA", "CRIAR_CHAMADO")
-        and _setor_igual_departamento_pela_primeira_vez(saida, campos_confirmados)
+        and _setor_igual_departamento_pela_primeira_vez(
+            saida, campos_confirmados, campos_formulario_confirmados
+        )
     )
     campo_invalido = (
         _campo_invalido_selecionado(str(saida.categoria or ""), campos_formulario_bruto)

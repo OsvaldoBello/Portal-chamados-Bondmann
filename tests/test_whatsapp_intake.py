@@ -2026,6 +2026,127 @@ async def test_quimico_valor_invalido_nao_para_de_pedir_o_campo_certo():
         assert resultado["perguntas"] == [resposta]
 
 
+async def test_quimico_campo_invalido_prioriza_ordem_do_schema_nao_do_dict():
+    """Reproduz ao vivo em produção (2026-08-24, décimo achado do dia):
+    numa rodada confusa, o modelo devolveu uma dúzia de campos NUNCA
+    perguntados com string vazia (`"fone": "", "cargo": "", ...`, cada um
+    uma chave real do schema) — inclusive `"produto": ""` no fim do dict,
+    bem depois de "Gerente" na ORDEM DO FORMULÁRIO. Varrendo
+    `campos_formulario_bruto.items()` na ordem em que o MODELO escreveu o
+    JSON (não a ordem do schema), `_campo_invalido_selecionado` citava
+    "Produto" como problema — ignorando que "Gerente" (mais cedo no
+    formulário, e nunca respondido) era o campo genuinamente pendente. A
+    correção varre `campos_da_categoria` (ordem do schema) e ignora
+    valores vazios (não são "tentativa inválida", são ausência)."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {
+            "regiao": "128-SUMARE",
+            "supervisor": "ELIEZER JERKE",
+            "nome_empresa_cliente": "Alumínios grave barra ltda",
+        },
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é o Gerente?"},
+        {"papel": "usuario", "conteudo": "Bruno tiara"},
+    ]
+    # "gerente" nem aparece (nunca reconhecido); "produto" (mais tarde no
+    # formulário) vem com string vazia, junto de uma dúzia de outros
+    # campos nunca perguntados também vazios.
+    saida = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={
+            "regiao": "128-SUMARE",
+            "supervisor": "ELIEZER JERKE",
+            "nome_empresa_cliente": "Alumínios grave barra ltda",
+            "codigo_cliente": "",
+            "cidade": "",
+            "nome_contato_cliente": "",
+            "cargo": "",
+            "setor_contato": "",
+            "fone": "",
+            "email": "",
+            "produto": "",
+            "lote": "",
+            "descricao_situacao": "",
+        },
+        informacoes_suficientes=False,
+        perguntas=["Beleza, e o produto envolvido?"],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[(saida, None, 100, 50), (saida, None, 90, 45)],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        resposta = amb.responder.await_args.args[1]
+        assert "gerente" in resposta.lower()
+        assert "produto" not in resposta.lower()
+        # Os campos vazios nunca perguntados não podem virar dado gravado.
+        resultado = json.loads(conn.auditorias[0][3])
+        campos_gravados = resultado.get("campos_formulario") or {}
+        assert campos_gravados.get("produto") in (None, "")
+        assert campos_gravados.get("fone") in (None, "")
+
+
+async def test_setor_ambiguo_nao_dispara_no_meio_do_formulario():
+    """Reproduz ao vivo em produção (2026-08-24, décimo-primeiro achado do
+    dia): mesmo com Região, Supervisor e Nome da Empresa já confirmados
+    (formulário claramente em andamento), o modelo re-derivou
+    `setor="Dpto Químico"` de uma frase antiga ainda no histórico — a
+    confirmação de setor sequestrou a rodada inteira e engoliu "bruno
+    tiara", a resposta real pro Gerente pendente. Uma vez que o
+    formulário dinâmico já tem campo confirmado, a checagem de setor não
+    deve mais disparar — mesmo com setor ainda vazio."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {
+            "regiao": "128-SUMARE",
+            "supervisor": "ELIEZER JERKE",
+            "nome_empresa_cliente": "Alumínios grave barra ltda",
+        },
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é o Gerente?"},
+        {"papel": "usuario", "conteudo": "bruno tiara"},
+    ]
+    saida = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={
+            "regiao": "128-SUMARE",
+            "supervisor": "ELIEZER JERKE",
+            "nome_empresa_cliente": "Alumínios grave barra ltda",
+            "gerente": "BRUNO TIARA DA SILVA",
+        },
+        setor="Dpto Químico",  # re-derivado (errado) pelo modelo de novo
+        departamento="Dpto Químico",
+        informacoes_suficientes=False,
+        perguntas=["Qual é o nome do contato do cliente?"],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        resposta = amb.responder.await_args.args[1]
+        assert "faz parte" not in resposta.lower()
+        assert "seu setor" not in resposta.lower()
+        # O Gerente respondido não pode se perder por causa do desvio de setor.
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["campos_formulario"]["gerente"] == "BRUNO TIARA DA SILVA"
+
+
 @pytest.mark.parametrize(
     "categoria,nome_campo",
     [
