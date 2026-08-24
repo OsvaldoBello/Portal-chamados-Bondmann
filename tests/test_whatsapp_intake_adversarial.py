@@ -577,3 +577,94 @@ async def test_valor_curto_demais_nunca_cria_chamado(categoria, nome_campo):
         await whatsapp_intake.processar_conversa("conversa-uuid")
         amb.criar.assert_not_awaited()
         _checar_invariantes(conn, amb, categoria)
+
+
+# ---------------------------------------------------------------------------
+# 11. Achados da simulação adversarial com modelo real (2026-08-24)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "texto,espera_reinicio",
+    [
+        # Cancelamento de verdade — tem que reiniciar.
+        ("na verdade nao, esquece... quero outra coisa", True),
+        ("cancela isso ai", True),
+        ("deixa pra la, quero abrir outro chamado", True),
+        ("nao era isso que eu queria", True),
+        ("quero recomecar do zero", True),
+        # Pular UM campo e seguir o MESMO pedido — NUNCA pode reiniciar.
+        ("esquece a regiao por enquanto, pode seguir com a ocorrencia mesmo", False),
+        ("na verdade nao, esquece a regiao por enquanto", False),
+        ("esquece a regiao por enquanto, abre a ocorrencia mesmo", False),
+        ("pode abrir sem a regiao por enquanto?", False),
+        ("deixa pra la essa parte, pode seguir", False),
+        ("cancela essa pergunta, pula essa e continua", False),
+        ("nao era isso, mas pode seguir mesmo assim", False),
+        ("depois eu passo o lote, pode continuar", False),
+    ],
+)
+def test_cancelar_um_campo_nao_e_cancelar_o_pedido(texto, espera_reinicio):
+    """Achado da simulação adversarial (2026-08-24): a detecção de reinício
+    era substring pura, então "esquece a região POR ENQUANTO, pode seguir"
+    apagava `categoria`, `campos_formulario` e o histórico inteiro. Na
+    conversa simulada a pessoa perdeu a descrição da ocorrência, o produto e
+    a região várias vezes, sem nunca entender por quê."""
+    assert whatsapp_intake._pede_novo_chamado(texto) is espera_reinicio
+
+
+@pytest.mark.parametrize(
+    "texto,esperado",
+    [
+        ("sumare", "128-SUMARE"),
+        ("canoas", "054-CANOAS"),
+        ("bento goncalves", "009-BENTO GONCALVES"),
+        ("santa maria", "038-SANTA MARIA"),
+    ],
+)
+def test_sugestao_encontra_regiao_pelo_nome_da_cidade(texto, esperado):
+    """A lista de Região tem 114 itens (não cabe no chat), então a mensagem de
+    recusa precisa sugerir as mais parecidas — senão a pessoa não tem como
+    descobrir o valor certo."""
+    campo = next(c for c in campos_da_categoria(CAT_OCORRENCIA) if c.name == "regiao")
+    sugestoes = whatsapp_intake._sugestoes_de_opcao(campo, texto)
+    assert esperado in sugestoes
+
+
+def test_sugestao_cobre_sao_paulo_dividido_em_varias_regioes():
+    """O beco sem saída real da simulação: quem é de São Paulo capital
+    respondeu "São Paulo capital", "São Paulo - SP" e "é São Paulo mesmo" em
+    rodadas seguidas e foi recusado em todas — a lista não tem "São Paulo",
+    ela é dividida em SP-NORTE/OESTE, SP-LESTE, SP-SUL e SP-ABCD."""
+    campo = next(c for c in campos_da_categoria(CAT_OCORRENCIA) if c.name == "regiao")
+    sugestoes = whatsapp_intake._sugestoes_de_opcao(campo, "é aqui em SP mesmo")
+    assert any("SP-" in s for s in sugestoes)
+
+
+def test_mensagem_de_recusa_nunca_e_beco_sem_saida():
+    """Sem sugestão possível, a mensagem ainda tem que oferecer um caminho —
+    nunca só repetir que a resposta foi recusada."""
+    campo = next(c for c in campos_da_categoria(CAT_OCORRENCIA) if c.name == "regiao")
+    msg = whatsapp_intake._pergunta_com_sugestoes(campo, "zzzzqqqq", "Não deu.")
+    assert len(msg) <= 700
+    assert "me manda de outro jeito" in msg.lower()
+
+
+@pytest.mark.parametrize(
+    "campo_a,campo_b",
+    [
+        ("nome_empresa_cliente", "produto"),
+        ("nome_contato_cliente", "nome_empresa_cliente"),
+        ("cidade", "regiao"),
+    ],
+)
+def test_valor_copiado_entre_campos_vizinhos_e_descartado(campo_a, campo_b):
+    """Achado da simulação adversarial (2026-08-24): com a pessoa falando do
+    produto o tempo todo, o modelo gravou `nome_empresa_cliente="DEGRAX 25"`
+    — nome do PRODUTO no campo da EMPRESA. Os dois são texto livre, então
+    nenhuma validação de lista pegava."""
+    limpo = whatsapp_intake._remover_copias_entre_campos(
+        {campo_a: "MESMO VALOR", campo_b: "MESMO VALOR"}
+    )
+    assert campo_a not in limpo
+    assert limpo[campo_b] == "MESMO VALOR"

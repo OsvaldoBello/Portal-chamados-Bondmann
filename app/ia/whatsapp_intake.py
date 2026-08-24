@@ -34,11 +34,13 @@ Garantias estruturais (mesmas Regras de Ouro do motor de triagem):
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 import random
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime
 from functools import lru_cache
@@ -351,6 +353,31 @@ _PEDE_NOVO_CHAMADO = (
     "nao era o que eu",
 )
 
+# Sinais de que a pessoa quer PULAR ALGO e seguir com o MESMO pedido, não
+# cancelar tudo — vencem as palavras de cancelamento acima quando aparecem
+# na mesma mensagem (ver :func:`_pede_novo_chamado`).
+_CONTINUA_MESMO_PEDIDO: tuple[str, ...] = (
+    "por enquanto",
+    "por hora",
+    "por ora",
+    "pode seguir",
+    "pode continuar",
+    "pode ir",
+    "pode abrir",
+    "abre mesmo",
+    "abrir mesmo",
+    "mesmo assim",
+    "sigo depois",
+    "depois eu passo",
+    "depois eu mando",
+    "depois eu vejo",
+    "deixa pra depois",
+    "pula essa",
+    "pula esse",
+    "pular essa",
+    "pular esse",
+)
+
 
 def _pede_novo_chamado(texto: str) -> bool:
     """``True`` quando o texto sinaliza, por palavra-chave, que o pedido em
@@ -367,7 +394,16 @@ def _pede_novo_chamado(texto: str) -> bool:
     queria" não disparava o reinício, então os campos do pedido abandonado
     (categoria/formulário do Químico) continuavam grudados na conversa."""
     alvo = (texto or "").strip().casefold()
-    return any(chave in alvo for chave in _PEDE_NOVO_CHAMADO)
+    if not any(chave in alvo for chave in _PEDE_NOVO_CHAMADO):
+        return False
+    # "esquece a região POR ENQUANTO, pode seguir com a ocorrência" não é
+    # cancelamento: é pedido pra PULAR UM CAMPO e continuar o mesmo chamado.
+    # Achado pela simulação adversarial (2026-08-24): a comparação por
+    # substring pura tratava isso como reinício e apagava TUDO
+    # (`categoria`, `campos_formulario`, `historico_desde`) — a pessoa
+    # perdeu a descrição da ocorrência, o produto e a região que já tinha
+    # dado, várias vezes na mesma conversa, sem nunca entender por quê.
+    return not any(sinal in alvo for sinal in _CONTINUA_MESMO_PEDIDO)
 
 
 def _quer_reiniciar_pedido(conversa: list[dict[str, Any]]) -> bool:
@@ -1148,6 +1184,12 @@ def _mapear_resposta_numerica_checkbox(
 _PARES_NAO_PODEM_SER_IGUAIS: tuple[tuple[str, str], ...] = (
     ("nome_contato_cliente", "nome_empresa_cliente"),
     ("cidade", "regiao"),
+    # Achado pela simulação adversarial (2026-08-24): com a pessoa falando
+    # do produto o tempo todo ("o desengraxante nosso"), o modelo gravou
+    # `nome_empresa_cliente="DEGRAX 25"` — o nome do PRODUTO no campo da
+    # EMPRESA. Nenhuma validação pegava: os dois são texto livre.
+    ("nome_empresa_cliente", "produto"),
+    ("nome_contato_cliente", "produto"),
 )
 
 
@@ -1278,6 +1320,80 @@ def _opcoes_numeradas_ou_none(campo: CampoDef) -> str | None:
     return "\n".join(f"{i}. {opcao}" for i, opcao in enumerate(campo.opcoes, 1))
 
 
+_STOPWORDS_SUGESTAO = frozenset({
+    "AQUI", "MESMO", "PARA", "PRA", "SOU", "CAPITAL", "REGIAO", "CIDADE", "FICA",
+    "PERTO", "CLIENTE", "EMPRESA", "NOSSO", "NOSSA", "ESSE", "ESSA", "COM", "SEM",
+})
+_TOKEN_SUGESTAO_RE = re.compile(r"[A-Z0-9]{2,}")
+
+
+def _normalizar_sugestao(texto: str) -> str:
+    """Maiúsculas sem acento — as opções do schema são gravadas assim
+    ("009-BENTO GONCALVES"), então comparar exige normalizar os dois lados."""
+    decomposto = unicodedata.normalize("NFD", texto)
+    return "".join(c for c in decomposto if unicodedata.category(c) != "Mn").upper()
+
+
+def _sugestoes_de_opcao(campo: CampoDef, texto: str, limite: int = 6) -> list[str]:
+    """Opções de ``campo`` mais parecidas com o que a pessoa escreveu.
+
+    Existe por um beco sem saída achado na simulação adversarial
+    (2026-08-24): "Região" tem 114 opções, então
+    :func:`_opcoes_numeradas_ou_none` (corretamente) não lista nenhuma — mas
+    a mensagem que sobrava era só "pode me dizer de novo, com o nome mais
+    completo/oficial possível?". Uma pessoa de São Paulo capital respondeu
+    "São Paulo capital", "São Paulo - SP" e "é São Paulo mesmo" em rodadas
+    seguidas e foi recusada em TODAS — a lista real não tem "São Paulo", ela
+    é dividida em SP-NORTE/OESTE, SP-LESTE, SP-SUL e SP-ABCD. Sem ver a
+    lista e sem pista nenhuma, não havia resposta possível: a conversa
+    morria ali.
+
+    Pontua por token: cada palavra significativa do texto que aparece na
+    opção soma o próprio tamanho (palavra longa vale mais que "SP"), e
+    ordena por pontuação. Sem nenhum acerto de token, cai em
+    :func:`difflib.get_close_matches` (pega erro de digitação, ex.: "canoas"
+    → "054-CANOAS"). Lista vazia quando nada se parece — aí o chamador
+    ainda tem que oferecer outra saída, nunca só repetir a recusa."""
+    alvo = _normalizar_sugestao(texto)
+    tokens = {
+        t for t in _TOKEN_SUGESTAO_RE.findall(alvo)
+        if t not in _STOPWORDS_SUGESTAO and not t.isdigit()
+    }
+    if tokens:
+        pontuadas: list[tuple[int, str]] = []
+        for opcao in campo.opcoes:
+            normalizada = _normalizar_sugestao(opcao)
+            ponto = sum(len(t) for t in tokens if t in normalizada)
+            if ponto:
+                pontuadas.append((ponto, opcao))
+        if pontuadas:
+            pontuadas.sort(key=lambda p: (-p[0], p[1]))
+            return [opcao for _ponto, opcao in pontuadas[:limite]]
+    normalizadas = {_normalizar_sugestao(o): o for o in campo.opcoes}
+    proximas = difflib.get_close_matches(alvo, list(normalizadas), n=3, cutoff=0.5)
+    return [normalizadas[p] for p in proximas]
+
+
+def _pergunta_com_sugestoes(campo: CampoDef, texto_usuario: str, abertura: str) -> str:
+    """Mensagem de correção que NUNCA é um beco sem saída: lista completa
+    quando cabe, senão as opções mais parecidas com o que a pessoa escreveu,
+    e sempre um caminho alternativo quando nem isso existe."""
+    itens = _opcoes_numeradas_ou_none(campo)
+    if itens is not None:
+        return f"{abertura} Escolha uma das opções abaixo (número ou nome):\n{itens}"
+    sugestoes = _sugestoes_de_opcao(campo, texto_usuario)
+    if sugestoes:
+        numeradas = "\n".join(f"{i}. {o}" for i, o in enumerate(sugestoes, 1))
+        return (
+            f"{abertura} As mais parecidas são estas — responda o número, ou "
+            f"me diga outro nome se não for nenhuma:\n{numeradas}"
+        )
+    return (
+        f"{abertura} Não achei nada parecido aqui. Me manda de outro jeito "
+        f"(o nome da cidade, ou o código, se você tiver) que eu procuro de novo."
+    )
+
+
 def _pergunta_valor_sem_respaldo(campo: CampoDef, texto_usuario: str) -> str:
     """Pergunta de correção pronta (código) quando o valor casado pelo
     modelo não tem respaldo no texto da pessoa — cita o que ELA escreveu
@@ -1287,10 +1403,7 @@ def _pergunta_valor_sem_respaldo(campo: CampoDef, texto_usuario: str) -> str:
         f'Não consegui confirmar que "{texto_usuario.strip()}" corresponde a um(a) '
         f"{_rotulo_chat(campo)} válido(a)."
     )
-    itens = _opcoes_numeradas_ou_none(campo)
-    if itens is None:
-        return f"{base} Pode me dizer de novo, com o nome mais completo/oficial possível?"
-    return f"{base} Escolha uma das opções abaixo (pode responder o número ou o nome):\n{itens}"
+    return _pergunta_com_sugestoes(campo, texto_usuario, base)
 
 
 def _campo_invalido_selecionado(
@@ -1348,10 +1461,7 @@ def _pergunta_valor_invalido_select(campo: CampoDef, valor_digitado: str) -> str
     opção real. Lista as opções numeradas pra facilitar responder por
     número — só quando a lista cabe num chat (:data:`_LIMITE_OPCOES_LISTAVEIS`)."""
     base = f'"{valor_digitado}" não é uma opção válida para {_rotulo_chat(campo)}.'
-    itens = _opcoes_numeradas_ou_none(campo)
-    if itens is None:
-        return f"{base} Pode me dizer de novo, com o nome mais completo/oficial possível?"
-    return f"{base} Escolha uma das opções abaixo (pode responder o número ou o nome):\n{itens}"
+    return _pergunta_com_sugestoes(campo, valor_digitado, base)
 
 
 def _setor_igual_departamento_pela_primeira_vez(
