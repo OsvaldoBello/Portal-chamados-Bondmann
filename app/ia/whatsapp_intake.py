@@ -115,6 +115,24 @@ _LEMBRETE_CAMPO_QUIMICO_TRAVADO = {
         "lista — nunca repita a pergunta sobre o campo que ela já respondeu."
     ),
 }
+# Achado real em produção (2026-08-24): `setor` (ou `categoria`) saiu
+# correto no SEU PRÓPRIO JSON estruturado desta rodada, mas `perguntas`
+# continuou perguntando por ele mesmo assim — diferente do caso acima
+# (que é sobre `campos_formulario`, o formulário dinâmico do Químico),
+# este é sobre os campos de topo, que valem pra qualquer departamento.
+_LEMBRETE_CAMPO_STICKY_TRAVADO = {
+    "role": "system",
+    "content": (
+        "Você MESMO já preencheu `setor` (ou `categoria`) corretamente na sua "
+        "saída estruturada desta rodada, com base na última mensagem "
+        "[usuário] — mas sua `pergunta` ainda pede essa mesma informação de "
+        "novo. Isso é proibido: releia o que VOCÊ MESMO acabou de preencher "
+        "em `setor`/`categoria` e pare de perguntar por isso. Sua pergunta "
+        "desta rodada passa a ser sobre o PRÓXIMO passo real (ex.: qual tipo "
+        "de solicitação, ou o que a pessoa precisa) — nunca repita a "
+        "pergunta sobre um campo que você mesmo já resolveu."
+    ),
+}
 # Margem antes de considerar uma conversa "travada" na reconciliação — evita
 # corrida com a task recém-disparada (mesmo papel de `_MARGEM_ORFAO` na
 # triagem, onde 1 min já se mostrou suficiente em produção).
@@ -678,6 +696,47 @@ def _pergunta_eh_eco_do_usuario(texto: str, conversa: list[dict[str, Any]]) -> b
     if ultima_usuario is None:
         return False
     return str(ultima_usuario.get("conteudo") or "").strip().casefold() == alvo
+
+
+_CAMPO_STICKY_ROTULO_RE = {
+    "setor": re.compile(r"\bsetor\b", re.IGNORECASE),
+    "categoria": re.compile(r"\bcategoria\b", re.IGNORECASE),
+}
+
+
+def _pergunta_menciona_campo_sticky_recem_resolvido(
+    pergunta: str, saida: SaidaWhatsAppIntake, campos_confirmados: dict[str, Any]
+) -> bool:
+    """``True`` quando a pergunta desta rodada AINDA menciona um campo
+    "sticky" de topo (``setor``, ``categoria``) que a PRÓPRIA saída desta
+    rodada acabou de resolver — não estava confirmado ANTES desta rodada
+    (``campos_confirmados``), está agora (``saida``). Mesmo princípio do
+    caso (2) de :func:`_quimico_travado_no_campo` (campo preenchido na
+    própria rodada, mas a pergunta ainda cita o rótulo dele), só que pros
+    campos de TOPO em vez do formulário dinâmico — se aplica a QUALQUER
+    departamento, não só Químico, já que ``setor`` é obrigatório pra
+    qualquer chamado.
+
+    Achado real em produção (2026-08-24, mesmo dia dos outros dez
+    achados): `saida.setor == "TI"` foi corretamente extraído NESTA
+    rodada (não estava confirmado antes) — dado certo, sem perda — mas
+    `perguntas` continuou "Qual é o seu setor mesmo?", palavra por
+    palavra (ou variações: "Beleza. Qual é o seu setor mesmo?" na rodada
+    seguinte, texto DIFERENTE mas mesmo problema — escapa até de
+    `_repete_mensagem_anterior`, que exige texto EXATO). O modelo captura
+    o dado no JSON estruturado mas esquece que já tem a resposta na hora
+    de escrever a pergunta em linguagem natural. Nenhuma rede anterior
+    pegava isso: `_quimico_travado_no_campo` só olha `campos_formulario`,
+    nunca os campos de topo."""
+    alvo = pergunta.strip().casefold()
+    if not alvo:
+        return False
+    for campo_nome, padrao in _CAMPO_STICKY_ROTULO_RE.items():
+        novo = str(getattr(saida, campo_nome, "") or "").strip()
+        antigo = campos_confirmados.get(campo_nome)
+        if novo and not antigo and padrao.search(alvo):
+            return True
+    return False
 
 
 def decidir_acao_intake(
@@ -2179,6 +2238,7 @@ async def _processar_conversa(conversa_id: str) -> None:
         else None
     )
     valor_sem_respaldo: tuple[CampoDef, str] | None = None
+    campo_sticky_travado = False
     if setor_ambiguo:
         assert saida is not None
         dados = saida.model_dump()
@@ -2239,28 +2299,46 @@ async def _processar_conversa(conversa_id: str) -> None:
                 _repete_mensagem_anterior(pergunta, conversa_visivel)
                 or _pergunta_eh_eco_do_usuario(pergunta, conversa_visivel)
             )
+            campo_sticky_travado = (
+                acao == "PERGUNTA"
+                and not repete_texto
+                and saida is not None
+                and _pergunta_menciona_campo_sticky_recem_resolvido(pergunta, saida, campos_confirmados)
+            )
             campo_quimico_travado = (
                 acao == "PERGUNTA"
                 and not repete_texto
+                and not campo_sticky_travado
                 and _quimico_travado_no_campo(saida, pergunta, campos_confirmados, campos_formulario_confirmados)
             )
-    if repete_texto or campo_quimico_travado:
-        # Duas redes de segurança contra a conversa travar pedindo a MESMA
+    if repete_texto or campo_quimico_travado or campo_sticky_travado:
+        # Três redes de segurança contra a conversa travar pedindo a MESMA
         # coisa pra sempre: (1) achado em produção 2026-08-19 — mesmo com o
         # estado da conversa injetado como fato, o modelo às vezes repete a
         # apresentação com texto IDÊNTICO; (2) achado em produção 2026-08-21,
         # específico do formulário do Químico — a pessoa responde um campo
         # claramente, mas o modelo não preenche `campos_formulario` nem
         # avança, só troca a frase de abertura da MESMA pergunta (não pega
-        # em (1), que só compara texto exato). Tenta de novo com reforço
-        # explícito antes de desistir (ver constantes no topo).
+        # em (1), que só compara texto exato); (3) achado em produção
+        # 2026-08-24 — o modelo preenche `setor`/`categoria` (campo de
+        # TOPO, não `campos_formulario`) corretamente na própria saída
+        # desta rodada, mas a `pergunta` em linguagem natural ainda pede
+        # essa mesma informação (ver :func:`_pergunta_menciona_campo_sticky_recem_resolvido`).
+        # Tenta de novo com reforço explícito antes de desistir (ver
+        # constantes no topo).
         log.warning(
             "[WA INTAKE] Conversa %s rodada %s: %s, tentando de novo.",
             conversa_id, rodada,
-            "resposta repetida" if repete_texto else "campo do Químico não avançou",
+            "resposta repetida" if repete_texto
+            else "campo de topo (setor/categoria) não refletido na pergunta" if campo_sticky_travado
+            else "campo do Químico não avançou",
         )
         repetiu = True
-        reforco = _LEMBRETE_ANTI_REPETICAO if repete_texto else _LEMBRETE_CAMPO_QUIMICO_TRAVADO
+        reforco = (
+            _LEMBRETE_ANTI_REPETICAO if repete_texto
+            else _LEMBRETE_CAMPO_STICKY_TRAVADO if campo_sticky_travado
+            else _LEMBRETE_CAMPO_QUIMICO_TRAVADO
+        )
         saida_retry, _erro_retry, tokens_in_retry, tokens_out_retry = await chamar_modelo_estruturado(
             [*mensagens, reforco],
             model=settings.whatsapp_intake_model,
@@ -2285,6 +2363,9 @@ async def _processar_conversa(conversa_id: str) -> None:
         ainda_travado = saida_retry is not None and acao_retry == "PERGUNTA" and (
             _repete_mensagem_anterior(pergunta_retry, conversa_visivel)
             or _pergunta_eh_eco_do_usuario(pergunta_retry, conversa_visivel)
+            or _pergunta_menciona_campo_sticky_recem_resolvido(
+                pergunta_retry, saida_retry, campos_confirmados
+            )
             or _quimico_travado_no_campo(
                 saida_retry, pergunta_retry, campos_confirmados, campos_formulario_confirmados
             )

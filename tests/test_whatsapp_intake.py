@@ -1781,6 +1781,59 @@ async def test_setor_confirmado_de_rodada_anterior_nao_reabre_pergunta():
         assert resultado["setor"] == "Dpto Químico"
 
 
+async def test_setor_resolvido_na_propria_rodada_nao_e_perguntado_de_novo():
+    """Reproduz ao vivo em produção (2026-08-24, décimo-segundo achado do
+    dia): `saida.setor == "TI"` foi corretamente extraído NESTA rodada
+    (não estava confirmado antes) — dado certo, sem perda — mas
+    `perguntas` continuou "Qual é o seu setor mesmo?", ignorando o que a
+    própria saída estruturada já resolveu. Como o texto não é EXATO a
+    nenhuma mensagem anterior do bot (o modelo reformula a cada vez —
+    "Ainda preciso saber isso...", depois "Beleza. Qual é o seu setor
+    mesmo?"), escapa de `_repete_mensagem_anterior`; como não é sobre
+    `campos_formulario` (é o campo de topo `setor`), escapa de
+    `_quimico_travado_no_campo`. `_pergunta_menciona_campo_sticky_recem_resolvido`
+    fecha essa lacuna."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "",
+        "departamento": "Dpto Químico",
+        "categoria": "",
+        "campos_formulario": {},
+    }
+    conn.mensagens_acumuladas = [
+        {
+            "papel": "assistente",
+            "conteudo": (
+                'Ainda preciso saber isso pra abrir certo: qual é o SEU setor '
+                '(não o "Dpto Químico", que é só o destino do chamado)? Pode '
+                "me dizer o nome dele."
+            ),
+        },
+        {"papel": "usuario", "conteudo": "TI"},
+    ]
+    travada = _saida_quimico(
+        "",
+        campos_formulario={},
+        setor="TI",  # extraído CORRETAMENTE nesta própria rodada
+        departamento="Dpto Químico",
+        informacoes_suficientes=False,
+        perguntas=["Beleza. Qual é o seu setor mesmo?"],  # ainda pergunta o que já resolveu
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[(travada, None, 100, 50), (travada, None, 90, 45)],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        resposta = amb.responder.await_args.args[1]
+        assert "seu setor" not in resposta.lower()
+        # O setor corretamente extraído não pode se perder.
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["setor"] == "TI"
+
+
 async def test_quimico_valor_de_select_sem_respaldo_no_texto_nao_e_aceito():
     """Reproduz ao vivo em produção (2026-08-24, quinta variante do mesmo
     dia): "brenda tavares" foi casado com "BRUNO TIARA DA SILVA" — um
