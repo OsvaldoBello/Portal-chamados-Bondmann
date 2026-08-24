@@ -1602,6 +1602,59 @@ async def test_quimico_valor_de_select_fora_da_lista_pergunta_de_novo():
         assert "opção inválida" not in resposta
 
 
+async def test_quimico_valor_invalido_nao_para_de_pedir_o_campo_certo():
+    """Reproduz ao vivo em produção (2026-08-24): a pessoa respondeu
+    "Roberto" pro Supervisor — nome que não existe na lista real. O modelo
+    achou que tinha capturado a resposta e JÁ pulou pra perguntar o PRÓXIMO
+    campo ("Qual é o gerente?"), sem saber que "Roberto" seria descartado
+    por :func:`whatsapp_intake._remover_valores_invalidos_de_select`. Sem
+    correção, `_quimico_travado_no_campo` detectava o travamento (nenhum
+    campo novo confirmado) e tentava de novo com o modelo — que repetia o
+    mesmo pulo — até cair na mensagem genérica `_TEXTO_CONTINUAR_GENERICO`
+    duas rodadas seguidas, sem NUNCA dizer que o problema era o Supervisor
+    nem quais eram as opções válidas. A correção detecta o valor inválido
+    na saída BRUTA do modelo e responde direto (sem gastar uma segunda
+    chamada) citando o campo certo."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {"regiao": "009-BENTO GONCALVES", "cidade": "Canoas"},
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é o supervisor?"},
+        {"papel": "usuario", "conteudo": "Roberto"},
+    ]
+    saida = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={
+            "regiao": "009-BENTO GONCALVES",
+            "cidade": "Canoas",
+            "supervisor": "Roberto",
+        },
+        informacoes_suficientes=False,
+        perguntas=["Qual é o gerente?"],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        # Não vale a pena chamar o modelo de novo — já se sabe o problema.
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 1
+        amb.criar.assert_not_awaited()
+        resposta = amb.responder.await_args.args[1]
+        assert "roberto" in resposta.lower()
+        assert "supervisor" in resposta.lower()
+        assert resposta != whatsapp_intake._TEXTO_CONTINUAR_GENERICO
+        # A auditoria tem que bater com o que foi mandado de verdade.
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["perguntas"] == [resposta]
+
+
 async def test_quimico_checkbox_multi_aceita_mais_de_uma_analise_solicitada():
     """"Análises solicitadas" é `checkbox_multi` — o modelo devolve uma LISTA
     com os itens exatos que a pessoa pediu (o bot apresentou as opções

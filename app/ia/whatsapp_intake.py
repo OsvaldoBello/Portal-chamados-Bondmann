@@ -1111,6 +1111,54 @@ def _remover_valores_invalidos_de_select(
     return limpo
 
 
+def _campo_invalido_selecionado(
+    nome_categoria: str, campos_formulario_bruto: dict[str, Any] | None
+) -> tuple[CampoDef, str] | None:
+    """Primeiro campo ``select``/``checkbox_multi`` cujo valor BRUTO (saída
+    do modelo desta rodada, ANTES de :func:`_remover_valores_invalidos_de_select`
+    descartar) não bate com nenhuma opção real — junto do texto que o
+    modelo tentou casar, pra citar na pergunta de correção. ``None`` quando
+    não há nenhum campo assim (nada foi descartado por valor inválido nesta
+    rodada).
+
+    Achado real em produção (2026-08-24, mesmo dia do 193027a): "Roberto"
+    (não existe como Supervisor) foi descartado corretamente pela rede de
+    segurança, mas ninguém avisava a pessoa disso — o modelo, sem saber que
+    o valor seria descartado, já tinha pulado para perguntar o PRÓXIMO
+    campo ("Qual é o gerente?"), então o campo Supervisor nunca voltava a
+    ser pedido de forma clara. A rede `_quimico_travado_no_campo` detectava
+    o travamento (nenhum campo novo confirmado) e tentava de novo com o
+    modelo, mas ele repetia o mesmo pulo — a conversa acabava presa num
+    loop da mensagem genérica `_TEXTO_CONTINUAR_GENERICO`, sem nunca dizer
+    qual campo era o problema nem quais eram as opções válidas."""
+    if not campos_formulario_bruto:
+        return None
+    definicoes = {c.name: c for c in campos_da_categoria(nome_categoria)}
+    for nome, valor in campos_formulario_bruto.items():
+        campo = definicoes.get(nome)
+        if campo is None or not campo.opcoes:
+            continue
+        if campo.tipo == "select" and isinstance(valor, str) and valor not in campo.opcoes:
+            return campo, valor
+        if campo.tipo == "checkbox_multi" and isinstance(valor, list) and valor:
+            if not any(v in campo.opcoes for v in valor):
+                return campo, ", ".join(str(v) for v in valor)
+    return None
+
+
+def _pergunta_valor_invalido_select(campo: CampoDef, valor_digitado: str) -> str:
+    """Pergunta de correção pronta (código, não modelo — mesmo princípio de
+    :func:`_pergunta_checkbox_multi_pendente`) quando o valor que a pessoa
+    deu pra um campo ``select``/``checkbox_multi`` não bate com nenhuma
+    opção real. Lista as opções numeradas pra facilitar responder por
+    número, igual ao formato do checkbox múltiplo."""
+    itens = "\n".join(f"{i}. {opcao}" for i, opcao in enumerate(campo.opcoes, 1))
+    return (
+        f'"{valor_digitado}" não é uma opção válida para {_rotulo_chat(campo)}. '
+        f"Escolha uma das opções abaixo (pode responder o número ou o nome):\n{itens}"
+    )
+
+
 def _ajustar_campos_formulario_quimico(
     saida: SaidaWhatsAppIntake | None, conversa: list[dict[str, Any]]
 ) -> SaidaWhatsAppIntake | None:
@@ -1830,6 +1878,7 @@ async def _processar_conversa(conversa_id: str) -> None:
     )
     if erro:
         log.warning("[WA INTAKE] Conversa %s sem saída útil: %s", conversa_id, erro)
+    campos_formulario_bruto = dict(saida.campos_formulario) if saida is not None else {}
     saida = _aplicar_campos_confirmados(saida, campos_confirmados, campos_formulario_confirmados)
     saida = _ajustar_campos_formulario_quimico(saida, conversa_visivel)
 
@@ -1839,12 +1888,29 @@ async def _processar_conversa(conversa_id: str) -> None:
     )
     repetiu = False
 
-    repete_texto = acao == "PERGUNTA" and _repete_mensagem_anterior(pergunta, conversa_visivel)
-    campo_quimico_travado = (
-        acao == "PERGUNTA"
-        and not repete_texto
-        and _quimico_travado_no_campo(saida, pergunta, campos_confirmados, campos_formulario_confirmados)
+    # Se a rodada descartou um valor de select/checkbox_multi que a pessoa
+    # acabou de dar (achado 2026-08-24, ver docstring de
+    # :func:`_campo_invalido_selecionado`), a resposta certa é pedir o MESMO
+    # campo de novo com as opções reais — não vale a pena chamar o modelo de
+    # novo (ele já demonstrou que pula pro próximo campo sem perceber o
+    # descarte), então isso tem prioridade sobre o retry genérico abaixo.
+    campo_invalido = (
+        _campo_invalido_selecionado(str(saida.categoria or ""), campos_formulario_bruto)
+        if acao == "PERGUNTA" and saida is not None and _eh_departamento_quimico(saida.departamento)
+        else None
     )
+    if campo_invalido is not None:
+        campo, valor_digitado = campo_invalido
+        pergunta = _pergunta_valor_invalido_select(campo, valor_digitado)
+        repete_texto = False
+        campo_quimico_travado = False
+    else:
+        repete_texto = acao == "PERGUNTA" and _repete_mensagem_anterior(pergunta, conversa_visivel)
+        campo_quimico_travado = (
+            acao == "PERGUNTA"
+            and not repete_texto
+            and _quimico_travado_no_campo(saida, pergunta, campos_confirmados, campos_formulario_confirmados)
+        )
     if repete_texto or campo_quimico_travado:
         # Duas redes de segurança contra a conversa travar pedindo a MESMA
         # coisa pra sempre: (1) achado em produção 2026-08-19 — mesmo com o
@@ -1899,10 +1965,18 @@ async def _processar_conversa(conversa_id: str) -> None:
             # usuário nunca recebe a mesma mensagem duas vezes.
             pergunta = _TEXTO_CONTINUAR_GENERICO
 
-    if acao == "PERGUNTA" and saida is not None and _eh_departamento_quimico(saida.departamento):
+    if (
+        campo_invalido is None
+        and acao == "PERGUNTA"
+        and saida is not None
+        and _eh_departamento_quimico(saida.departamento)
+    ):
         # Campo de múltipla escolha do Químico: o código formata a
         # pergunta (opções numeradas, uma por linha), nunca confia no
         # modelo pra isso — ver docstring de :func:`_pergunta_checkbox_multi_pendente`.
+        # Não roda quando `campo_invalido` já formatou a pergunta de
+        # correção acima — ela já inclui a lista numerada + o motivo da
+        # rejeição, mais informativa que a genérica.
         pergunta_checkbox = _pergunta_checkbox_multi_pendente(
             str(saida.categoria or ""), saida.campos_formulario
         )
@@ -1915,6 +1989,13 @@ async def _processar_conversa(conversa_id: str) -> None:
     resultado["historico_desde"] = historico_desde
     if repetiu:
         resultado["retry_anti_repeticao"] = True
+    if acao == "PERGUNTA" and saida is not None and pergunta != texto_das_perguntas(saida.perguntas):
+        # `saida.perguntas` (saída crua do modelo) pode ter sido substituída
+        # por um texto formatado em código (checkbox múltiplo, correção de
+        # valor inválido, ou a mensagem genérica anti-repetição) — sem isto
+        # a auditoria registra uma pergunta que a pessoa nunca recebeu,
+        # divergência real encontrada depurando esta rodada ao vivo.
+        resultado["perguntas"] = [pergunta]
 
     if acao == "PERGUNTA":
         assert saida is not None  # garantido por decidir_acao_intake
