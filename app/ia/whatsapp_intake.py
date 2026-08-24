@@ -1247,6 +1247,48 @@ def _pergunta_valor_invalido_select(campo: CampoDef, valor_digitado: str) -> str
     )
 
 
+def _setor_igual_departamento_pela_primeira_vez(
+    saida: SaidaWhatsAppIntake | None, campos_confirmados: dict[str, Any]
+) -> bool:
+    """``True`` quando ``setor`` (o setor de QUEM PEDE) e ``departamento``
+    (o DESTINO do chamado) resolveram pro MESMO valor NESTA rodada, e
+    ``setor`` ainda não estava confirmado em rodada anterior — sinal de
+    ambiguidade real, não necessariamente erro (pode ser legítimo alguém
+    do próprio departamento pedir pro próprio departamento).
+
+    Só dispara na rodada em que os dois são decididos PELA PRIMEIRA VEZ
+    (``setor`` ausente de ``campos_confirmados``) — se ``setor`` já veio
+    confirmado de rodada anterior, é só o modelo repetindo um fato já
+    estabelecido (não uma decisão nova), reabrir a pergunta toda vez
+    incomodaria sem necessidade.
+
+    Achado real em produção (2026-08-24): "Preciso registar uma ocorrencia
+    para o setor de departamento quimico" — pessoa do setor **TI** (visto
+    no cadastro) pedindo um chamado PRO Dpto Químico, mas o modelo
+    resolveu `setor="Dpto Químico"` também, porque a frase usa "setor" pra
+    descrever o destino, não a origem. `_casar_setor` não pega isso porque
+    "Dpto Químico" É um setor real e ativo — o valor bate com a lista, só
+    é o setor errado pra esta pessoa especificamente."""
+    if saida is None or campos_confirmados.get("setor"):
+        return False
+    setor = (saida.setor or "").strip().casefold()
+    departamento = (saida.departamento or "").strip().casefold()
+    return bool(setor) and bool(departamento) and setor == departamento
+
+
+def _pergunta_confirmar_setor(departamento: str) -> str:
+    """Pergunta de confirmação pronta (código) quando `setor` e
+    `departamento` colidem pela primeira vez — ver docstring de
+    :func:`_setor_igual_departamento_pela_primeira_vez`. Não afirma nem
+    "sim" nem "não": pede pra pessoa mesma desambiguar, porque as duas
+    respostas são legítimas."""
+    return (
+        f'Só confirmando: você faz parte do "{departamento}", ou está só '
+        f'pedindo um chamado PARA o "{departamento}"? Se for de outro '
+        "setor, me diga qual."
+    )
+
+
 def _pergunta_campo_pendente_fallback(
     nome_categoria: str, campos_formulario: dict[str, Any] | None
 ) -> str | None:
@@ -2017,19 +2059,42 @@ async def _processar_conversa(conversa_id: str) -> None:
     )
     repetiu = False
 
+    # Achado real em produção (2026-08-24), ver docstring de
+    # :func:`_setor_igual_departamento_pela_primeira_vez`: setor (quem
+    # pede) e departamento (destino) colidindo na rodada em que os dois
+    # são decididos é mais fundamental do que qualquer campo do
+    # formulário do Químico — resolve ANTES até do `campo_invalido`, sem
+    # rodar nenhuma das checagens abaixo nesta rodada.
+    setor_ambiguo = (
+        acao in ("PERGUNTA", "CRIAR_CHAMADO")
+        and _setor_igual_departamento_pela_primeira_vez(saida, campos_confirmados)
+    )
+    campo_invalido = (
+        _campo_invalido_selecionado(str(saida.categoria or ""), campos_formulario_bruto)
+        if not setor_ambiguo
+        and acao == "PERGUNTA"
+        and saida is not None
+        and _eh_departamento_quimico(saida.departamento)
+        else None
+    )
+    valor_sem_respaldo: tuple[CampoDef, str] | None = None
+    if setor_ambiguo:
+        assert saida is not None
+        dados = saida.model_dump()
+        pergunta = _pergunta_confirmar_setor(str(dados["departamento"]))
+        dados["setor"] = ""
+        dados["informacoes_suficientes"] = False
+        saida = SaidaWhatsAppIntake(**dados)
+        acao = "PERGUNTA"
+        repete_texto = False
+        campo_quimico_travado = False
     # Se a rodada descartou um valor de select/checkbox_multi que a pessoa
     # acabou de dar (achado 2026-08-24, ver docstring de
     # :func:`_campo_invalido_selecionado`), a resposta certa é pedir o MESMO
     # campo de novo com as opções reais — não vale a pena chamar o modelo de
     # novo (ele já demonstrou que pula pro próximo campo sem perceber o
     # descarte), então isso tem prioridade sobre o retry genérico abaixo.
-    campo_invalido = (
-        _campo_invalido_selecionado(str(saida.categoria or ""), campos_formulario_bruto)
-        if acao == "PERGUNTA" and saida is not None and _eh_departamento_quimico(saida.departamento)
-        else None
-    )
-    valor_sem_respaldo: tuple[CampoDef, str] | None = None
-    if campo_invalido is not None:
+    elif campo_invalido is not None:
         campo, valor_digitado = campo_invalido
         pergunta = _pergunta_valor_invalido_select(campo, valor_digitado)
         repete_texto = False
@@ -2150,7 +2215,8 @@ async def _processar_conversa(conversa_id: str) -> None:
             pergunta = pergunta_fallback or _TEXTO_CONTINUAR_GENERICO
 
     if (
-        campo_invalido is None
+        not setor_ambiguo
+        and campo_invalido is None
         and valor_sem_respaldo is None
         and acao == "PERGUNTA"
         and saida is not None
@@ -2159,8 +2225,8 @@ async def _processar_conversa(conversa_id: str) -> None:
         # Campo de múltipla escolha do Químico: o código formata a
         # pergunta (opções numeradas, uma por linha), nunca confia no
         # modelo pra isso — ver docstring de :func:`_pergunta_checkbox_multi_pendente`.
-        # Não roda quando `campo_invalido`/`valor_sem_respaldo` já formatou
-        # a pergunta de correção acima — ela já inclui a lista numerada +
+        # Não roda quando `setor_ambiguo`/`campo_invalido`/`valor_sem_respaldo`
+        # já formatou a pergunta de correção acima — ela já inclui a lista numerada +
         # o motivo da rejeição, mais informativa que a genérica.
         pergunta_checkbox = _pergunta_checkbox_multi_pendente(
             str(saida.categoria or ""), saida.campos_formulario

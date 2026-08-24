@@ -1707,6 +1707,80 @@ async def test_quimico_pergunta_que_eh_eco_da_resposta_nao_vai_pro_usuario():
         assert resultado["campos_formulario"]["supervisor"] == "ROGERIO DA COSTA CARDOSO"
 
 
+async def test_setor_igual_departamento_na_primeira_vez_pede_confirmacao():
+    """Reproduz ao vivo em produção (2026-08-24, sexta variante do mesmo
+    dia): "Preciso registar uma ocorrencia para o setor de departamento
+    quimico" — pessoa do setor TI (cadastro) pedindo um chamado PRO Dpto
+    Químico, mas o modelo resolveu `setor="Dpto Químico"` também, porque a
+    frase usa "setor" pra descrever o destino, não a origem. `_casar_setor`
+    não pegaria isso: "Dpto Químico" É um setor real e ativo, só é o
+    errado pra esta pessoa. Como pode ser legítimo (alguém do próprio
+    Químico pedindo pro Químico), a resposta certa é CONFIRMAR, não
+    aceitar nem rejeitar de cara — e nunca criar chamado nem gravar o
+    setor ambíguo até a pessoa esclarecer."""
+    conn = FakeConn()
+    saida = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={},
+        setor="Dpto Químico",
+        departamento="Dpto Químico",
+        informacoes_suficientes=False,
+        perguntas=["Entendi. Você é do Dpto Químico, beleza. Me diz só o que aconteceu na ocorrência."],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        amb.criar.assert_not_awaited()
+        resposta = amb.responder.await_args.args[1]
+        assert "dpto químico" in resposta.lower()
+        assert "?" in resposta  # pergunta de confirmação, não afirmação
+        resultado = json.loads(conn.auditorias[0][3])
+        assert not resultado.get("setor")
+        # Departamento (destino) não é afetado — só o setor ambíguo.
+        assert resultado["departamento"] == "Dpto Químico"
+
+
+async def test_setor_confirmado_de_rodada_anterior_nao_reabre_pergunta():
+    """Mesmo cenário de colisão setor==departamento, mas `setor` JÁ estava
+    confirmado numa rodada anterior — não é uma decisão nova, é só o
+    modelo repetindo um fato já estabelecido (ex.: legitimamente alguém do
+    próprio Dpto Químico pedindo pro Dpto Químico). Não deve reabrir a
+    pergunta de confirmação toda rodada."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "Dpto Químico",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {},
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é a região da ocorrência?"},
+        {"papel": "usuario", "conteudo": "Canoas"},
+    ]
+    saida = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={"regiao": "054-CANOAS"},
+        setor="Dpto Químico",
+        departamento="Dpto Químico",
+        informacoes_suficientes=False,
+        perguntas=["Qual é o supervisor?"],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=saida, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        resposta = amb.responder.await_args.args[1]
+        assert "dpto químico" not in resposta.lower()
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["setor"] == "Dpto Químico"
+
+
 async def test_quimico_valor_de_select_sem_respaldo_no_texto_nao_e_aceito():
     """Reproduz ao vivo em produção (2026-08-24, quinta variante do mesmo
     dia): "brenda tavares" foi casado com "BRUNO TIARA DA SILVA" — um
