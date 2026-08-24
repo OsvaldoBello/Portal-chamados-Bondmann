@@ -776,7 +776,7 @@ async def test_falha_transitoria_do_provedor_nao_zera_a_conversa():
     with ambiente(
         conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
         saida=saida, catalogo=_CATALOGO_QUIMICO,
-    ) as amb:
+    ):
         await whatsapp_intake.processar_conversa("conversa-uuid")
 
         resultado = json.loads(conn.auditorias[0][3])
