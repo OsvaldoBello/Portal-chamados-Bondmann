@@ -1159,6 +1159,40 @@ def _pergunta_valor_invalido_select(campo: CampoDef, valor_digitado: str) -> str
     )
 
 
+def _pergunta_campo_pendente_fallback(
+    nome_categoria: str, campos_formulario: dict[str, Any] | None
+) -> str | None:
+    """Pergunta pronta (código) sobre o PRÓXIMO campo pendente, usada como
+    fallback quando a rede anti-repetição/travamento não confia no texto do
+    modelo (nem no da tentativa original, nem no do retry) mas o formulário
+    TEVE progresso real nesta rodada — ``None`` quando não há mais campo
+    pendente (formulário completo) ou a categoria não tem schema conhecido.
+
+    Achado real em produção (2026-08-24): "roger" foi corretamente casado
+    com "ROGERIO DA COSTA CARDOSO" (valor válido) em `campos_formulario`,
+    mas o modelo repetiu o texto EXATO de "Qual é o Supervisor?" (provável
+    tentativa de confirmar a pessoa certa) — isso disparou
+    `_repete_mensagem_anterior`, o retry produziu algo que ainda mencionava
+    "Supervisor" (pegou em `_quimico_travado_no_campo`), e a conversa caía
+    na mensagem TOTALMENTE genérica `_TEXTO_CONTINUAR_GENERICO` mesmo com o
+    dado certo já capturado — pior ainda, o usuário respondia de novo o que
+    já tinha sido entendido, achando que o bot esqueceu tudo. Como já se
+    sabe com certeza qual é o próximo campo real (schema, não modelo), vale
+    mais perguntar ele diretamente do que arriscar mais uma rodada confusa
+    do modelo."""
+    campos = campos_da_categoria(nome_categoria)
+    preenchidos = campos_formulario or {}
+    proximo = next((c for c in campos if c.name not in preenchidos), None)
+    if proximo is None:
+        return None
+    if proximo.tipo == "checkbox_multi":
+        return _pergunta_checkbox_multi_pendente(nome_categoria, campos_formulario)
+    if proximo.opcoes:
+        itens = "\n".join(f"{i}. {opcao}" for i, opcao in enumerate(proximo.opcoes, 1))
+        return f"Certo, anotado! Agora, {_rotulo_chat(proximo)}? Opções:\n{itens}"
+    return f"Certo, anotado! Agora, {_rotulo_chat(proximo)}?"
+
+
 def _ajustar_campos_formulario_quimico(
     saida: SaidaWhatsAppIntake | None, conversa: list[dict[str, Any]]
 ) -> SaidaWhatsAppIntake | None:
@@ -1962,8 +1996,24 @@ async def _processar_conversa(conversa_id: str) -> None:
             # Travou de novo (ou a tentativa falhou): mantém o `setor`/demais
             # campos já extraídos por `saida` (a rede de segurança troca só o
             # TEXTO enviado, nunca descarta dado real já capturado), mas o
-            # usuário nunca recebe a mesma mensagem duas vezes.
-            pergunta = _TEXTO_CONTINUAR_GENERICO
+            # usuário nunca recebe a mesma mensagem duas vezes. Se HOUVE
+            # progresso real nesta rodada (um campo novo válido foi
+            # capturado — só o TEXTO da pergunta que travou), pergunta
+            # direto pelo PRÓXIMO campo pendente do schema em vez da
+            # mensagem totalmente genérica (achado 2026-08-24: "roger" foi
+            # casado certo com um supervisor válido, mas a mensagem
+            # genérica fez a pessoa achar que precisava recomeçar do zero).
+            novos_desta_rodada = (
+                _campos_novos_desta_rodada(campos_formulario_confirmados, saida.campos_formulario)
+                if saida is not None and _eh_departamento_quimico(saida.departamento)
+                else []
+            )
+            pergunta_fallback = (
+                _pergunta_campo_pendente_fallback(str(saida.categoria or ""), saida.campos_formulario)
+                if novos_desta_rodada and saida is not None
+                else None
+            )
+            pergunta = pergunta_fallback or _TEXTO_CONTINUAR_GENERICO
 
     if (
         campo_invalido is None

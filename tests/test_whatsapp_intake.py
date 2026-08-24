@@ -1576,6 +1576,76 @@ async def test_quimico_campo_obrigatorio_faltando_pergunta_em_vez_de_criar():
         assert "preencha o campo" not in resposta.lower()
 
 
+async def test_quimico_progresso_real_nao_cai_na_mensagem_totalmente_generica():
+    """Reproduz ao vivo em produção (2026-08-24, depois do fix anterior no
+    mesmo dia): "roger" foi corretamente casado com um Supervisor VÁLIDO
+    ("ROGERIO DA COSTA CARDOSO") em `campos_formulario` — nenhum valor
+    inválido aqui. Mas o modelo repetiu o texto EXATO da pergunta anterior
+    ("Qual é o Supervisor?", provável tentativa de confirmar a pessoa
+    certa), disparando `_repete_mensagem_anterior`; o retry produziu uma
+    pergunta que AINDA menciona "Supervisor" (pega por
+    `_quimico_travado_no_campo`), então a conversa caía na mensagem
+    TOTALMENTE genérica mesmo com o dado certo já capturado — o usuário
+    achava que precisava recomeçar do zero. Como houve progresso real
+    (`supervisor` é novo comparado ao confirmado antes), a resposta final
+    deve perguntar pelo PRÓXIMO campo real, não a mensagem genérica."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {
+            "regiao": "038-SANTA MARIA",
+            "produto": "DEGRAX 25",
+            "codigo_cliente": "CLI20244",
+            "descricao_situacao": "O produto Degrax 25 corroeu a estrutura metálica do cliente.",
+        },
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é o Supervisor?"},
+        {"papel": "usuario", "conteudo": "roger"},
+    ]
+    campos_com_supervisor = {
+        "regiao": "038-SANTA MARIA",
+        "produto": "DEGRAX 25",
+        "codigo_cliente": "CLI20244",
+        "descricao_situacao": "O produto Degrax 25 corroeu a estrutura metálica do cliente.",
+        "supervisor": "ROGERIO DA COSTA CARDOSO",
+    }
+    primeira_tentativa = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario=campos_com_supervisor,
+        informacoes_suficientes=False,
+        perguntas=["Qual é o Supervisor?"],  # repete EXATO a pergunta anterior
+    )
+    segunda_tentativa = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario=campos_com_supervisor,
+        informacoes_suficientes=False,
+        perguntas=["Confirma que o supervisor é Rogério da Costa Cardoso?"],  # ainda cita o rótulo
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[
+            (primeira_tentativa, None, 100, 50),
+            (segunda_tentativa, None, 100, 50),
+        ],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 2
+        amb.criar.assert_not_awaited()
+        resposta = amb.responder.await_args.args[1]
+        assert resposta != whatsapp_intake._TEXTO_CONTINUAR_GENERICO
+        # Não repete a pergunta que já foi respondida.
+        assert "qual é o supervisor" not in resposta.lower()
+        # Dado capturado nesta rodada não pode se perder.
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["campos_formulario"]["supervisor"] == "ROGERIO DA COSTA CARDOSO"
+
+
 async def test_quimico_valor_de_select_fora_da_lista_pergunta_de_novo():
     """Valor de `select` que não bate EXATO com a lista real (alucinação ou
     interpretação errada do modelo) nunca vira dado gravado — descartado já
