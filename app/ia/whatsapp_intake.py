@@ -1328,7 +1328,10 @@ def _pergunta_confirmar_setor(departamento: str, *, ja_perguntado: bool = False)
 
 
 def _pergunta_campo_pendente_fallback(
-    nome_categoria: str, campos_formulario: dict[str, Any] | None
+    nome_categoria: str,
+    campos_formulario: dict[str, Any] | None,
+    *,
+    tentativa_rejeitada: str = "",
 ) -> str | None:
     """Pergunta pronta (código) sobre o PRÓXIMO campo pendente, usada como
     fallback sempre que a rede anti-repetição/travamento não confia no
@@ -1344,6 +1347,16 @@ def _pergunta_campo_pendente_fallback(
     repetido) quanto nenhum progresso (campo genuinamente sem resposta
     reconhecível ainda), e afirmar "anotado" no segundo caso mentiria pro
     usuário. Mesmo tom neutro de `_reescrever_erro_formulario_quimico`.
+
+    ``tentativa_rejeitada`` (achado real em produção 2026-08-24, MESMO dia
+    dos três achados abaixo): esta função sendo determinística — sempre o
+    mesmo texto pro mesmo campo pendente — significa que, se a pessoa
+    erra o campo VÁRIAS vezes seguidas (cada vez com um valor diferente,
+    mas nenhum reconhecido), o CHAMADOR desta função manda a MESMA
+    mensagem repetida — quebra o princípio de "nunca manda a mesma
+    mensagem duas vezes" que o resto do sistema segue. Quando o chamador
+    detecta essa repetição, passa o texto que a pessoa ACABOU de tentar
+    aqui, pra reconhecer a tentativa em vez de repetir cru.
 
     Três achados reais em produção no mesmo dia (2026-08-24) motivaram
     tratar isto sem depender de progresso: (1) "roger" → valor válido, mas
@@ -1362,13 +1375,14 @@ def _pergunta_campo_pendente_fallback(
         return None
     if proximo.tipo == "checkbox_multi":
         return _pergunta_checkbox_multi_pendente(nome_categoria, campos_formulario)
+    rotulo = _rotulo_chat(proximo)
+    prefixo = f'"{tentativa_rejeitada}" não é reconhecido. ' if tentativa_rejeitada else ""
     if proximo.opcoes:
-        rotulo = _rotulo_chat(proximo)
         itens = _opcoes_numeradas_ou_none(proximo)
         if itens is None:
-            return f'Ainda preciso saber "{rotulo}".'
-        return f'Ainda preciso saber "{rotulo}". Escolha uma das opções abaixo:\n{itens}'
-    return f'Ainda preciso de "{_rotulo_chat(proximo)}" pra completar o registro.'
+            return f'{prefixo}Ainda preciso saber "{rotulo}".'
+        return f'{prefixo}Ainda preciso saber "{rotulo}". Escolha uma das opções abaixo:\n{itens}'
+    return f'{prefixo}Ainda preciso de "{rotulo}" pra completar o registro.'
 
 
 def _ajustar_campos_formulario_quimico(
@@ -2256,6 +2270,25 @@ async def _processar_conversa(conversa_id: str) -> None:
                 if saida is not None and _eh_departamento_quimico(saida.departamento)
                 else None
             )
+            if pergunta_fallback is not None and _repete_mensagem_anterior(
+                pergunta_fallback, conversa_visivel
+            ):
+                # Achado real em produção (2026-08-24): a pessoa errou o
+                # mesmo campo 3 vezes seguidas com valores DIFERENTES
+                # ("Osvaldo", "Bruno tiaea", "Bruno tiara" — nenhum é
+                # Supervisor real), mas como esta mensagem é determinística
+                # (sempre o mesmo texto pro mesmo campo pendente), o
+                # próprio fallback virou a mensagem repetida — reconhece a
+                # tentativa mais recente em vez de repetir cru.
+                ultima_usuario = next(
+                    (m for m in reversed(conversa_visivel) if m.get("papel") == "usuario"), None
+                )
+                texto_ultima = str((ultima_usuario or {}).get("conteudo") or "").strip()
+                if texto_ultima:
+                    pergunta_fallback = _pergunta_campo_pendente_fallback(
+                        str(saida.categoria or ""), saida.campos_formulario,
+                        tentativa_rejeitada=texto_ultima,
+                    )
             pergunta = pergunta_fallback or _TEXTO_CONTINUAR_GENERICO
 
     if (

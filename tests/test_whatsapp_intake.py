@@ -1894,6 +1894,59 @@ async def test_quimico_campo_omitido_pelo_modelo_tambem_nao_cai_no_generico():
         assert "supervisor" in resposta.lower()
 
 
+async def test_quimico_fallback_nao_repete_mensagem_identica_em_erros_seguidos():
+    """Reproduz ao vivo em produção (2026-08-24, nono achado do mesmo dia):
+    a pessoa errou o campo Supervisor 3 VEZES SEGUIDAS com valores
+    DIFERENTES ("Osvaldo", "Bruno tiaea", "Bruno tiara" — nenhum é
+    Supervisor real, "Bruno Tiara da Silva" é GERENTE) — mas como
+    `_pergunta_campo_pendente_fallback` é determinística (sempre o mesmo
+    texto pro mesmo campo pendente), a rodada seguinte a uma rodada que já
+    usou o fallback mandava a mensagem IDÊNTICA de novo (captura de tela
+    do usuário mostra "Ainda preciso saber "Supervisor"." três vezes
+    seguidas) — quebra o princípio de "nunca manda a mesma mensagem duas
+    vezes" que o resto do sistema segue. Na rodada em que o fallback
+    REPETE o que já foi mandado, deve reconhecer a tentativa mais recente
+    da pessoa em vez de repetir cru."""
+    conn = FakeConn()
+    conn.rodada = 1
+    campos_sem_supervisor = {
+        "regiao": "128-SUMARE",
+        "nome_empresa_cliente": "Alumínios grave barra ltda",
+    }
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": campos_sem_supervisor,
+    }
+    # A rodada ANTERIOR já usou o fallback determinístico pra Supervisor —
+    # é essa mensagem que a próxima rodada não pode repetir.
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": 'Ainda preciso saber "Supervisor".'},
+        {"papel": "usuario", "conteudo": "Bruno tiara"},
+    ]
+    tentativa = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario=dict(campos_sem_supervisor),  # supervisor NÃO incluído de novo
+        informacoes_suficientes=False,
+        perguntas=['Ainda preciso saber "Supervisor".'],  # igual à rodada anterior
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[
+            (tentativa, None, 100, 50),
+            (tentativa, None, 100, 50),  # retry produz a mesma coisa, ainda travado
+        ],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        resposta = amb.responder.await_args.args[1]
+        assert resposta != 'Ainda preciso saber "Supervisor".'
+        assert "bruno tiara" in resposta.lower()
+        assert "supervisor" in resposta.lower()
+
+
 async def test_quimico_valor_de_select_fora_da_lista_pergunta_de_novo():
     """Valor de `select` que não bate EXATO com a lista real (alucinação ou
     interpretação errada do modelo) nunca vira dado gravado — descartado já
