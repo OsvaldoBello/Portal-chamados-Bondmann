@@ -1707,6 +1707,66 @@ async def test_quimico_pergunta_que_eh_eco_da_resposta_nao_vai_pro_usuario():
         assert resultado["campos_formulario"]["supervisor"] == "ROGERIO DA COSTA CARDOSO"
 
 
+async def test_quimico_valor_de_select_sem_respaldo_no_texto_nao_e_aceito():
+    """Reproduz ao vivo em produção (2026-08-24, quinta variante do mesmo
+    dia): "brenda tavares" foi casado com "BRUNO TIARA DA SILVA" — um
+    Gerente REAL, tecnicamente válido na lista (`_remover_valores_
+    invalidos_de_select` não pega, o valor BATE com o schema), mas sem
+    NENHUMA relação com o que a pessoa realmente escreveu. O bot respondeu
+    perguntando o PRÓXIMO campo (nome da empresa) como se "gerente"
+    estivesse resolvido — o usuário nunca soube que o valor foi
+    inventado. `_valor_select_sem_respaldo_textual` fecha essa lacuna
+    comparando a última mensagem do usuário com o valor escolhido."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {
+            "regiao": "038-SANTA MARIA",
+            "supervisor": "ROGERIO DA COSTA CARDOSO",
+            "codigo_cliente": "CLI20244",
+            "descricao_situacao": "O produto Degrax 25 corroeu a estrutura metálica do cliente.",
+        },
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é o Gerente?"},
+        {"papel": "usuario", "conteudo": "brenda tavares"},
+    ]
+    chute = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario={
+            "regiao": "038-SANTA MARIA",
+            "supervisor": "ROGERIO DA COSTA CARDOSO",
+            "gerente": "BRUNO TIARA DA SILVA",  # opção REAL, mas sem relação com "brenda tavares"
+            "codigo_cliente": "CLI20244",
+            "descricao_situacao": "O produto Degrax 25 corroeu a estrutura metálica do cliente.",
+        },
+        informacoes_suficientes=False,
+        perguntas=['Ainda preciso de "Nome da Empresa (Cliente)" pra completar o registro.'],
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        saida=chute, catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        # Sem retry desperdiçado — o código já sabe que não há respaldo.
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 1
+        amb.criar.assert_not_awaited()
+        resposta = amb.responder.await_args.args[1]
+        assert "brenda tavares" in resposta.lower()
+        assert "gerente" in resposta.lower()
+        # O valor inventado NUNCA pode virar dado gravado.
+        resultado = json.loads(conn.auditorias[0][3])
+        campos_gravados = resultado.get("campos_formulario") or {}
+        assert "gerente" not in campos_gravados
+        # Os demais campos válidos sobrevivem intactos.
+        assert campos_gravados["supervisor"] == "ROGERIO DA COSTA CARDOSO"
+        assert campos_gravados["regiao"] == "038-SANTA MARIA"
+
+
 async def test_quimico_campo_omitido_pelo_modelo_tambem_nao_cai_no_generico():
     """Reproduz ao vivo em produção (2026-08-24, terceira variante do mesmo
     dia): "osvaldo" não tem nenhuma semelhança com nenhum Supervisor real —

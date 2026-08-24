@@ -1135,6 +1135,70 @@ def _remover_valores_invalidos_de_select(
     return limpo
 
 
+def _tem_sobreposicao_lexical(a: str, b: str) -> bool:
+    """``True`` quando ``a`` e ``b`` compartilham ao menos uma palavra
+    significativa (>2 letras) em comum — uma é substring da outra depois
+    de casefold. ``True`` também quando um dos dois não tem palavra
+    significativa nenhuma (ex.: puro número) — sem base pra desconfiar."""
+    palavras_a = {p for p in _PALAVRA_RE.findall(a.casefold()) if len(p) > 2}
+    palavras_b = {p for p in _PALAVRA_RE.findall(b.casefold()) if len(p) > 2}
+    if not palavras_a or not palavras_b:
+        return True
+    return any(x in y or y in x for x in palavras_a for y in palavras_b)
+
+
+def _valor_select_sem_respaldo_textual(
+    nome_categoria: str,
+    campos_formulario_bruto: dict[str, Any],
+    campos_formulario_confirmados: dict[str, Any],
+    ultima_mensagem_usuario: str,
+) -> tuple[CampoDef, str] | None:
+    """Detecta o PRÓXIMO campo pendente (o que ainda não estava confirmado
+    ANTES desta rodada) quando o valor que o modelo escolheu pra ele É uma
+    opção REAL da lista, mas SEM NENHUMA relação lexical com o que a
+    pessoa de fato escreveu na última mensagem — o modelo "chutou" uma
+    opção válida sem correspondência genuína, em vez de admitir que não
+    reconheceu a resposta.
+
+    Só olha o campo que ainda não estava confirmado — um valor
+    RESTABELECIDO de rodada anterior (ex.: o modelo re-lista um campo já
+    confirmado no seu próprio `campos_formulario` desta rodada) não tem
+    por que se relacionar com a última mensagem, que é sobre outro
+    assunto; checar ele geraria falso positivo.
+
+    Achado real em produção (2026-08-24): "brenda tavares" foi casado com
+    "BRUNO TIARA DA SILVA" — um Gerente REAL, tecnicamente válido na
+    lista, mas sem nenhuma semelhança com o que a pessoa escreveu.
+    `_remover_valores_invalidos_de_select` não pega isso porque o valor
+    BATE com a lista — o problema é a correspondência em si ser
+    inventada, não o valor estar fora do schema."""
+    campos = campos_da_categoria(nome_categoria)
+    proximo = next((c for c in campos if c.name not in campos_formulario_confirmados), None)
+    if proximo is None or proximo.tipo != "select" or not proximo.opcoes:
+        return None
+    valor = campos_formulario_bruto.get(proximo.name)
+    if not isinstance(valor, str) or valor not in proximo.opcoes:
+        return None
+    if not ultima_mensagem_usuario.strip():
+        return None
+    if _tem_sobreposicao_lexical(ultima_mensagem_usuario, valor):
+        return None
+    return proximo, valor
+
+
+def _pergunta_valor_sem_respaldo(campo: CampoDef, texto_usuario: str) -> str:
+    """Pergunta de correção pronta (código) quando o valor casado pelo
+    modelo não tem respaldo no texto da pessoa — cita o que ELA escreveu
+    (não o valor inventado pelo modelo, que confundiria: é tecnicamente
+    válido, só não é o que ela quis dizer)."""
+    itens = "\n".join(f"{i}. {opcao}" for i, opcao in enumerate(campo.opcoes, 1))
+    return (
+        f'Não consegui confirmar que "{texto_usuario.strip()}" corresponde a um(a) '
+        f"{_rotulo_chat(campo)} válido(a). Escolha uma das opções abaixo "
+        f"(pode responder o número ou o nome):\n{itens}"
+    )
+
+
 def _campo_invalido_selecionado(
     nome_categoria: str, campos_formulario_bruto: dict[str, Any] | None
 ) -> tuple[CampoDef, str] | None:
@@ -1964,21 +2028,53 @@ async def _processar_conversa(conversa_id: str) -> None:
         if acao == "PERGUNTA" and saida is not None and _eh_departamento_quimico(saida.departamento)
         else None
     )
+    valor_sem_respaldo: tuple[CampoDef, str] | None = None
     if campo_invalido is not None:
         campo, valor_digitado = campo_invalido
         pergunta = _pergunta_valor_invalido_select(campo, valor_digitado)
         repete_texto = False
         campo_quimico_travado = False
     else:
-        repete_texto = acao == "PERGUNTA" and (
-            _repete_mensagem_anterior(pergunta, conversa_visivel)
-            or _pergunta_eh_eco_do_usuario(pergunta, conversa_visivel)
+        # Achado real em produção (2026-08-24): o valor casado pelo modelo
+        # pode ser uma opção REAL da lista (passa incólume por
+        # `_remover_valores_invalidos_de_select`) mas sem NENHUMA relação
+        # com o que a pessoa escreveu — "brenda tavares" virou
+        # "BRUNO TIARA DA SILVA" (Gerente real, correspondência inventada).
+        # Mesma prioridade de `campo_invalido`: sem retry, remove o valor
+        # chutado e pede o campo de novo citando o texto ORIGINAL da
+        # pessoa (não o valor inventado, que confundiria).
+        ultima_msg_usuario = next(
+            (m for m in reversed(conversa_visivel) if m.get("papel") == "usuario"), None
         )
-        campo_quimico_travado = (
-            acao == "PERGUNTA"
-            and not repete_texto
-            and _quimico_travado_no_campo(saida, pergunta, campos_confirmados, campos_formulario_confirmados)
+        texto_ultima_msg_usuario = str((ultima_msg_usuario or {}).get("conteudo") or "")
+        valor_sem_respaldo = (
+            _valor_select_sem_respaldo_textual(
+                str(saida.categoria or ""), campos_formulario_bruto,
+                campos_formulario_confirmados, texto_ultima_msg_usuario,
+            )
+            if acao == "PERGUNTA" and saida is not None and _eh_departamento_quimico(saida.departamento)
+            else None
         )
+        if valor_sem_respaldo is not None:
+            campo, _valor_chutado = valor_sem_respaldo
+            pergunta = _pergunta_valor_sem_respaldo(campo, texto_ultima_msg_usuario)
+            dados = saida.model_dump()
+            dados["campos_formulario"] = {
+                k: v for k, v in dados["campos_formulario"].items() if k != campo.name
+            }
+            saida = SaidaWhatsAppIntake(**dados)
+            repete_texto = False
+            campo_quimico_travado = False
+        else:
+            repete_texto = acao == "PERGUNTA" and (
+                _repete_mensagem_anterior(pergunta, conversa_visivel)
+                or _pergunta_eh_eco_do_usuario(pergunta, conversa_visivel)
+            )
+            campo_quimico_travado = (
+                acao == "PERGUNTA"
+                and not repete_texto
+                and _quimico_travado_no_campo(saida, pergunta, campos_confirmados, campos_formulario_confirmados)
+            )
     if repete_texto or campo_quimico_travado:
         # Duas redes de segurança contra a conversa travar pedindo a MESMA
         # coisa pra sempre: (1) achado em produção 2026-08-19 — mesmo com o
@@ -2055,6 +2151,7 @@ async def _processar_conversa(conversa_id: str) -> None:
 
     if (
         campo_invalido is None
+        and valor_sem_respaldo is None
         and acao == "PERGUNTA"
         and saida is not None
         and _eh_departamento_quimico(saida.departamento)
@@ -2062,9 +2159,9 @@ async def _processar_conversa(conversa_id: str) -> None:
         # Campo de múltipla escolha do Químico: o código formata a
         # pergunta (opções numeradas, uma por linha), nunca confia no
         # modelo pra isso — ver docstring de :func:`_pergunta_checkbox_multi_pendente`.
-        # Não roda quando `campo_invalido` já formatou a pergunta de
-        # correção acima — ela já inclui a lista numerada + o motivo da
-        # rejeição, mais informativa que a genérica.
+        # Não roda quando `campo_invalido`/`valor_sem_respaldo` já formatou
+        # a pergunta de correção acima — ela já inclui a lista numerada +
+        # o motivo da rejeição, mais informativa que a genérica.
         pergunta_checkbox = _pergunta_checkbox_multi_pendente(
             str(saida.categoria or ""), saida.campos_formulario
         )
