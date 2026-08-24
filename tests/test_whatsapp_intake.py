@@ -1646,6 +1646,67 @@ async def test_quimico_progresso_real_nao_cai_na_mensagem_totalmente_generica():
         assert resultado["campos_formulario"]["supervisor"] == "ROGERIO DA COSTA CARDOSO"
 
 
+async def test_quimico_pergunta_que_eh_eco_da_resposta_nao_vai_pro_usuario():
+    """Reproduz ao vivo em produção (2026-08-24, quarta variante do mesmo
+    dia): "Rogério da Costa Cardoso" foi corretamente casado com o
+    Supervisor válido em `campos_formulario` (dado certo, sem perda) — mas
+    `perguntas` da rodada virou literalmente `["Rogério da Costa Cardoso"]`,
+    um eco puro da resposta do usuário, em vez de uma pergunta de verdade
+    sobre o próximo campo (Gerente). Nenhuma rede anterior pega isso:
+    `_repete_mensagem_anterior` só compara contra mensagens do BOT (esta é
+    idêntica à do USUÁRIO); `_quimico_travado_no_campo` só dispara quando o
+    texto MENCIONA o rótulo de um campo recém-preenchido (aqui não menciona
+    "Supervisor" nem nada). `_pergunta_eh_eco_do_usuario` fecha essa
+    lacuna."""
+    conn = FakeConn()
+    conn.rodada = 1
+    conn.resultado_confirmado = {
+        "setor": "TI",
+        "departamento": "Dpto Químico",
+        "categoria": CAT_OCORRENCIA,
+        "campos_formulario": {
+            "regiao": "038-SANTA MARIA",
+            "codigo_cliente": "CLI20244",
+            "descricao_situacao": "O produto Degrax 25 corroeu a estrutura metálica do cliente.",
+        },
+    }
+    conn.mensagens_acumuladas = [
+        {"papel": "assistente", "conteudo": "Qual é o Supervisor?"},
+        {"papel": "usuario", "conteudo": "Rogério da Costa Cardoso"},
+    ]
+    campos_com_supervisor = {
+        "regiao": "038-SANTA MARIA",
+        "codigo_cliente": "CLI20244",
+        "descricao_situacao": "O produto Degrax 25 corroeu a estrutura metálica do cliente.",
+        "supervisor": "ROGERIO DA COSTA CARDOSO",
+    }
+    eco = _saida_quimico(
+        CAT_OCORRENCIA,
+        campos_formulario=campos_com_supervisor,
+        informacoes_suficientes=False,
+        perguntas=["Rogério da Costa Cardoso"],  # eco puro da resposta do usuário
+    )
+    with ambiente(
+        conn, _settings(whatsapp_intake_departamentos="Dpto Químico"),
+        respostas_modelo=[
+            (eco, None, 100, 50),
+            (eco, None, 90, 45),  # retry repete o mesmo eco
+        ],
+        catalogo=_CATALOGO_QUIMICO,
+    ) as amb:
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        assert whatsapp_intake.chamar_modelo_estruturado.await_count == 2
+        amb.criar.assert_not_awaited()
+        resposta = amb.responder.await_args.args[1]
+        assert resposta.strip().casefold() != "rogério da costa cardoso"
+        assert resposta != whatsapp_intake._TEXTO_CONTINUAR_GENERICO
+        assert "gerente" in resposta.lower()
+        # Dado capturado nesta rodada não pode se perder.
+        resultado = json.loads(conn.auditorias[0][3])
+        assert resultado["campos_formulario"]["supervisor"] == "ROGERIO DA COSTA CARDOSO"
+
+
 async def test_quimico_campo_omitido_pelo_modelo_tambem_nao_cai_no_generico():
     """Reproduz ao vivo em produção (2026-08-24, terceira variante do mesmo
     dia): "osvaldo" não tem nenhuma semelhança com nenhum Supervisor real —

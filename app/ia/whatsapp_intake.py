@@ -656,6 +656,30 @@ def _repete_mensagem_anterior(texto: str, conversa: list[dict[str, Any]]) -> boo
     )
 
 
+def _pergunta_eh_eco_do_usuario(texto: str, conversa: list[dict[str, Any]]) -> bool:
+    """``True`` quando ``texto`` (a `pergunta` desta rodada) é idêntico à
+    ÚLTIMA mensagem do USUÁRIO — o modelo ecoou a resposta da pessoa de
+    volta em vez de fazer uma pergunta de verdade sobre o próximo campo.
+
+    Achado real em produção (2026-08-24): "Rogério da Costa Cardoso" foi
+    corretamente casado com o Supervisor válido em `campos_formulario`
+    (dado certo, sem perda), mas `perguntas` da rodada virou literalmente
+    `["Rogério da Costa Cardoso"]` — nenhuma rede existente pega isso:
+    `_repete_mensagem_anterior` só compara contra mensagens do BOT (esta é
+    idêntica à do USUÁRIO), e `_quimico_travado_no_campo` só dispara quando
+    o texto MENCIONA o rótulo de um campo recém-preenchido (aqui o texto
+    não menciona "Supervisor" nem nada — é a resposta crua da pessoa)."""
+    alvo = texto.strip().casefold()
+    if not alvo:
+        return False
+    ultima_usuario = next(
+        (item for item in reversed(conversa) if item.get("papel") == "usuario"), None
+    )
+    if ultima_usuario is None:
+        return False
+    return str(ultima_usuario.get("conteudo") or "").strip().casefold() == alvo
+
+
 def decidir_acao_intake(
     saida: SaidaWhatsAppIntake | None, rodada: int, max_rodadas: int
 ) -> str:
@@ -1946,7 +1970,10 @@ async def _processar_conversa(conversa_id: str) -> None:
         repete_texto = False
         campo_quimico_travado = False
     else:
-        repete_texto = acao == "PERGUNTA" and _repete_mensagem_anterior(pergunta, conversa_visivel)
+        repete_texto = acao == "PERGUNTA" and (
+            _repete_mensagem_anterior(pergunta, conversa_visivel)
+            or _pergunta_eh_eco_do_usuario(pergunta, conversa_visivel)
+        )
         campo_quimico_travado = (
             acao == "PERGUNTA"
             and not repete_texto
@@ -1992,6 +2019,7 @@ async def _processar_conversa(conversa_id: str) -> None:
         )
         ainda_travado = saida_retry is not None and acao_retry == "PERGUNTA" and (
             _repete_mensagem_anterior(pergunta_retry, conversa_visivel)
+            or _pergunta_eh_eco_do_usuario(pergunta_retry, conversa_visivel)
             or _quimico_travado_no_campo(
                 saida_retry, pergunta_retry, campos_confirmados, campos_formulario_confirmados
             )
