@@ -998,13 +998,21 @@ def _reescrever_erro_formulario_quimico(nome_categoria: str, erro: str) -> str:
     rotulo = _rotulo_chat(campo)
     campo_vazio = erro.startswith(("Preencha o campo", "Selecione ao menos uma opção"))
     if campo.tipo in ("select", "checkbox_multi") and campo.opcoes:
-        opcoes = ", ".join(campo.opcoes)
+        # Lista grande (Região tem 114 opções) NUNCA vai crua pro chat — vira
+        # um muro de texto ilegível no WhatsApp. Achado 2026-08-24: esta
+        # frase existia IDÊNTICA aqui e em `_pergunta_campo_pendente_fallback`,
+        # e a primeira rodada de correção só cobriu a outra; a bateria
+        # adversarial (`tests/test_whatsapp_intake_adversarial.py`, invariante
+        # I3) pegou esta cópia esquecida.
+        itens = _opcoes_numeradas_ou_none(campo)
         if campo_vazio:
-            return f'Ainda preciso saber "{rotulo}". Pode ser uma destas: {opcoes}'
-        return (
-            f'Não consegui casar sua resposta com uma opção válida de "{rotulo}". '
-            f"Pode ser uma destas: {opcoes}"
-        )
+            if itens is None:
+                return f'Ainda preciso saber "{rotulo}".'
+            return f'Ainda preciso saber "{rotulo}". Escolha uma das opções abaixo:\n{itens}'
+        base = f'Não consegui casar sua resposta com uma opção válida de "{rotulo}".'
+        if itens is None:
+            return f"{base} Pode me dizer de novo, com o nome mais completo/oficial possível?"
+        return f"{base} Escolha uma das opções abaixo:\n{itens}"
     if campo.min_chars and "caracteres" in erro:
         return (
             f'O valor que você me passou pra "{rotulo}" ficou curto demais — '
@@ -1478,13 +1486,29 @@ def _pergunta_campo_pendente_fallback(
     if proximo.tipo == "checkbox_multi":
         return _pergunta_checkbox_multi_pendente(nome_categoria, campos_formulario)
     rotulo = _rotulo_chat(proximo)
-    prefixo = f'"{tentativa_rejeitada}" não é reconhecido. ' if tentativa_rejeitada else ""
     if proximo.opcoes:
+        # "não é reconhecido" só faz sentido onde EXISTE uma lista fechada
+        # contra a qual reconhecer. Achado pela simulação adversarial
+        # (2026-08-24, `scripts/simular_conversas_whatsapp.py`): aplicado a
+        # campo de texto livre, o bot respondia '"é uma análise de
+        # laboratório" não é reconhecido. Ainda preciso de "Descrição
+        # completa da amostra..."' — mentira, ali QUALQUER texto é válido;
+        # a pessoa repetia a mesma resposta várias vezes achando que tinha
+        # escrito errado, num loop de frustração.
+        prefixo = f'"{tentativa_rejeitada}" não é reconhecido. ' if tentativa_rejeitada else ""
         itens = _opcoes_numeradas_ou_none(proximo)
         if itens is None:
             return f'{prefixo}Ainda preciso saber "{rotulo}".'
         return f'{prefixo}Ainda preciso saber "{rotulo}". Escolha uma das opções abaixo:\n{itens}'
-    return f'{prefixo}Ainda preciso de "{rotulo}" pra completar o registro.'
+    # Campo de texto livre: nada a "reconhecer" — quando a resposta anterior
+    # não serviu, o que falta é explicar melhor O QUE se espera, não acusar
+    # a resposta de inválida.
+    if tentativa_rejeitada:
+        return (
+            f'Ainda me falta "{rotulo}". Pode detalhar um pouco mais, '
+            "com esse nível de detalhe?"
+        )
+    return f'Ainda preciso de "{rotulo}" pra completar o registro.'
 
 
 def _ajustar_campos_formulario_quimico(
