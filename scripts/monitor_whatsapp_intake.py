@@ -16,7 +16,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import asyncpg
 from dotenv import load_dotenv
@@ -35,7 +35,7 @@ if not DATABASE_URL:
 
 
 def _log(msg: str) -> None:
-    ts = datetime.now(timezone.utc).astimezone().strftime("%H:%M:%S")
+    ts = datetime.now(UTC).astimezone().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
 
 
@@ -43,7 +43,7 @@ async def main(interval: float, since_minutes: float = 0.0) -> None:
     from datetime import timedelta
 
     conn = await asyncpg.connect(DATABASE_URL, statement_cache_size=0)
-    start = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
+    start = datetime.now(UTC) - timedelta(minutes=since_minutes)
     _log(f"Monitor ligado. Observando eventos desde {start.isoformat()}.")
 
     seen_msgs: set[int] = set()
