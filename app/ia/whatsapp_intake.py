@@ -575,6 +575,7 @@ async def _receber_mensagem(msg: dict[str, Any]) -> None:
                         "papel": "usuario",
                         "conteudo": msg["corpo"],
                         "wamid": msg["wamid"],
+                        "tipo": msg["tipo"],
                         "midia_id": msg["midia_id"],
                         "midia_nome": msg["midia_nome"],
                     }
@@ -1864,6 +1865,38 @@ def _secao_formulario_quimico(
     return linhas
 
 
+# Tipos que a Meta entrega mas o intake não consegue interpretar.
+# :func:`extrair_mensagens` já os deixa passar de propósito, com ``corpo``
+# vazio, "para o modelo pedir o relato por texto em vez de sumirem em
+# silêncio" — mas até 2026-08-25 eles morriam no laço do histórico de
+# :func:`montar_mensagens`, que só emitia linha para mensagem COM texto ou COM
+# mídia anexável. Efeito real: a pessoa mandava um áudio, a rodada rodava
+# (queimando o teto de rodadas) e o modelo via um histórico IDÊNTICO ao da
+# rodada anterior, sem sinal nenhum de que algo tinha chegado. Sem a linha que
+# estas constantes produzem, a seção "mídias que você não consegue
+# interpretar" do prompt é letra morta: não há como o modelo detectar o caso.
+_ROTULOS_MIDIA_SEM_TEXTO = {
+    "audio": "um áudio, que você não consegue ouvir",
+    "voice": "um áudio, que você não consegue ouvir",
+    "video": "um vídeo, que você não consegue assistir",
+    "sticker": "uma figurinha",
+    "location": "uma localização, que você não consegue abrir",
+    "contacts": "um contato, que você não consegue abrir",
+}
+_ROTULO_MIDIA_DESCONHECIDA = "um anexo que você não consegue abrir"
+
+
+def _rotulo_midia_sem_texto(tipo: Any) -> str:
+    """Como descrever ao modelo um anexo que ele não lê (função pura).
+
+    ``tipo`` vem de ``whatsapp_conversas.mensagens_acumuladas``. Conversa
+    gravada antes de 2026-08-25 não tem esse campo, e tipo novo da Meta cai no
+    genérico — nos dois casos o que importa é o modelo saber que chegou ALGUMA
+    coisa que ele não conseguiu ler, em vez de não ver nada e reagir ao vazio."""
+    chave = str(tipo or "").strip().casefold()
+    return _ROTULOS_MIDIA_SEM_TEXTO.get(chave, _ROTULO_MIDIA_DESCONHECIDA)
+
+
 def montar_mensagens(
     conversa: list[dict[str, Any]],
     catalogo: list[dict[str, Any]],
@@ -1942,7 +1975,17 @@ def montar_mensagens(
         if conteudo:
             linhas.append(f"[{papel}] {conteudo}")
         elif item.get("midia_id"):
-            linhas.append(f"[{papel}] (enviou uma imagem)")
+            # `midia_nome` (o `filename`) só existe para documento — mesma
+            # convenção de `_imagem_da_conversa`. Antes tudo virava "imagem",
+            # e o prompt trata os dois de forma diferente (a imagem o modelo
+            # vê de verdade; o documento ele não abre e não pode descrever).
+            anexo = "um documento" if item.get("midia_nome") else "uma imagem"
+            linhas.append(f"[{papel}] (enviou {anexo})")
+        elif item.get("papel") == "usuario":
+            # Só o usuário manda mídia; entrada vazia do assistente (não
+            # deveria existir — `registro_pergunta` só grava com texto) segue
+            # sendo ignorada, como antes.
+            linhas.append(f"[{papel}] (enviou {_rotulo_midia_sem_texto(item.get('tipo'))})")
     if setores:
         linhas += [
             "",

@@ -2753,3 +2753,108 @@ def test_secao_formulario_quimico_injetada_so_apos_departamento_e_categoria_conf
     assert "`identificacao_cliente`" in texto
     # A lista de opções da múltipla escolha vai inteira, numerada.
     assert "1. Determinação de pH" in texto
+
+
+# --------------------------------------------------------------------------
+# Mídia que o modelo não consegue interpretar (áudio, vídeo, figurinha...)
+# --------------------------------------------------------------------------
+
+
+def test_extrair_mensagens_preserva_tipo_sem_suporte():
+    """Áudio entra com `corpo` vazio e sem `midia_id` DE PROPÓSITO (pra não
+    sumir em silêncio), mas só o `tipo` diz o que de fato chegou — é ele que
+    vira a linha do histórico. Antes de 2026-08-25 o tipo se perdia na
+    gravação da conversa e a mensagem ficava indistinguível de nada."""
+    payload = {
+        "entry": [{"changes": [{"value": {"messages": [
+            {"id": "wamid.AUDIO", "from": "5551999", "type": "audio", "audio": {"id": "midia-1"}},
+        ]}}]}]
+    }
+
+    (msg,) = whatsapp_intake.extrair_mensagens(payload)
+
+    assert msg["tipo"] == "audio"
+    assert msg["corpo"] == ""
+    # `midia_id` fica None: áudio não é anexável ao chamado como foto/documento.
+    assert msg["midia_id"] is None
+
+
+@pytest.mark.parametrize(
+    ("tipo", "trecho"),
+    [
+        ("audio", "áudio"),
+        ("voice", "áudio"),
+        ("video", "vídeo"),
+        ("sticker", "figurinha"),
+        ("location", "localização"),
+        # Tipo que a Meta pode passar a mandar amanhã, e conversa antiga
+        # (gravada antes do campo `tipo` existir) caem no genérico.
+        ("tipo_que_ainda_nao_existe", "anexo"),
+        (None, "anexo"),
+    ],
+)
+def test_rotulo_midia_sem_texto_cobre_tipo_desconhecido_e_ausente(tipo, trecho):
+    assert trecho in whatsapp_intake._rotulo_midia_sem_texto(tipo)
+
+
+def test_audio_aparece_no_historico_em_vez_de_sumir():
+    """Bug real (achado em 2026-08-25 revisando o prompt): o laço do histórico
+    só emitia linha pra mensagem COM texto ou COM mídia anexável. Um áudio
+    (corpo vazio, sem `midia_id`) não gerava linha nenhuma — a rodada rodava,
+    queimava o teto, e o modelo via um histórico IDÊNTICO ao da rodada
+    anterior, sem sinal de que algo tinha chegado. Sem esta linha, a seção do
+    prompt sobre mídia não suportada é letra morta."""
+    conversa = [
+        {"papel": "usuario", "conteudo": "a impressora parou"},
+        {"papel": "assistente", "conteudo": "Desde quando isso começou?"},
+        {"papel": "usuario", "conteudo": "", "tipo": "audio", "midia_id": None},
+    ]
+
+    mensagens = whatsapp_intake.montar_mensagens(conversa, _CATALOGO, setores=_SETORES)
+    texto = mensagens[1]["content"]
+
+    assert "[usuário] (enviou um áudio" in texto
+    # A última linha do histórico é o áudio: é a ela que o modelo tem que
+    # reagir, não à pergunta anterior (que ficaria como último turno visível
+    # se a mensagem continuasse invisível).
+    linhas_historico = [linha for linha in texto.splitlines() if linha.startswith("[")]
+    assert linhas_historico[-1].startswith("[usuário] (enviou um áudio")
+
+
+def test_documento_nao_e_rotulado_como_imagem_no_historico():
+    """O prompt trata os dois de forma diferente (a imagem o modelo vê de
+    verdade; o documento ele não abre e está proibido de descrever), então
+    rotular PDF como "imagem" convida exatamente a alucinação que a regra de
+    higiene epistêmica quer evitar. `midia_nome` (o `filename`, que a Meta só
+    manda pra documento) é a mesma convenção que `_imagem_da_conversa` usa."""
+    conversa = [
+        {"papel": "usuario", "conteudo": "", "tipo": "document",
+         "midia_id": "m-1", "midia_nome": "FB030.pdf"},
+        {"papel": "usuario", "conteudo": "", "tipo": "image", "midia_id": "m-2"},
+    ]
+
+    texto = whatsapp_intake.montar_mensagens(conversa, _CATALOGO, setores=_SETORES)[1]["content"]
+
+    assert "(enviou um documento)" in texto
+    assert "(enviou uma imagem)" in texto
+
+
+async def test_audio_chega_ao_modelo_na_rodada_que_ele_foi_enviado():
+    """Ponta a ponta: prova que a linha nova sobrevive até o prompt que o
+    modelo recebe de fato — não só na função pura de montagem."""
+    conn = FakeConn()
+    conn.mensagens_acumuladas = [
+        {"papel": "usuario", "conteudo": "preciso de ajuda"},
+        {"papel": "assistente", "conteudo": "Claro! Me conta o que está acontecendo?"},
+        {"papel": "usuario", "conteudo": "", "tipo": "audio", "midia_id": None},
+    ]
+    saida = SaidaWhatsAppIntake(
+        informacoes_suficientes=False,
+        perguntas=["Consigo ler só texto por aqui — pode escrever rapidinho o que você precisa?"],
+    )
+    with ambiente(conn, _settings(), saida=saida):
+        await whatsapp_intake.processar_conversa("conversa-uuid")
+
+        prompt_enviado = whatsapp_intake.chamar_modelo_estruturado.await_args_list[0].args[0]
+        texto_prompt = json.dumps(prompt_enviado, ensure_ascii=False)
+        assert "enviou um áudio" in texto_prompt
