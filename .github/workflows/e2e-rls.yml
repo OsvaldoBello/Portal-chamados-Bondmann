@@ -22,6 +22,14 @@ on:
       - "tests/e2e/**"
       - ".github/workflows/e2e-rls.yml"
 
+# Least privilege do GITHUB_TOKEN (auditoria de cadeia de suprimentos,
+# 2026-08-26). Sem este bloco o job herda o default do repositório, que pode ser
+# read/write em todos os escopos — uma action comprometida teria permissão de
+# escrever no repo. Este job só faz checkout e roda a suíte; não usa
+# GITHUB_TOKEN para nada.
+permissions:
+  contents: read
+
 # Cancela só runs de PR sobrepostos; em push nas branches de integração o
 # histórico de "estava verde neste commit" é o que autoriza aplicar migration.
 concurrency:

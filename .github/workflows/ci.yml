@@ -5,6 +5,15 @@ on:
     branches: [main, develop, claude/develop]
   pull_request:
 
+# Least privilege do GITHUB_TOKEN (auditoria de cadeia de suprimentos,
+# 2026-08-26). Sem este bloco os jobs herdam o default do repositório, que pode
+# ser read/write em todos os escopos — uma action comprometida teria permissão de
+# escrever no repo. Nenhum job aqui usa GITHUB_TOKEN: não há push de imagem
+# (`push: false`), comentário em PR, release nem upload de artefato. O cache do
+# buildx (`type=gha`) usa ACTIONS_RUNTIME_TOKEN, que é independente deste escopo.
+permissions:
+  contents: read
+
 # Um push em cima do outro na mesma branch cancela o run anterior — economiza
 # minutos sem perder sinal. Em push nas branches de integração NÃO cancela: o
 # histórico de "esta branch estava verde neste commit" é o que dá segurança para
