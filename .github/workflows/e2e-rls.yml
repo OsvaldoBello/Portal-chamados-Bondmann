@@ -22,6 +22,14 @@ on:
       - "tests/e2e/**"
       - ".github/workflows/e2e-rls.yml"
 
+# Least privilege do GITHUB_TOKEN (auditoria de cadeia de suprimentos,
+# 2026-08-26). Sem este bloco o job herda o default do repositório, que pode ser
+# read/write em todos os escopos — uma action comprometida teria permissão de
+# escrever no repo. Este job só faz checkout e roda a suíte; não usa
+# GITHUB_TOKEN para nada.
+permissions:
+  contents: read
+
 # Cancela só runs de PR sobrepostos; em push nas branches de integração o
 # histórico de "estava verde neste commit" é o que autoriza aplicar migration.
 concurrency:
@@ -33,9 +41,9 @@ jobs:
     name: Matriz de RLS (Supabase local)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
           cache: pip
@@ -44,7 +52,7 @@ jobs:
       - name: Instalar dependências (runtime + dev)
         run: pip install -r requirements-dev.txt
 
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1.7.1
         with:
           version: latest
 
