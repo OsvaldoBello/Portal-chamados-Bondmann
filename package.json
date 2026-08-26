@@ -6,6 +6,8 @@
   "scripts": {
     "build:css": "tailwindcss -i ./app/static/src/input.css -o ./app/static/css/app.css --minify",
     "watch:css": "tailwindcss -i ./app/static/src/input.css -o ./app/static/css/app.css --watch",
+    "vendor:sync": "python scripts/sync_vendor_bundles.py",
+    "vendor:check": "python scripts/check_vendor_bundles.py",
     "proto:build:html": "python3 prototipos/build.py",
     "proto:build:css": "tailwindcss -c prototipos/tailwind.config.js -i prototipos/src.css -o prototipos/assets/app.css --minify",
     "proto:build": "npm run proto:build:html && npm run proto:build:css",
