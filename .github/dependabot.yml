@@ -5,6 +5,14 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    # Janela de quarentena antes de abrir PR de atualização (auditoria de cadeia
+    # de suprimentos, 2026-08-26). Pacotes comprometidos costumam ser detectados
+    # e despublicados nos primeiros dias; esperar 7 dias (30 para major, que traz
+    # mais código novo) tira o repo da janela em que o release malicioso ainda
+    # está no registry. Não altera QUAIS versões entram, só quando o PR aparece.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
     groups:
       python-dependencies:
         patterns:
@@ -15,6 +23,9 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
     groups:
       npm-dependencies:
         patterns:
@@ -25,8 +36,14 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "monthly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
