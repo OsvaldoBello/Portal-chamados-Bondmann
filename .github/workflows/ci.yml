@@ -95,6 +95,26 @@ jobs:
       - name: Checar cadeia 0001..NNNN contínua em supabase/migrations
         run: python scripts/check_migrations_sequence.py
 
+  vendor-bundles:
+    name: Bundles vendorizados (versão + SRI)
+    runs-on: ubuntu-latest
+    # Achado da auditoria de cadeia de suprimentos (2026-08-26): os arquivos de
+    # `app/static/vendor/` são cópias manuais, não saída de build. Nada ligava o
+    # `package.json` ao que o browser carrega, então um PR do Dependabot bumpava
+    # o manifesto e aparentava corrigir uma CVE sem tocar no arquivo servido —
+    # foi o que aconteceu com o supabase-js 2.47.10 e a GHSA-8r88-6cj9-9fh5.
+    # Este job também reprova SRI defasado, que faz o browser BLOQUEAR o script
+    # e derruba o Realtime sem erro visível.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Checar versão e integrity dos bundles de app/static/vendor
+        run: python scripts/check_vendor_bundles.py
+
   migrations-aplicadas:
     name: Migrations aplicadas no banco
     runs-on: ubuntu-latest
