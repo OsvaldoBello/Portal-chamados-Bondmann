@@ -38,6 +38,23 @@ jobs:
       - name: Instalar dependências (runtime + dev)
         run: pip install -r requirements-dev.txt
 
+      # app/static/css/app.css não é versionado (gerado pelo Tailwind CLI, ver
+      # .gitignore) — alguns testes de export (test_export_html.py,
+      # test_admin.py) leem o arquivo do disco de verdade pra embutir o CSS no
+      # relatório self-contained. Sem este passo o checkout do CI não tem o
+      # arquivo e esses testes falham com FileNotFoundError (visto ao vivo ao
+      # parar de versionar o arquivo, 2026-08-27).
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Instalar dependências de front-end
+        run: npm ci
+
+      - name: Build do CSS (Tailwind) — necessário pros testes de export
+        run: npm run build:css
+
       # Item 3.1: a suíte completa também mede cobertura; o floor
       # (`[tool.coverage.report] fail_under` no pyproject.toml) reprova o job se
       # a cobertura cair abaixo do piso — um só run faz teste + gate de cobertura.
