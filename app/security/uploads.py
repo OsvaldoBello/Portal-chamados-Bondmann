@@ -14,7 +14,9 @@ A lógica é pura/injetável para permitir unit tests sem I/O de rede.
 
 from __future__ import annotations
 
+import multiprocessing
 import re
+import sys
 import threading
 import uuid
 from dataclasses import dataclass
@@ -115,37 +117,49 @@ _magic_disponivel: bool | None = None
 _magic_probe_lock = threading.Lock()
 
 
+def _tentar_importar_magic() -> None:
+    """Alvo do processo filho da probe — só isto roda isolado do processo
+    principal. Função de módulo (não closure) de propósito: o método
+    ``spawn`` do ``multiprocessing`` (default no Windows) precisa localizar o
+    alvo por referência importável para recriá-lo no processo filho."""
+    try:
+        import magic  # type: ignore  # noqa: F401
+    except Exception:  # noqa: BLE001 — qualquer falha = indisponível
+        sys.exit(1)
+    sys.exit(0)
+
+
 def _magic_disponivel_probe() -> bool:
     """Verifica, uma única vez por processo, se ``import magic`` funciona.
 
     Em alguns ambientes Windows o pacote ``python-magic-bin`` (usado só em dev,
-    ver ``requirements.txt``) carrega uma base de assinaturas incompatível e a
-    chamada ``mime_magic.load()`` do próprio import **trava indefinidamente**
-    (não levanta exceção — um ``try/except`` sozinho não protege contra isso).
-    Rodamos a 1ª tentativa numa thread daemon com timeout: se não voltar a
-    tempo, tratamos ``magic`` como indisponível pelo resto do processo e
-    caímos no :func:`sniff_signature` — sem travar o request nem tentar de
-    novo a cada upload."""
+    ver ``requirements.txt``) carrega uma base de assinaturas incompatível, e
+    a chamada ``mime_magic.load()`` do próprio import falha de duas formas que
+    um ``try/except`` sozinho não pega: **trava indefinidamente**, ou derruba
+    o processo inteiro com *access violation* (visto ao vivo rodando a suíte —
+    auditoria de 2026-08-27). Rodar a 1ª tentativa numa **thread** com timeout
+    só protegia contra a primeira: um crash nativo numa thread mata o
+    processo inteiro do mesmo jeito, não tem isolamento de thread contra isso
+    — só isolamento de **processo** protege dos dois casos, daí
+    ``multiprocessing.Process`` em vez de ``threading.Thread``. Se o processo
+    filho não voltar a tempo (trava) ou sair com código diferente de 0
+    (exceção capturada, ou o próprio SO matando o processo por crash),
+    tratamos ``magic`` como indisponível pelo resto do processo e caímos no
+    :func:`sniff_signature` — sem travar o request nem tentar de novo a cada
+    upload."""
     global _magic_disponivel
     if _magic_disponivel is not None:
         return _magic_disponivel
     with _magic_probe_lock:
         if _magic_disponivel is not None:
             return _magic_disponivel
-        resultado: list[bool] = []
-
-        def _tentar() -> None:
-            try:
-                import magic  # type: ignore  # noqa: F401
-
-                resultado.append(True)
-            except Exception:  # noqa: BLE001 — qualquer falha = indisponível
-                resultado.append(False)
-
-        thread = threading.Thread(target=_tentar, daemon=True)
-        thread.start()
-        thread.join(timeout=_MAGIC_PROBE_TIMEOUT)
-        _magic_disponivel = bool(resultado) and resultado[0]
+        processo = multiprocessing.Process(target=_tentar_importar_magic, daemon=True)
+        processo.start()
+        processo.join(timeout=_MAGIC_PROBE_TIMEOUT)
+        if processo.is_alive():
+            processo.terminate()
+            processo.join()
+        _magic_disponivel = processo.exitcode == 0
         return _magic_disponivel
 
 
