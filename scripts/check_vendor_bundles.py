@@ -42,11 +42,16 @@ _BUNDLES: dict[str, tuple[str, str]] = {
     "sortable.min.js": ("sortablejs", r"version=[\"'`](\d+\.\d+\.\d+)"),
 }
 
-_TAG_SCRIPT = re.compile(
-    r"<script\s+src=\"/static/vendor/(?P<arquivo>[\w.-]+)\"\s+"
-    r"integrity=\"(?P<sri>sha384-[A-Za-z0-9+/=]+)\"",
-    re.DOTALL,
-)
+# Casa a tag <script ...> inteira (até o `>` de fechamento da abertura) e
+# procura `src=`/`integrity=` como atributos independentes dentro dela — não
+# lado a lado. Versão anterior exigia `src="..."` seguido imediatamente de
+# `integrity="..."`, e não via `<script defer src=... integrity=...>` (o
+# `defer` no meio quebrava o casamento): htmx.min.js e alpine-csp.min.js
+# nunca tiveram o SRI checado de verdade desde que este script existe — os
+# outros 3 bundles não usam `defer` na tag, por isso o "OK" saía sem avisar.
+_TAG_SCRIPT = re.compile(r"<script\b[^>]*>", re.DOTALL)
+_ATTR_SRC = re.compile(r'src="/static/vendor/(?P<arquivo>[\w.-]+)"')
+_ATTR_SRI = re.compile(r'integrity="(?P<sri>sha384-[A-Za-z0-9+/=]+)"')
 
 
 def _sri(caminho: Path) -> str:
@@ -88,31 +93,50 @@ def checar_versoes(manifesto: dict) -> list[str]:
 
 def checar_sri() -> list[str]:
     erros: list[str] = []
-    vistos = 0
+    vistos: set[str] = set()
     for template in sorted(_TEMPLATES.rglob("*.html")):
         html = template.read_text(encoding="utf-8")
-        for tag in _TAG_SCRIPT.finditer(html):
-            vistos += 1
-            arquivo = tag.group("arquivo")
+        for tag_completa in _TAG_SCRIPT.findall(html):
+            src = _ATTR_SRC.search(tag_completa)
+            if src is None:
+                continue  # <script> sem src pro vendor/ — não é desta checagem
+            arquivo = src.group("arquivo")
+            vistos.add(arquivo)
             caminho = _VENDOR / arquivo
             rel = template.relative_to(_RAIZ).as_posix()
             if not caminho.exists():
                 erros.append(f"{rel}: aponta para vendor/{arquivo}, que não existe")
                 continue
+            sri = _ATTR_SRI.search(tag_completa)
             esperado = _sri(caminho)
-            if tag.group("sri") != esperado:
+            if sri is None:
+                erros.append(
+                    f"{rel}: <script src=/static/vendor/{arquivo}> sem atributo "
+                    f"integrity= nenhum (esperado {esperado})."
+                )
+            elif sri.group("sri") != esperado:
                 erros.append(
                     f"{rel}: integrity de vendor/{arquivo} desatualizado.\n"
-                    f"    no template: {tag.group('sri')}\n"
+                    f"    no template: {sri.group('sri')}\n"
                     f"    do arquivo:  {esperado}\n"
                     "    O browser BLOQUEIA o script com o hash errado — "
                     "o Realtime para sem erro visível."
                 )
-    if vistos == 0:
+    if not vistos:
         erros.append(
-            "nenhum <script src=/static/vendor/... integrity=...> encontrado nos "
-            "templates; ou o SRI foi removido, ou o formato da tag mudou e este "
-            "check virou um no-op silencioso."
+            "nenhum <script src=/static/vendor/...> encontrado nos templates; "
+            "ou os bundles pararam de ser usados, ou o formato da tag mudou e "
+            "este check virou um no-op silencioso."
+        )
+    faltando = sorted(set(_BUNDLES) - vistos)
+    if faltando:
+        erros.append(
+            f"{', '.join(faltando)} nunca aparece(m) num <script src=/static/vendor/...> "
+            "de nenhum template — ou o bundle não é mais usado (remova de _BUNDLES), "
+            "ou a tag mudou de formato de um jeito que este regex não reconhece "
+            "(foi exatamente assim que o SRI de htmx.min.js/alpine-csp.min.js ficou "
+            "sem checagem por um PR inteiro: a tag tinha `defer` entre `<script` e "
+            "`src=`, e o regex antigo exigia os dois lado a lado)."
         )
     return erros
 

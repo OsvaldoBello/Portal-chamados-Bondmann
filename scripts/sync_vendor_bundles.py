@@ -40,16 +40,30 @@ def _sri(dados: bytes) -> str:
     return "sha384-" + base64.b64encode(hashlib.sha384(dados).digest()).decode()
 
 
+# Casa a tag <script ...> inteira; src= e integrity= são achados dentro dela
+# como atributos independentes, não um logo depois do outro — uma versão
+# anterior exigia os dois lado a lado e não via `<script defer src=... />`
+# (o `defer` no meio quebrava o casamento), deixando htmx.min.js e
+# alpine-csp.min.js com o integrity= nunca reescrito por este script.
+_TAG_SCRIPT = re.compile(r"<script\b[^>]*>", re.DOTALL)
+_SRI_VALOR = re.compile(r'(integrity="sha384-)[A-Za-z0-9+/=]+(")')
+
+
 def _atualizar_sri(arquivo: str, sri: str, escrever: bool) -> list[str]:
     """Reescreve o integrity= de `arquivo` em todo template que o carrega."""
-    padrao = re.compile(
-        rf"(<script\s+src=\"/static/vendor/{re.escape(arquivo)}\"\s+integrity=\")"
-        r"sha384-[A-Za-z0-9+/=]+(\")"
-    )
+    alvo = f'src="/static/vendor/{arquivo}"'
+
+    def _tag(m: re.Match[str]) -> str:
+        tag = m.group(0)
+        if alvo not in tag:
+            return tag
+        return _SRI_VALOR.sub(rf"\g<1>{sri[len('sha384-') :]}\g<2>", tag)
+
     tocados: list[str] = []
     for template in sorted(_TEMPLATES.rglob("*.html")):
         html = template.read_text(encoding="utf-8")
-        novo, n = padrao.subn(rf"\g<1>{sri}\g<2>", html)
+        novo, _ = _TAG_SCRIPT.subn(_tag, html)
+        n = html.count(alvo)  # quantas tags deste template referenciam o arquivo
         if n and novo != html:
             tocados.append(f"{template.relative_to(_RAIZ).as_posix()} ({n}x)")
             if escrever:
