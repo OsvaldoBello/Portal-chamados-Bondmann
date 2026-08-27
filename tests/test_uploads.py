@@ -5,10 +5,16 @@ Puros/hermético: o detector de *magic bytes* é injetado, sem depender de libma
 
 from __future__ import annotations
 
+import os
+import sys
+import time
+
 import pytest
 
+import app.security.uploads as uploads_mod
 from app.security.uploads import (
     UploadInvalido,
+    _magic_disponivel_probe,
     extensao_provavel,
     sanitizar_nome_exibicao,
     sniff_signature,
@@ -129,4 +135,99 @@ def test_extensao_provavel_mime_ambiguo_devolve_none():
     """``application/zip`` serve pra docx/xlsx/pptx — sem nome de arquivo não
     dá pra escolher entre eles às cegas; melhor recusar do que arriscar."""
     assert extensao_provavel("application/zip") is None
+
+
+# ---------------------------------------------------------------------------
+# Probe de disponibilidade do libmagic (auditoria 2026-08-27)
+#
+# A probe original rodava `import magic` numa threading.Thread com timeout —
+# proteção real contra a thread TRAVAR, mas nenhuma contra ela CRASHAR o
+# processo (um access violation nativo numa thread mata o processo inteiro;
+# só isolamento por processo protege disso). Visto ao vivo: a suíte inteira
+# derrubada por "Windows fatal exception: access violation" dentro do
+# `import magic`. Estes testes fixam o contrato da versão corrigida
+# (multiprocessing.Process) sem depender do libmagic real instalado — que é
+# exatamente a peça não confiável que motivou a correção.
+#
+# As duas funções abaixo (não fechamentos locais) são o alvo do processo
+# filho via monkeypatch: `multiprocessing` com o método `spawn` (default no
+# Windows) precisa localizar o alvo por referência de módulo importável pra
+# recriá-lo no processo filho — uma função definida dentro do corpo do teste
+# não seria picklable.
+def _alvo_probe_sucesso() -> None:
+    sys.exit(0)
+
+
+def _alvo_probe_trava() -> None:
+    time.sleep(60)
+
+
+def _alvo_probe_falha() -> None:
+    sys.exit(1)
+
+
+def _alvo_probe_morre_abruptamente() -> None:
+    # Sem exceção capturável nem sys.exit "normal" — o jeito determinístico
+    # de reproduzir "o processo filho saiu sem terminar normalmente" (mesmo
+    # sintoma, do ponto de vista do pai, de um crash nativo por access
+    # violation: exitcode diferente de 0, sem exceção Python nenhuma).
+    os._exit(1)
+
+
+@pytest.fixture(autouse=True)
+def _reseta_cache_da_probe(monkeypatch: pytest.MonkeyPatch):
+    """Toda função de teste abaixo começa com o cache global limpo — sem
+    isso, o resultado de um teste vazaria pro próximo (a probe só roda de
+    verdade na 1ª chamada por processo)."""
+    monkeypatch.setattr(uploads_mod, "_magic_disponivel", None)
+    yield
+
+
+def test_magic_probe_sucesso_no_processo_filho(monkeypatch):
+    monkeypatch.setattr(uploads_mod, "_tentar_importar_magic", _alvo_probe_sucesso)
+    assert _magic_disponivel_probe() is True
+
+
+def test_magic_probe_processo_travado_vira_indisponivel_no_timeout(monkeypatch):
+    """O caso original que a probe existe pra cobrir: o processo filho nunca
+    volta. Timeout encurtado só pra o teste não esperar os 2s de produção."""
+    monkeypatch.setattr(uploads_mod, "_tentar_importar_magic", _alvo_probe_trava)
+    monkeypatch.setattr(uploads_mod, "_MAGIC_PROBE_TIMEOUT", 0.3)
+    inicio = time.monotonic()
+    assert _magic_disponivel_probe() is False
+    # Prova que voltou pelo timeout curto, não pelos 60s do alvo.
+    assert time.monotonic() - inicio < 10.0
+
+
+def test_magic_probe_processo_morre_com_exitcode_diferente_de_zero(monkeypatch):
+    """Cobre o caso que a versão em thread NUNCA detectava: o processo filho
+    morre sozinho, sem exceção Python nenhuma — o que um crash nativo por
+    access violation também produz do ponto de vista do processo pai
+    (``exitcode`` diferente de 0)."""
+    monkeypatch.setattr(uploads_mod, "_tentar_importar_magic", _alvo_probe_morre_abruptamente)
+    assert _magic_disponivel_probe() is False
+
+
+def test_magic_probe_cacheia_o_resultado_por_processo(monkeypatch):
+    """1ª chamada decide; chamadas seguintes não voltam a spawnar processo —
+    provado trocando o alvo por um que devolveria outra resposta: se a probe
+    não estivesse cacheando, o resultado mudaria na 2ª chamada."""
+    monkeypatch.setattr(uploads_mod, "_tentar_importar_magic", _alvo_probe_sucesso)
+    assert _magic_disponivel_probe() is True
+
+    monkeypatch.setattr(uploads_mod, "_tentar_importar_magic", _alvo_probe_falha)
+    assert _magic_disponivel_probe() is True  # continua True: veio do cache
+
+
+def test_magic_probe_real_termina_dentro_do_timeout():
+    """Smoke test end-to-end contra o `import magic` de verdade instalado no
+    ambiente — não fixa se o resultado é True ou False (isso depende do SO e
+    do libmagic disponível), só que a chamada SEMPRE retorna um bool dentro
+    do orçamento de tempo, sem travar nem derrubar o processo do pytest. Se
+    esta chamada crashar o runner, a proteção por processo deixou de
+    funcionar."""
+    inicio = time.monotonic()
+    resultado = _magic_disponivel_probe()
+    assert isinstance(resultado, bool)
+    assert time.monotonic() - inicio < uploads_mod._MAGIC_PROBE_TIMEOUT + 5.0
     assert extensao_provavel("text/plain") is None
