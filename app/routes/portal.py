@@ -609,7 +609,7 @@ async def criar_chamado(
     try:
         validados = await _validar_uploads(arquivos, max_bytes=max_bytes_anexo)
     except UploadInvalido as exc:
-        return await _erro(str(exc), status.HTTP_422_UNPROCESSABLE_ENTITY)
+        return await _erro(str(exc), status.HTTP_422_UNPROCESSABLE_CONTENT)
 
     novo = await repo.criar(
         ctx.user.claims,
@@ -903,7 +903,7 @@ async def responder_chamado(
             max_bytes=get_settings().anexo_max_bytes,
         )
     except UploadInvalido as exc:
-        return _erro(str(exc), status.HTTP_422_UNPROCESSABLE_ENTITY)
+        return _erro(str(exc), status.HTTP_422_UNPROCESSABLE_CONTENT)
 
     # Exige conteúdo OU ao menos um anexo (não grava mensagem totalmente vazia).
     if not conteudo and not anexos:
@@ -978,7 +978,7 @@ async def avaliar_chamado(
         if is_htmx:
             return fragmento(
                 {"pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id), "erro": str(exc)},
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
             )
         return redir
 
