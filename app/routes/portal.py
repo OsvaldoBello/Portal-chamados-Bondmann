@@ -37,7 +37,7 @@ from app.anexos import (
 )
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.config import get_settings
-from app.db import rls_request_scope
+from app.db import commit_now, rls_request_scope
 from app.domain.formularios_quimico import (
     campos_da_categoria,
     observacao_categoria,
@@ -629,6 +629,14 @@ async def criar_chamado(
         sem_prazo=sem_prazo_val,
         dados_formulario=dados_formulario_val,
     )
+
+    # Commita AGORA (ver docstring de `commit_now`): sem isto, o 303 abaixo pode
+    # chegar ao browser e ser seguido pelo GET de `detalhe_chamado` ANTES deste
+    # INSERT estar durável — 404 falso num chamado que foi criado com sucesso
+    # (bug relatado 2026-08-27, RH, autora da Controladoria). Os passos daqui
+    # pra baixo (telefone, IA, notificação, observadores, anexos) já toleram
+    # falha pontual sem derrubar a abertura — não precisam da mesma transação.
+    await commit_now()
 
     # O telefone informado na abertura vira o do perfil (2026-07-29, revisto a
     # pedido do gestor): SEMPRE, não só na primeira vez. O número digitado aqui é

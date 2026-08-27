@@ -180,6 +180,34 @@ async def rls_connection(claims: dict[str, Any]) -> AsyncIterator[asyncpg.Connec
             yield conn
 
 
+async def commit_now() -> None:
+    """Commita AGORA a transação do request-scope, sem fechar a conexão.
+
+    A transação por-request só comita, por padrão, no teardown da dependência
+    ``yield`` (ex.: ``portal_context``) — e o FastAPI 0.141 envia a response ao
+    cliente **dentro** do mesmo ``AsyncExitStack`` que fecha as dependências,
+    ANTES desse teardown rodar (``fastapi/routing.py::request_response``:
+    ``await response(...)`` acontece antes do ``async with AsyncExitStack()``
+    fechar). Ou seja: por padrão, um `303 Redirect` pode chegar ao browser e
+    ser seguido ANTES do INSERT que ele referencia estar commitado — o SELECT
+    seguinte, em outra transação, não enxerga a linha ainda (RLS não vê o que
+    não foi commitado) e devolve 404 mesmo com o registro gravado com sucesso
+    (bug real, 2026-08-27: chamado do RH criado, redirect pro detalhe 404).
+
+    Chame isto logo após um INSERT cujo ID alimenta um redirect para uma
+    página que lê aquele MESMO registro (ex.: abertura de chamado → detalhe).
+    Reaplica os claims numa transação nova para que as chamadas seguintes do
+    mesmo request continuem funcionando normalmente."""
+    holder = _request_holder.get()
+    if holder is None or holder.conn is None:
+        return
+    conn = holder.conn
+    await holder._tx.commit()
+    holder._tx = conn.transaction()
+    await holder._tx.start()
+    await _apply_rls_claims(conn, holder.claims)
+
+
 @asynccontextmanager
 async def rls_request_scope(claims: dict[str, Any]) -> AsyncIterator[None]:
     """Registra um :class:`_RLSHolder` no contextvar para todo o request.
