@@ -78,7 +78,7 @@ async def atualizar_perfil(
 ):
     def _erro(msg: str):
         return _pagina(
-            request, ctx, erro=msg, status_code=status.HTTP_422_UNPROCESSABLE_ENTITY
+            request, ctx, erro=msg, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT
         )
 
     if not arquivo or not arquivo.filename:
@@ -125,7 +125,7 @@ async def atualizar_telefone(
     except ValueError as exc:
         return _pagina(
             request, ctx, erro=str(exc), telefone=telefone,
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
     await repo.atualizar_telefone(ctx.user.claims, telefone=limpo)
     return RedirectResponse(
