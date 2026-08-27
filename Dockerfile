@@ -4,7 +4,7 @@
 # Estágio 1 — build do CSS com Tailwind CLI (Seção 0.4 / C3)
 # CSS compilado e purgado; servido como asset estático (sem CDN em prod).
 # ============================================================
-FROM node:22-slim AS css
+FROM node:24-slim AS css
 WORKDIR /build
 COPY package.json ./
 RUN npm install --no-audit --no-fund
@@ -18,10 +18,10 @@ COPY app ./app
 RUN npx tailwindcss -i ./app/static/src/input.css -o ./app/static/css/app.css --minify
 
 # ============================================================
-# Estágio 2 — runtime Python 3.12 (Seção 0.2)
+# Estágio 2 — runtime Python 3.14 (Seção 0.2, revisado 2026-08-27)
 # Inclui libmagic (python-magic, Seção 3.9). Uvicorn na porta 8080 (Railway).
 # ============================================================
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

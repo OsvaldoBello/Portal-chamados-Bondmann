@@ -32,7 +32,7 @@ Toda biblioteca usada no projeto **deve** ter versão-alvo fixada em `requiremen
 
 | Componente | Versão-alvo | Observação |
 |---|---|---|
-| Python | `3.12.x` | Runtime. `[DECISÃO DE ENGENHARIA]` 3.12 por estabilidade do ecossistema async e suporte amplo em imagens Docker slim. Evitar 3.13 até confirmar suporte de todas as libs nativas (`asyncpg`, `python-magic`). |
+| Python | `3.14.x` | Runtime. `[DECISÃO DE ENGENHARIA, revisada 2026-08-27]` A ressalva original ("evitar 3.13 até confirmar suporte de libs nativas") foi resolvida: `asyncpg`, `pydantic-core` e `cryptography` (via `pyjwt[crypto]`) publicam wheel `cp314-manylinux` para as versões fixadas em `requirements.txt`, e a suíte completa (1154 testes) passa 100% rodando de verdade sob CPython 3.14.6. `python-magic` não tem extensão nativa própria (usa `ctypes` sobre o `libmagic1` do SO via apt); só `python-magic-bin` é Windows-only e não entra na imagem Linux. Ver `docs/CHANGELOG.md` 2026-08-27. |
 | FastAPI | `fastapi==0.115.*` | `⚠️ VERSÃO A CONFIRMAR` — travar patch exato no setup. |
 | Uvicorn | `uvicorn[standard]==0.34.*` | Servidor ASGI. Porta **8080** (exigência Railway). `⚠️ VERSÃO A CONFIRMAR`. |
 | supabase-py | `supabase==2.*` | Client oficial. Usar **`create_async_client`** (AsyncClient). `⚠️ VERSÃO A CONFIRMAR` o patch e a superfície async (ver Seção 1.4). |
