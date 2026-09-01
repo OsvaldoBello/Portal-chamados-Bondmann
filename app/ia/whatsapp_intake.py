@@ -295,20 +295,31 @@ def extrair_mensagens(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
     return mensagens
 
 
-async def processar_mensagens_whatsapp(payload: dict[str, Any] | None) -> None:
-    """Persiste as mensagens recebidas e agenda o processamento.
+async def receber_mensagem_normalizada(msg: dict[str, Any]) -> None:
+    """Persiste UMA mensagem já no formato interno e agenda o processamento.
 
-    Chamada de dentro do handler do webhook: faz só o trabalho curto de banco
-    (para a Meta receber o 200 rápido) e delega a parte cara — chamada de
-    modelo, criação de chamado — para uma task. Nunca lança."""
+    Ponto de entrada comum aos dois provedores de WhatsApp: a Meta entrega em
+    lote (`entry/changes`, desempacotado por :func:`extrair_mensagens` logo
+    abaixo) e o wuzapi entrega uma mensagem por evento
+    (`app/routes/wuzapi.py`). Faz só o trabalho curto de banco — o provedor
+    precisa do 200 rápido, senão reentrega — e delega a parte cara (modelo,
+    criação de chamado) para uma task. Nunca lança."""
     settings = get_settings()
     if not intake_ativo(settings):
         return
     try:
-        for msg in extrair_mensagens(payload):
-            await _receber_mensagem(msg)
+        await _receber_mensagem(msg)
     except Exception as exc:  # noqa: BLE001 — webhook nunca cai por causa do intake
-        log.warning("[WA INTAKE] Falha ao processar mensagens do webhook: %s", exc)
+        log.warning("[WA INTAKE] Falha ao processar mensagem do webhook: %s", exc)
+
+
+async def processar_mensagens_whatsapp(payload: dict[str, Any] | None) -> None:
+    """Persiste as mensagens recebidas no webhook da Meta e agenda o processamento.
+
+    Nunca lança (cada mensagem é isolada em
+    :func:`receber_mensagem_normalizada`)."""
+    for msg in extrair_mensagens(payload):
+        await receber_mensagem_normalizada(msg)
 
 
 # Frases que sinalizam "isso é pra um chamado NOVO, não continuação do que
@@ -634,11 +645,16 @@ def _agendar(corotina: Any) -> None:
 
 async def _responder(telefone: str, texto: str) -> None:
     """Envia texto ao usuário — nunca lança (envio é o último elo, não pode
-    derrubar o que já foi gravado)."""
-    from app.whatsapp_client import enviar_mensagem_texto
+    derrubar o que já foi gravado).
+
+    `responder_humanizado` = presença "digitando…" + atraso proporcional ao
+    tamanho do texto + envio + "paused". Com `WHATSAPP_PROVIDER=meta` a
+    presença é no-op (a Cloud API não expõe presença) e só o atraso vale, de
+    forma que os dois provedores se comportam igual."""
+    from app.whatsapp_client import responder_humanizado
 
     try:
-        await enviar_mensagem_texto(telefone, texto)
+        await responder_humanizado(telefone, texto)
     except Exception as exc:  # noqa: BLE001
         log.warning("[WA INTAKE] Falha ao responder no WhatsApp: %s", type(exc).__name__)
 
@@ -2420,16 +2436,23 @@ async def _processar_conversa(conversa_id: str) -> None:
         campos_confirmados, campos_formulario_confirmados,
         ja_apresentou=rodada > 1,
     )
+    from app.whatsapp_client import digitando
+
     inicio = time.monotonic()
-    saida, erro, tokens_in, tokens_out = await chamar_modelo_estruturado(
-        mensagens,
-        model=settings.whatsapp_intake_model,
-        api_key=settings.ia_triagem_api_key,
-        base_url=settings.ia_triagem_base_url,
-        timeout_s=settings.whatsapp_intake_timeout_s,
-        max_tokens=_MAX_TOKENS_SAIDA,
-        schema=SaidaWhatsAppIntake,
-    )
+    # Mantém "digitando…" no chat durante a rodada do modelo (3–10s de
+    # silêncio, hoje). O context manager renova a presença a cada 8s — o
+    # indicador do WhatsApp expira sozinho antes disso — e sai sempre em
+    # "paused", inclusive se a chamada levantar.
+    async with digitando(telefone):
+        saida, erro, tokens_in, tokens_out = await chamar_modelo_estruturado(
+            mensagens,
+            model=settings.whatsapp_intake_model,
+            api_key=settings.ia_triagem_api_key,
+            base_url=settings.ia_triagem_base_url,
+            timeout_s=settings.whatsapp_intake_timeout_s,
+            max_tokens=_MAX_TOKENS_SAIDA,
+            schema=SaidaWhatsAppIntake,
+        )
     if erro:
         log.warning("[WA INTAKE] Conversa %s sem saída útil: %s", conversa_id, erro)
     campos_formulario_bruto = dict(saida.campos_formulario) if saida is not None else {}
@@ -2565,15 +2588,16 @@ async def _processar_conversa(conversa_id: str) -> None:
             else _LEMBRETE_CAMPO_STICKY_TRAVADO if campo_sticky_travado
             else _LEMBRETE_CAMPO_QUIMICO_TRAVADO
         )
-        saida_retry, _erro_retry, tokens_in_retry, tokens_out_retry = await chamar_modelo_estruturado(
-            [*mensagens, reforco],
-            model=settings.whatsapp_intake_model,
-            api_key=settings.ia_triagem_api_key,
-            base_url=settings.ia_triagem_base_url,
-            timeout_s=settings.whatsapp_intake_timeout_s,
-            max_tokens=_MAX_TOKENS_SAIDA,
-            schema=SaidaWhatsAppIntake,
-        )
+        async with digitando(telefone):
+            saida_retry, _erro_retry, tokens_in_retry, tokens_out_retry = await chamar_modelo_estruturado(
+                [*mensagens, reforco],
+                model=settings.whatsapp_intake_model,
+                api_key=settings.ia_triagem_api_key,
+                base_url=settings.ia_triagem_base_url,
+                timeout_s=settings.whatsapp_intake_timeout_s,
+                max_tokens=_MAX_TOKENS_SAIDA,
+                schema=SaidaWhatsAppIntake,
+            )
         tokens_in = tokens_in if tokens_in_retry is None else (tokens_in or 0) + tokens_in_retry
         tokens_out = tokens_out if tokens_out_retry is None else (tokens_out or 0) + tokens_out_retry
         saida_retry = _aplicar_campos_confirmados(

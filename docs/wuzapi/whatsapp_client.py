@@ -1,12 +1,12 @@
 """Cliente de WhatsApp com dois provedores — Meta Cloud API e WUZAPI (whatsmeow).
 
-O provedor ativo é escolhido por `WHATSAPP_PROVIDER=meta|wuzapi` (Fase 0 da
-migração para wuzapi, 2026-09-01 — plano completo em
-`docs/pesquisa_wuzapi_migracao.md`). As três funções públicas
+PROPOSTA (docs/wuzapi/): substitui `app/whatsapp_client.py` quando a migração
+for aprovada. Copiar por cima do arquivo atual, aplicar o patch de
+`app/config.py` (ver docs/pesquisa_wuzapi_migracao.md, Eixo 5) e nada mais
+muda: as três funções públicas de hoje
 (`enviar_mensagem_texto`, `enviar_documento`, `baixar_midia`) mantêm nome e
-assinatura de antes da migração, então `app/ia/whatsapp_intake.py` não muda
-por causa da troca de provedor — e voltar para a Meta é trocar uma variável
-de ambiente, não fazer deploy de código.
+assinatura, então `app/ia/whatsapp_intake.py` continua importando as mesmas
+coisas. O provedor é escolhido por `WHATSAPP_PROVIDER=meta|wuzapi`.
 
 Diferenças que o adaptador esconde do resto da app:
 
