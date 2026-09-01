@@ -6,8 +6,8 @@ pytest-asyncio==1.4.0
 # [tool.coverage]/CI ~2 pontos abaixo do valor medido (adoção gradual, não um
 # número aspiracional que quebre o build).
 pytest-cov==7.1.0
-ruff==0.16.0
+ruff==0.16.5
 # Type-checking gradual — gate de CI (Sprint 3 / item 3.1). Cobre só os módulos
 # onde correção de tipo importa mais (ver [tool.mypy] no pyproject.toml), não a
 # árvore inteira e sem --strict; alargar depois.
-mypy==2.3.0
+mypy==2.3.1
