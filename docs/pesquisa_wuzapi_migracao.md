@@ -78,11 +78,17 @@ O pareamento sobrevive a restart/deploy/atualização de imagem desde que
       - wuzapi-dbdata:/app/dbdata
 ```
 
-**No Railway** (onde o portal já roda): serviço novo a partir do repositório
-do wuzapi, com um **Volume** montado em `/app/dbdata`, e o portal falando com
-ele pela rede privada (`http://wuzapi.railway.internal:8080`) — sem expor
-domínio público. Sem o volume, cada deploy do Railway recria o filesystem e
-pede QR de novo.
+**No Railway** (onde o portal já roda): serviço novo a partir de uma imagem
+pronta do Docker Hub (não do repositório do wuzapi — não há Dockerfile
+próprio a manter), com um **Volume** montado em `/app/dbdata`, e o portal
+falando com ele pela rede privada (`http://wuzapi.railway.internal:8080`) —
+sem expor domínio público. Sem o volume, cada deploy do Railway recria o
+filesystem e pede QR de novo. Runbook completo, passo a passo (dashboard +
+CLI), em [`docs/wuzapi/railway/README.md`](wuzapi/railway/README.md) —
+inclui a ressalva de que o backup do
+[`backup_wuzapi.sh`](wuzapi/backup_wuzapi.sh) genérico desta seção **não
+roda no Railway** (volume exclusivo de um serviço, sem `sqlite3` na imagem
+runtime) e por isso usa os mecanismos nativos da plataforma em vez dele.
 
 Confira uma vez, com o container de pé, que os arquivos estão mesmo no ponto
 montado (se a imagem mudar o WORKDIR, o mount muda junto):
@@ -379,6 +385,14 @@ Arquivos prontos: [`whatsapp_client.py`](wuzapi/whatsapp_client.py),
 
 ## 6. Runbook de pareamento (primeira subida)
 
+No Railway — que é onde este piloto vai rodar — use
+[`docs/wuzapi/railway/README.md`](wuzapi/railway/README.md) em vez do
+`docker compose` abaixo: os comandos mudam (`railway ssh` no lugar do túnel
+SSH, Custom Start Command no lugar do `command:` do compose), mas a lógica —
+volume antes de tudo, nunca porta pública, QR só depois da rede privada
+responder — é a mesma. O runbook a seguir fica como referência para um
+deploy self-hosted (VPS/servidor próprio).
+
 ```bash
 # 1. segredos
 openssl rand -hex 24  # WUZAPI_ADMIN_TOKEN
@@ -483,7 +497,13 @@ logo depois do pareamento:
 2. **Codificação do `x-hmac-signature`** (hex ou base64). O validador aceita
    os dois; olhe o header de um evento real e trave num só.
 3. **Ponto de montagem real do `dbdata`** na tag da imagem que você fixou
-   (`docker compose exec wuzapi ls -la /app/dbdata`).
+   (`docker compose exec wuzapi ls -la /app/dbdata` — no Railway,
+   `railway ssh -s wuzapi` e depois `ls -la /app/dbdata`).
+4. **Bind IPv4 vs IPv6 na rede privada do Railway** — `-address 0.0.0.0`
+   (default) não fala com um ambiente Railway legado (IPv6-only). Se o
+   `curl` do portal para `wuzapi.railway.internal:8080` der timeout, troque
+   para `-address ::` no Custom Start Command. Detalhe e teste em
+   [`docs/wuzapi/railway/README.md`](wuzapi/railway/README.md#2-confirmar-no-primeiro-deploy-não-presuma).
 
 E uma verificação de produto, não de código: **confirmar com o gestor que o
 número usado será um chip dedicado**. Toda a mitigação de risco desta pesquisa
@@ -499,3 +519,9 @@ assume isso.
 - [WhatsApp API Pricing 2026: fim da janela gratuita em outubro](https://blog.peppercloud.com/whatsapp-api-pricing-everything-you-need-to-know/)
 - [WhatsApp Business API — preços no Brasil (2026)](https://www.messagecentral.com/blog/whatsapp-business-api-pricing-brazil)
 - [WhatsApp API Pricing 2026 — categorias e mudanças](https://www.wati.io/en/blog/whatsapp-api-pricing-guide/)
+- [Railway — Private Networking](https://docs.railway.com/private-networking)
+- [Railway — Volumes (exclusividade por serviço, sem réplica)](https://docs.railway.com/reference/volumes)
+- [Railway — Backups de volume (incremental/copy-on-write)](https://docs.railway.com/reference/backups)
+- [Railway — Custom Start Command (substitui o ENTRYPOINT)](https://docs.railway.com/guides/start-command)
+- [Railway — CLI (`ssh`, `variable`, `volume`)](https://docs.railway.com/cli)
+- [Docker Hub — asternic/wuzapi (tags)](https://hub.docker.com/r/asternic/wuzapi/tags)

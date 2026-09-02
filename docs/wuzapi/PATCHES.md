@@ -1,5 +1,12 @@
 # Patches de integração — migração para WUZAPI
 
+> **Status (2026-09-02):** seções 1, 2, 3 e 5 — Fase 0 — já foram aplicadas
+> em `app/` na branch `feat/whatsapp-provider-wuzapi` (commit
+> `f57eb05`, `WHATSAPP_PROVIDER=meta` continua sendo o default, suíte
+> passando). Este arquivo fica como registro do que foi feito e por quê.
+> Só a **seção 4** (fila de notificações ativas) segue como proposta — entra
+> quando as notificações forem ligadas (Fase 3 do plano de corte).
+
 Tudo que precisa mudar no código existente. Os arquivos novos estão nesta
 mesma pasta e são cópia-e-cola; o que está aqui são as **cinco edições** em
 arquivos que já existem.
