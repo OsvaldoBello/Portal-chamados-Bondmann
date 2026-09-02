@@ -246,10 +246,24 @@ ative **Daily** (retém 6 dias) e **Weekly** (retém 1 mês). É
 incremental/copy-on-write — a mesma garantia de um snapshot de bloco (todos
 os arquivos do SQLite, incluindo `-wal`/`-shm`, congelados no mesmo instante),
 então é seguro mesmo com o wuzapi escrevendo o tempo todo — diferente de um
-`cp` ingênuo, que não tem essa atomicidade. Restauração é um clique
-(Backups → escolher a data → **Restore** → **Deploy**); documente aqui quando
-fizer o primeiro teste de restauração — **ainda não testado**, e é isso que
-transforma "tem backup" em "sabemos restaurar".
+`cp` ingênuo, que não tem essa atomicidade. Restauração: Backups → escolher a
+data → **Restore**.
+
+⚠️ **`Restore` só deixa a mudança PENDENTE** (o card do serviço no canvas do
+projeto mostra "N Changes" com um cadeado em "Restoring backup...") — não
+reinicia nada sozinho. É preciso um segundo clique explícito em
+**Deploy/Apply** (no topo da tela ou no próprio card) pra efetivar. Sem esse
+segundo clique, `railway deployment list` continua mostrando o deploy
+antigo e a sessão nem percebe que algo foi pedido — foi exatamente o que
+aconteceu no teste abaixo antes de eu perceber o card pendente.
+
+**Testado em 2026-09-02** (backup manual do mesmo dia, com a sessão já
+pareada): após o `Deploy` de verdade, `railway deployment list` mostrou um
+deployment novo (`SUCCESS`, timestamp do clique) substituindo o antigo, os
+logs mostraram boot completo (`Mounting volume` → `Database migration
+status: applied=11 pending=0` → `Server started`), e a sessão manteve
+`connected:true`, `loggedIn:true`, mesmo `jid` de antes — **sem pedir QR Code
+novo**. Restauração de volume confirmada como segura para este caso de uso.
 
 **Secundário — cópia fria portátil, antes de mudança arriscada** (troca de
 versão da imagem, migração de região). Como não existe forma segura de
@@ -291,8 +305,8 @@ deve carregar a rotina diária.
 - [x] Usuário criado, sessão pareada com o **chip dedicado**, `LoggedIn: true` — confirmado com envio de mensagem de teste
 - [x] Monitor de sessão (`app/services/wuzapi_monitor.py`) implementado e configurado (`WUZAPI_MONITOR_ALERTA_EMAIL`, alerta após 2 falhas seguidas a cada 5 min)
 - [x] Backup nativo do volume ativado (Daily + Weekly) e um backup manual disparado (2026-09-02)
-- [ ] **Restauração ainda não testada** — fazer antes do fim da Fase 1: restaurar o backup manual de 2026-09-02 num volume de teste (ou confirmar com o Railway que `Restore` não é destrutivo antes de testar no mesmo serviço) e reconferir `session/status` depois
-- [ ] Redeploy do serviço testado uma vez, confirmando que a sessão sobrevive sem novo QR
+- [x] Restauração testada (2026-09-02) — sessão sobreviveu (`loggedIn:true`, mesmo `jid`), sem novo QR
+- [x] Redeploy do serviço testado (o próprio teste de restauração já reiniciou o container), confirmando que a sessão sobrevive sem novo QR
 
 Só depois desse checklist fechado é que faz sentido considerar a Fase 2
 (`WHATSAPP_PROVIDER=wuzapi` num departamento piloto) — aquecimento de 7 dias
