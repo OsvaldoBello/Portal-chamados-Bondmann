@@ -205,13 +205,22 @@ fora chamando o portal, direção oposta da rede privada interna.
 
 Sem domínio público, o healthcheck HTTP nativo do Railway (que assume tráfego
 externo) não se aplica bem aqui — deixe-o desligado nas Settings e confie no
-**Restart Policy: On Failure** para o container. O acompanhamento ativo
-recomendado no Eixo 6/7 da pesquisa (`GET /session/status` a cada 5 min,
-alerta se `Connected`/`LoggedIn` vier `false`) ainda não está implementado —
-fica como próximo passo natural de dentro do próprio portal (ele já tem um
-padrão de reconciliação por task; um `client.presenca`/`status` periódico
-encaixaria no mesmo lugar). Não construído nesta rodada — é código em
-`app/`, fora do escopo de "preparar o serviço".
+**Restart Policy: On Failure** para o container.
+
+O acompanhamento ativo (`GET /session/status` a cada 5 min, alerta por
+e-mail se `Connected`/`LoggedIn` vier `false`) está implementado em
+`app/services/wuzapi_monitor.py` — task de fundo no mesmo padrão da
+reconciliação da triagem (`app/ia/triagem.py::iniciar_reconciliacao`),
+registrada no lifespan de `app/main.py`. Kill switch: só roda com
+`WUZAPI_BASE_URL`/`WUZAPI_TOKEN` configurados e
+`WUZAPI_MONITOR_ALERTA_EMAIL` preenchido; `WUZAPI_MONITOR_INTERVALO_S<=0`
+desliga. Só alerta depois de `WUZAPI_MONITOR_FALHAS_PARA_ALERTAR` falhas
+**consecutivas** (default 2 — evita e-mail por uma instabilidade de rede de
+um ciclo só) e manda um segundo e-mail avisando quando a sessão volta.
+
+Roda independente de `WHATSAPP_PROVIDER` — durante o aquecimento (Fase 1,
+provider ainda `meta`) já queremos saber se o pareamento cair, antes de
+qualquer automação depender dele. Testes em `tests/test_wuzapi_monitor.py`.
 
 ---
 
@@ -249,13 +258,20 @@ disponível aqui), o procedimento é parar o serviço, baixar os arquivos, e
 religar:
 
 ```bash
-railway service stop -s wuzapi   # ou: Settings → pausar o serviço na dashboard
-railway volume files download /main.db     ./backups/main-$(date +%Y%m%d).db     -v wuzapi -s wuzapi
-railway volume files download /main.db-wal ./backups/main-$(date +%Y%m%d).db-wal -v wuzapi -s wuzapi
-railway volume files download /main.db-shm ./backups/main-$(date +%Y%m%d).db-shm -v wuzapi -s wuzapi
-railway volume files download /users.db    ./backups/users-$(date +%Y%m%d).db    -v wuzapi -s wuzapi
-railway service start -s wuzapi
+# "parar" um serviço no Railway = escalar a região pra 0 réplicas (não existe
+# `railway service stop` nesta CLI — comando verificado em 2026-09,
+# v5.47.2; se uma versão futura reintroduzir stop/start, prefira-o).
+# A região é a que aparece em `railway status` (aqui, sfo).
+railway service scale -s wuzapi sfo=0
+railway volume files download /main.db     ./backups/main-$(date +%Y%m%d).db     -v wuzapi-volume -s wuzapi --overwrite
+railway volume files download /main.db-wal ./backups/main-$(date +%Y%m%d).db-wal -v wuzapi-volume -s wuzapi --overwrite
+railway volume files download /main.db-shm ./backups/main-$(date +%Y%m%d).db-shm -v wuzapi-volume -s wuzapi --overwrite
+railway volume files download /users.db    ./backups/users-$(date +%Y%m%d).db    -v wuzapi-volume -s wuzapi --overwrite
+railway service scale -s wuzapi sfo=1
 ```
+
+(`-wal`/`-shm` podem não existir se o SQLite tiver feito checkpoint
+recentemente — normal, baixe só os arquivos que existirem.)
 
 Os quatro arquivos precisam ser tratados como um conjunto — restaurar só o
 `.db` sem o `-wal`/`-shm` da mesma cópia é o mesmo problema descrito no
@@ -267,13 +283,15 @@ deve carregar a rotina diária.
 
 ## 7. Checklist de saída da Fase 1
 
-- [ ] Serviço `wuzapi` criado, sem domínio público
-- [ ] Custom Start Command aplicado e confirmado nos logs (JSON, não console)
-- [ ] Volume em `/app/dbdata`, confirmado por `ls` via `railway ssh`
-- [ ] Rede privada respondendo (`curl` do portal para `wuzapi.railway.internal:8080` sem timeout)
-- [ ] `WUZAPI_BASE_URL`/`WUZAPI_TOKEN`/`WUZAPI_WEBHOOK_HMAC_KEY` setados no portal (provider ainda `meta`)
-- [ ] Usuário criado, sessão pareada com o **chip dedicado**, `LoggedIn: true`
-- [ ] Backup nativo do volume ativado (Daily + Weekly) **e uma restauração testada**
+- [x] Serviço `wuzapi` criado, sem domínio público
+- [x] Custom Start Command aplicado e confirmado nos logs (JSON, não console)
+- [x] Volume em `/app/dbdata`, confirmado por `railway status` (montado, 0GB/48.8GB)
+- [x] Rede privada respondendo (`curl` do portal para `wuzapi.railway.internal:8080` sem timeout — 192ms)
+- [x] `WUZAPI_BASE_URL`/`WUZAPI_TOKEN`/`WUZAPI_WEBHOOK_HMAC_KEY` setados no portal (provider ainda `meta`)
+- [x] Usuário criado, sessão pareada com o **chip dedicado**, `LoggedIn: true` — confirmado com envio de mensagem de teste
+- [x] Monitor de sessão (`app/services/wuzapi_monitor.py`) implementado e configurado (`WUZAPI_MONITOR_ALERTA_EMAIL`, alerta após 2 falhas seguidas a cada 5 min)
+- [x] Backup nativo do volume ativado (Daily + Weekly) e um backup manual disparado (2026-09-02)
+- [ ] **Restauração ainda não testada** — fazer antes do fim da Fase 1: restaurar o backup manual de 2026-09-02 num volume de teste (ou confirmar com o Railway que `Restore` não é destrutivo antes de testar no mesmo serviço) e reconferir `session/status` depois
 - [ ] Redeploy do serviço testado uma vez, confirmando que a sessão sobrevive sem novo QR
 
 Só depois desse checklist fechado é que faz sentido considerar a Fase 2

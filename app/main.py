@@ -97,10 +97,17 @@ async def lifespan(app: FastAPI):
 
     intake_task = whatsapp_intake.iniciar_reconciliacao(settings)
 
+    # Monitor de sessão do wuzapi (Fase 1 da migração — alerta por e-mail se
+    # a conexão com o WhatsApp cair). `None` sem WUZAPI_BASE_URL/TOKEN ou sem
+    # e-mail de alerta configurado.
+    from app.services.wuzapi_monitor import iniciar_monitor
+
+    wuzapi_monitor_task = iniciar_monitor(settings)
+
     try:
         yield
     finally:
-        for task in (reconciliacao_task, intake_task):
+        for task in (reconciliacao_task, intake_task, wuzapi_monitor_task):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

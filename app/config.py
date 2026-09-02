@@ -137,6 +137,18 @@ class Settings(BaseSettings):
     # mídia e o envio de documento usam timeouts próprios, maiores).
     wuzapi_timeout_s: float = Field(default=15.0)
 
+    # --- Monitor de sessão do wuzapi (Fase 1 da migração, 2026-09-02) ---
+    # E-mail que recebe o alerta quando a sessão cai (e o aviso de
+    # recuperação). Vazio = monitor desligado — mesmo kill switch implícito
+    # do resto do projeto (não faz sentido rodar o loop sem ninguém pra
+    # avisar).
+    wuzapi_monitor_alerta_email: str = Field(default="")
+    # Intervalo entre checagens de `GET /session/status`. `<= 0` desliga.
+    wuzapi_monitor_intervalo_s: float = Field(default=300.0)
+    # Falhas CONSECUTIVAS antes de mandar o alerta — evita e-mail por causa
+    # de uma instabilidade de rede de um ciclo só.
+    wuzapi_monitor_falhas_para_alertar: int = Field(default=2)
+
     # --- Humanização da resposta (só tem efeito com provider=wuzapi) ---
     # Faixa do atraso de "digitando…" antes de cada mensagem do bot, escalando
     # com o tamanho do texto. Resposta instantânea é o artefato de automação
