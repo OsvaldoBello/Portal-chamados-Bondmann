@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from app.anexos import assinar_anexos, processar_uploads
 from app.auth.dependencies import CurrentUser, require_role
 from app.config import get_settings
-from app.db import rls_request_scope
+from app.db import commit_now, rls_request_scope
 from app.domain.formularios_quimico import rotular
 from app.domain.periodo import periodo_invertido
 from app.domain.sla_visual import estado_sla
@@ -659,6 +659,12 @@ async def mudar_status(
         return JSONResponse({"ok": resultado is not None})
     if bloqueio is not None:
         return await _carregar_atendimento(request, chamado_id, ctx, repo, origem=origem)
+
+    # Mesma corrida do `/encerrar` (ver comentário lá): o form clássico redireciona
+    # pra esta MESMA página, e sem commit explícito o GET seguinte pode rodar em
+    # nova transação antes do UPDATE acima estar durável, reexibindo o status antigo.
+    await commit_now()
+
     return _voltar(chamado_id, origem)
 
 
@@ -1028,6 +1034,15 @@ async def encerrar(
                 observadores=[str(o["perfil_id"]) for o in observadores],
             )
     await repo.alterar_status(ctx.user.claims, chamado_id, "RESOLVIDO")
+
+    # Commita AGORA (ver docstring de `commit_now`): sem isto, o 303 abaixo pode
+    # chegar ao browser e ser seguido pelo GET desta MESMA página ANTES do
+    # UPDATE estar durável — o SELECT seguinte, em nova transação, ainda vê o
+    # status antigo e reexibe o formulário "Encerrar chamado", permitindo
+    # reenviar a resolução várias vezes (mesma classe do bug 2026-08-27, aqui
+    # como status obsoleto em vez de 404).
+    await commit_now()
+
     return _voltar(chamado_id, origem)
 
 
