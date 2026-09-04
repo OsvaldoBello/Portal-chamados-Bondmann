@@ -25,6 +25,7 @@
 - [Seção 1 — Estado atual do repositório (ponto de partida real)](#seção-1--estado-atual-do-repositório-ponto-de-partida-real)
 - [Seção 2 — Arquitetura do motor de triagem](#seção-2--arquitetura-do-motor-de-triagem)
   - [Seção 2.5 — Reclassificação automática de categoria/subcategoria](#25-reclassificação-automática-de-categoriasubcategoria-f8-2026-08-04)
+  - [Seção 2.6 — Intake de chamados via WhatsApp e estratégia Wuzapi (custo zero)](#26-intake-de-chamados-via-whatsapp-e-estratégia-wuzapi-custo-zero)
 - [Seção 3 — Segurança do Agente Químico (dois passes)](#seção-3--segurança-do-agente-químico-dois-passes)
 - [Seção 4 — Modelo de dados (DDL canônico da frente de IA)](#seção-4--modelo-de-dados-ddl-canônico-da-frente-de-ia)
 - [Seção 5 — Busca de chamados semelhantes](#seção-5--busca-de-chamados-semelhantes)
@@ -375,6 +376,25 @@ própria, com red team.
 **Rollback:** esvaziar `IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS` no Railway. Sem deploy, sem
 migration. **Sinal de calibragem errada:** `IA_RECLASSIFICACAO` seguido de `CATEGORIA_ALTERADA` do
 staff no mesmo chamado — reclassificação que o humano desfaz.
+
+### 2.6 Intake de chamados via WhatsApp e estratégia Wuzapi (custo zero)
+
+O canal de intake via WhatsApp (`app/ia/whatsapp_intake.py`, `app/routes/whatsapp.py` e `app/whatsapp_client.py`) permite que colaboradores e representantes corporativos abram chamados e recebam atualizações diretamente pelo WhatsApp, com suporte a fluxos multi-rodadas com formulários dinâmicos e anexos.
+
+#### 2.6.1 Migração de Provedor: Meta Cloud API → Wuzapi (Custo Zero)
+- **Motivação de Custo:** A Meta Cloud API cobra por conversação de 24h e exige templates pagos para notificações fora da janela. A migração para o Wuzapi elimina 100% dos custos por mensagem/conversa e dispensa burocracia de verificação de empresa (Meta Business Manager).
+- **Motor Wuzapi:** Baseado na biblioteca `whatsmeow` (Go), operando como microserviço/container Docker local ou sidecar no ambiente de deploy, conectando-se como WhatsApp Web Multi-Device através de pareamento por QR Code / Pairing Code no celular corporativo oficial.
+
+#### 2.6.2 Pilares de Confiabilidade, Blindagem Anti-Ban e Persistência
+1. **Simulação Humana de Digitação (`ChatPresence: composing`):**
+   - Antes de enviar cada resposta ou pergunta formulada pela IA, o cliente Wuzapi emite o status *"Digitando..."* (`ChatPresence: composing`) por um intervalo humanizado (1 a 2 segundos).
+   - Evita respostas instantâneas milissegúndicas que disparam heurísticas automatizadas de detecção de robôs da rede do WhatsApp.
+2. **Controle de Frequência de Notificações Ativas (Anti-Flood e Rate Limiting):**
+   - Notificações ativas (respostas de chamados, atualizações de status para o solicitante) são controladas por fila com rate limiting, evitando disparos em lote no mesmo segundo.
+   - Toda notificação contextualiza o código do chamado (ex.: `[Chamado #1234]`) e destina-se apenas a colaboradores com cadastro ativo, garantindo taxa de denúncias/bloqueios praticamente nula (fator #1 de banimento).
+3. **Backup e Persistência da Sessão SQLite/Postgres:**
+   - A sessão criptográfica e as credenciais de pareamento do `whatsmeow` são gravadas em volume persistente (`wuzapi.db` SQLite ou tabela dedicada Postgres).
+   - Em reinicializações de container, deploys ou instabilidades temporárias de rede, o Wuzapi reconecta automaticamente sem exigir novo scan de QR Code e **sem perder o estado das conversas em andamento** registradas no banco principal (`whatsapp_conversas`).
 
 ---
 
@@ -897,6 +917,7 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 > prefixando `doc IA`. Linha mais nova no topo. Decisões arquiteturais grandes viram ADR em
 > `docs/adr/`.
 
+- 2026-09-01 · doc IA · Seção 2.6 (nova), Tabela de Estado · **Estratégia de intake via WhatsApp e substituição da Meta Cloud API por Wuzapi (custo zero)**: documentada a arquitetura do bot de WhatsApp, os pilares de blindagem anti-banimento (simulação de digitação `composing` de 1–2 s, controle anti-flood de notificações ativas de chamados) e a persistência de sessão SQLite/Postgres para reconexão transparente sem perda de conversas em andamento.
 - 2026-08-04 · doc IA · Regra de Ouro #3, Seções 2.3, 2.4, 2.5 (nova), 7 (F8), 8.2 (invariante 7),
   10.1 · **A IA passou a trocar categoria/subcategoria sozinha quando a divergência é evidente**
   — pedido do gestor, registrado em [ADR-0008](docs/adr/0008-ia-reclassifica-categoria.md).
@@ -1123,6 +1144,7 @@ Considerar painel simples no `/admin` como evolução pós-F6 (fora do escopo v1
 | Red team (corpus + bateria comportamental) | ✅ **Implementado + executado (2026-07-27) — ZERO VAZAMENTOS** | F5 | `tests/red_team/` (marker `redteam`): corpus de 6 categorias mínimas (`casos/*.json`); suíte estrutural (26 testes, sempre verde, sem rede) prova os invariantes 8.2 sob o corpus malicioso; suíte comportamental (11 testes, `gpt-5.4-mini` real, opt-in `IA_REDTEAM_LIVE=1`, skip automático sem a env — mesmo padrão da suíte `rls`) rodada ao vivo em 2026-07-27, zero vazamentos (relatório em `tests/red_team/execucoes/2026-07-27.md`). Gatilho permanente documentado: reexecutar a cada mudança de `app/ia/prompts/quimico_*`/modelo. Critério de saída da F5 atendido; F6 liberada quanto ao gate de segurança. |
 | Leitura de anexos (imagem/documento) pela triagem | ✅ Código implementado (2026-07-30) + **LIGADO em produção pelo gestor no mesmo dia** | F7 (nova) | `app/ia/anexos_contexto.py` (novo): imagens (jpg/png) via visão (Pillow redimensiona ao maior lado configurável antes do envio, base64 data URI, `detail` configurável `auto`/`low`/`high` — default `low`, custo previsível) e documentos — PDF (`pypdf`), Word (`python-docx`), Excel (`openpyxl`, modo `read_only` streaming) e PowerPoint (`python-pptx`) — via extração de texto, tetos de página/chars por arquivo. Vídeo e OCR de documento escaneado ficam FORA de escopo (dispatch por mime, não só convenção); docx/xlsx/pptx desempatados de `application/zip` (libmagic antigo) pela extensão do `path`. Download via `AnexosStorage.download()` (novo, mesmo bearer `service_role` já usado em uploads de sistema — `app/storage.py`). Processado UMA vez por execução e reaproveitado nos dois passes do Químico (sem download nem chamada de modelo duplicada — Regra #9); anexos são dado do próprio cliente sobre o próprio caso, não a base sigilosa, então participam também do Passe A (Regra #4 preservada). Kill switch estreito `IA_TRIAGEM_ANEXOS_ATIVO` (default `false`), independente do geral — rollback isolado; **ligado em produção (Railway) pelo gestor em 2026-07-30**, validado ao vivo no BOND-2026-00645 (nota re-analisada citando "pela evidência da tela" — a IA leu mesmo as imagens). Teto de bytes lido pela IA do Químico igualado ao teto de upload (**100MB**, pedido do gestor). Custo auditável automático (`usage.prompt_tokens` já cobre tokens de imagem, zero código novo em `ia_triagens.custo_usd`). Testes: `test_ia_anexos_contexto.py` (funções puras com bytes reais via Pillow/pypdf/python-docx/openpyxl/python-pptx, não só mocks — lição do incidente `_MARGEM_ORFAO` de 2026-07-29), `test_storage.py` (`download`), plumbing em `test_ia_triagem.py`/`test_ia_quimico.py` (kill switch, dedupe entre passes). Pendente: acompanhar custo/qualidade real com o escopo ampliado antes de considerar F7 encerrada. |
 | Reclassificação automática de categoria/subcategoria | ✅ Código implementado (2026-08-04) — **atrás de env** | F8 (nova) | ADR-0008 / Seção 2.5. `SaidaTriagem` ganhou `subcategoria_sugerida`, `categoria_divergente` e `categoria_justificativa` (defaults que não reclassificam nada); catálogo enviado ao modelo passou a listar as subcategorias ativas de cada categoria e o chamado a mostrar a subcategoria escolhida. `triagem.resolver_reclassificacao` (pura) resolve o destino **só** dentro do catálogo do departamento do chamado (nome normalizado → id do catálogo), exigindo divergência declarada + confiança ≥ env (default ALTA) + justificativa; `_aplicar_reclassificacao` acrescenta as guardas de banco (sem formulário dinâmico, sem atendimento iniciado, classificação virgem, `UPDATE` compare-and-swap) e registra `IA_RECLASSIFICACAO` em `historico_chamados`. Nota interna declara de→para + motivo e para de sugerir. **Sem migration.** Químico fora por construção (prompt do Passe A não conhece os campos ⇒ red team da 8.3 não reaberto). 20 testes novos em `test_ia_triagem.py`. Liga com `IA_TRIAGEM_RECLASSIFICACAO_DEPARTAMENTOS=TI` no Railway — **pendente do gestor**. |
+| Intake de chamados via WhatsApp + Wuzapi | ✅ Migrations 0085–0087 / 🔄 Migração Wuzapi planejada | — | Seção 2.6. `app/ia/whatsapp_intake.py` + `app/routes/whatsapp.py` + `app/whatsapp_client.py`. Resolução telefone→perfil normalizado, intake multi-rodadas com LLM, formulários dinâmicos Químico/RH. Substituição da Meta Cloud API por Wuzapi (Go/whatsmeow) a custo zero com simulação de digitação, controle de notificações ativas e persistência de sessão SQLite. |
 | Homologação + go-live geral | Planejado | F6 | Aprovação formal TI + Químico; runbook de operação. |
 | pgvector / busca semântica | Backlog | pós-v1 | Gatilho: FTS errando por vocabulário com volume relevante. |
 | Extensão a Marketing/RH | Backlog | pós-90 dias | Mesma arquitetura; decisão por KPIs. |
