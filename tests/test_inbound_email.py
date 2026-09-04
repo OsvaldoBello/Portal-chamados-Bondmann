@@ -233,3 +233,46 @@ async def test_notificar_nova_mensagem_email_com_secret_dedicado_gera_reply_to()
     assert reply_to is not None
     assert reply_to.startswith("chamado+ch-1002+")
     assert reply_to.endswith("@reply.bondmann.com.br")
+
+
+async def test_notificar_observador_adicionado_email_envia_para_o_novo_observador():
+    """Gap do plano mestre (linha 1052): quem é colocado em cópia agora recebe
+    um aviso por e-mail, não só descobre ao abrir o Portal."""
+    from app.notification import notificar_observador_adicionado_email
+
+    settings = _settings()
+    chamado = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "codigo": "CH-1002",
+        "titulo": "Teste",
+    }
+
+    admin_client = AsyncMock()
+    admin_client.auth.admin.get_user_by_id = AsyncMock(
+        return_value=type("R", (), {"user": type("U", (), {"email": "observador@bondmann.com.br"})()})()
+    )
+
+    with patch("app.notification.get_settings", return_value=settings):
+        with patch("app.notification.ensure_admin_client", AsyncMock(return_value=admin_client)):
+            with patch("app.notification.enviar_email", new_callable=AsyncMock) as mock_enviar:
+                await notificar_observador_adicionado_email(
+                    chamado, "44444444-4444-4444-4444-444444444444", "Fulano"
+                )
+
+    assert mock_enviar.called
+    args = mock_enviar.call_args.args
+    assert args[0] == "observador@bondmann.com.br"
+    assert "cópia" in args[1].lower()
+    assert "Fulano" in args[2]
+
+
+async def test_notificar_observador_adicionado_email_sem_admin_client_nao_quebra():
+    from app.notification import notificar_observador_adicionado_email
+
+    chamado = {"id": "1", "codigo": "CH-1002", "titulo": "Teste"}
+
+    with patch("app.notification.ensure_admin_client", AsyncMock(return_value=None)):
+        with patch("app.notification.enviar_email", new_callable=AsyncMock) as mock_enviar:
+            await notificar_observador_adicionado_email(chamado, "obs-1")
+
+    assert not mock_enviar.called

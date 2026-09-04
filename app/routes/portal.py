@@ -707,8 +707,15 @@ async def criar_chamado(
 
     # "Em cópia" (Fase 8): observadores escolhidos já na abertura — multi-setorial,
     # qualquer pessoa da organização (não só do departamento de destino).
-    for observador_id in {v.strip() for v in form_data.getlist("observadores") if v.strip()}:
-        await repo.adicionar_observador(ctx.user.claims, str(novo["id"]), observador_id)
+    observadores_abertura = {v.strip() for v in form_data.getlist("observadores") if v.strip()}
+    if observadores_abertura:
+        from app.notification import agendar_notificacao_observador_adicionado
+        chamado_para_email = {"id": str(novo["id"]), "codigo": novo["codigo"], "titulo": titulo}
+        for observador_id in observadores_abertura:
+            await repo.adicionar_observador(ctx.user.claims, str(novo["id"]), observador_id)
+            await agendar_notificacao_observador_adicionado(
+                tarefa_ia, chamado_para_email, observador_id, ctx.perfil.get("nome")
+            )
 
     # Anexos da abertura viram a primeira mensagem (pública) do autor.
     if validados:
@@ -825,6 +832,7 @@ async def excluir_chamado(
 async def adicionar_observador(
     request: Request,
     chamado_id: str,
+    background_tasks: BackgroundTasks,
     perfil_id: str = Form(""),
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
@@ -833,6 +841,12 @@ async def adicionar_observador(
     perfil_id = perfil_id.strip()
     if perfil_id:
         await repo.adicionar_observador(ctx.user.claims, chamado_id, perfil_id)
+        chamado = await repo.obter(ctx.user.claims, chamado_id)
+        if chamado:
+            from app.notification import agendar_notificacao_observador_adicionado
+            await agendar_notificacao_observador_adicionado(
+                background_tasks, chamado, perfil_id, ctx.perfil.get("nome")
+            )
     return RedirectResponse(
         f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER
     )
