@@ -490,6 +490,161 @@ async def _notificar_observador_mensagem(client, chamado: dict, observador_id: s
     await enviar_email(email, assunto, corpo_texto, corpo_html)
 
 
+async def notificar_observador_adicionado_email(
+    chamado: dict, observador_id: str, adicionado_por_nome: str | None = None
+) -> None:
+    """Avisa quem acabou de ser colocado "em cópia" (Fase 8) num chamado —
+    gap identificado no plano mestre (linha 1052): até aqui a pessoa só
+    descobria que foi adicionada ao abrir o Portal (RLS/Realtime), sem
+    nenhum e-mail. Mesmo layout de :func:`_notificar_observador_mensagem`,
+    trocando o evento; sem Reply-To (em cópia é só leitura, nunca responde
+    pelo chamado)."""
+    client = await ensure_admin_client()
+    if not client:
+        log.warning("Observador adicionado: Supabase admin client não configurado, notificação pulada.")
+        return
+
+    try:
+        res = await client.auth.admin.get_user_by_id(observador_id)
+        u = getattr(res, "user", res)
+        email = getattr(u, "email", None)
+        if not email:
+            log.warning(f"Observador {observador_id} sem e-mail cadastrado.")
+            return
+    except Exception as e:
+        log.error(f"Erro ao buscar e-mail do observador {observador_id}: {e}")
+        return
+
+    settings = get_settings()
+    codigo = chamado.get("codigo", "")
+    titulo = chamado.get("titulo", "")
+    chamado_id = chamado.get("id")
+    site_url = settings.site_url.rstrip("/")
+    url = f"{site_url}/portal/chamados/{chamado_id}"
+    quem = f" por {adicionado_por_nome}" if adicionado_por_nome else ""
+
+    assunto = f"[Portal Bondmann] Você foi colocado em cópia no chamado {codigo}"
+
+    corpo_texto = (
+        f"Olá,\n\n"
+        f"Você foi colocado em cópia{quem} no chamado {codigo} ({titulo}).\n\n"
+        f"A partir de agora você poderá acompanhar as mensagens públicas deste "
+        f"chamado e receberá um aviso por e-mail a cada nova mensagem.\n\n"
+        f"Para acompanhar, acesse: {url}\n\n"
+        f"Atenciosamente,\n"
+        f"Portal de Chamados Bondmann Química\n"
+    )
+
+    corpo_html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f8fafc;
+      color: #334155;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }}
+    .wrapper {{ width: 100%; background-color: #f8fafc; padding: 30px 15px; }}
+    .container {{
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+      border: 1px solid #e2e8f0;
+    }}
+    .header {{ background-color: #1e293b; padding: 24px; text-align: center; }}
+    .header-logo {{ color: #ffffff; font-weight: 800; font-size: 20px; letter-spacing: 0.05em; }}
+    .header-sub {{ color: #1d9e75; font-size: 10px; font-weight: bold; letter-spacing: 0.3em; margin-top: 4px; }}
+    .content {{ padding: 32px 24px; }}
+    .title {{ font-size: 18px; font-weight: 700; color: #0f172a; margin-top: 0; margin-bottom: 8px; }}
+    .subtitle {{ font-size: 13px; color: #64748b; margin-bottom: 24px; }}
+    .cc-tag {{
+      display: inline-block;
+      background-color: #f1f5f9;
+      color: #475569;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      border-radius: 999px;
+      padding: 3px 10px;
+      margin-bottom: 16px;
+    }}
+    .btn-container {{ text-align: center; margin-bottom: 24px; }}
+    .btn {{
+      display: inline-block;
+      background-color: #1e293b;
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 6px;
+      box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    }}
+    .footer {{
+      background-color: #f8fafc;
+      padding: 24px;
+      text-align: center;
+      font-size: 11px;
+      color: #94a3b8;
+      border-top: 1px solid #e2e8f0;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        <div class="header-logo">BONDMANN</div>
+        <div class="header-sub">PORTAL DE CHAMADOS</div>
+      </div>
+      <div class="content">
+        <div class="cc-tag">EM CÓPIA</div>
+        <h2 class="title" style="margin-top: 0; margin-bottom: 8px;">Você foi colocado em cópia</h2>
+        <div class="subtitle">Chamado {codigo}: <strong>{titulo}</strong></div>
+
+        <p style="margin-top:0; font-size:14px; color: #475569;">Você foi adicionado{quem} como observador deste chamado e passará a receber um aviso a cada nova mensagem pública.</p>
+
+        <div class="btn-container">
+          <a href="{url}" class="btn">Acompanhar chamado</a>
+        </div>
+
+        <p style="font-size: 12px; color: #94a3b8; margin-bottom: 0;">Se o botão não funcionar, copie e cole o link no seu navegador:<br><a href="{url}" style="color: #1d9e75; text-decoration: none;">{url}</a></p>
+      </div>
+      <div class="footer">
+        Este é um e-mail automático enviado pelo Portal de Chamados Bondmann Química.<br>
+        Por favor, não responda diretamente a este endereço de e-mail.
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+    await enviar_email(email, assunto, corpo_texto, corpo_html)
+
+
+async def agendar_notificacao_observador_adicionado(
+    background_tasks: BackgroundTasks,
+    chamado: dict,
+    observador_id: str,
+    adicionado_por_nome: str | None = None,
+) -> None:
+    """Agenda (via BackgroundTasks) o aviso de "você foi colocado em cópia" —
+    mesmo padrão de :func:`agendar_notificacao_email`."""
+    log.info("[NOTIFICATION] Queueing background task for observer-added email notification")
+    background_tasks.add_task(
+        notificar_observador_adicionado_email, chamado, observador_id, adicionado_por_nome
+    )
+
+
 async def notificar_novo_usuario_email(nome: str, email: str) -> None:
     """E-mail de boas-vindas ao criar uma conta pelo painel Admin (2026-07-21):
     instrui o primeiro acesso via "Esqueci minha senha" (o TI cria a conta com
