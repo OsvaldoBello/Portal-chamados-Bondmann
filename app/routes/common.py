@@ -27,13 +27,14 @@ from app.auth.session import current_access_token
 from app.config import get_settings
 from app.ia import triagem
 from app.repositories.chamados import ChamadosRepo, get_chamados_repo
+from app.routes.transacao import CommitBeforeResponseRoute
 from app.security.uploads import UploadInvalido, validar_anexo
 from app.storage import AnexosStorage, StorageError, ensure_storage
 from app.templating import render
 
 log = logging.getLogger("app.routes.common")
 
-router = APIRouter(tags=["common"])
+router = APIRouter(tags=["common"], route_class=CommitBeforeResponseRoute)
 
 
 @router.get("/notificacoes")

@@ -22,11 +22,14 @@ from app.avatar_storage import AvatarStorageError, avatar_path, enviar_avatar, p
 from app.config import get_settings
 from app.repositories.chamados import ChamadosRepo, get_chamados_repo, validar_telefone_contato
 from app.routes.portal import PortalCtx, portal_context
+from app.routes.transacao import CommitBeforeResponseRoute
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
 from app.templating import portal_base_template, render
 
-router = APIRouter(prefix="/perfil", tags=["perfil"])
+router = APIRouter(
+    prefix="/perfil", tags=["perfil"], route_class=CommitBeforeResponseRoute
+)
 
 
 async def _csrf_guard(request: Request) -> None:

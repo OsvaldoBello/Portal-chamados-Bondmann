@@ -41,12 +41,15 @@ from app.repositories.chamados import (
     get_chamados_repo,
     validar_prazo_projeto,
 )
+from app.routes.transacao import CommitBeforeResponseRoute
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
 from app.services.atendimento import AtendimentoService
 from app.templating import render
 
-router = APIRouter(prefix="/workspace", tags=["workspace"])
+router = APIRouter(
+    prefix="/workspace", tags=["workspace"], route_class=CommitBeforeResponseRoute
+)
 
 # Whitelist server-side da troca de status = o enum inteiro do banco. Definido
 # uma vez em `app/repositories/atendimento.py` (junto de quem escreve status) e

@@ -54,6 +54,7 @@ from app.repositories.chamados import (
     get_chamados_repo,
     validar_prazo_projeto,
 )
+from app.routes.transacao import CommitBeforeResponseRoute
 from app.security.csrf import get_csrf
 from app.security.password_policy import SENHA_MIN_CHARS
 from app.security.uploads import UploadInvalido, validar_anexo
@@ -69,7 +70,9 @@ from app.services.ingestao_marketing_midia import parse_bytes as parse_midia_byt
 from app.services.ingestao_quimico import ingerir_conn
 from app.templating import render
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/admin", tags=["admin"], route_class=CommitBeforeResponseRoute
+)
 
 # Painel da base do Químico (F4): quem mantém a base é o próprio Químico.
 _DEPTO_QUIMICO = "Dpto Químico"

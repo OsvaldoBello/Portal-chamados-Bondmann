@@ -15,10 +15,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.config import get_settings
+from app.routes.transacao import CommitBeforeResponseRoute
 
 log = logging.getLogger("app.routes.whatsapp")
 
-router = APIRouter(tags=["whatsapp"])
+router = APIRouter(tags=["whatsapp"], route_class=CommitBeforeResponseRoute)
 
 
 @router.get("/api/webhooks/whatsapp")
