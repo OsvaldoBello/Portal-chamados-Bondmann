@@ -62,22 +62,33 @@ class _RLSHolder:
         self._acquire_cm: Any = None
         self._tx: Any = None
 
+    async def _start_tx(self, conn: asyncpg.Connection) -> None:
+        """Abre transação e injeta os claims nela (RLS vive no escopo da tx)."""
+        self._tx = conn.transaction()
+        await self._tx.start()
+        await _apply_rls_claims(conn, self.claims)
+
     async def get_conn(self) -> asyncpg.Connection:
         if self.conn is None:
             pool = await _ensure_pool()
             self._acquire_cm = pool.acquire()
             conn = await self._acquire_cm.__aenter__()
-            self._tx = conn.transaction()
-            await self._tx.start()
-            await _apply_rls_claims(conn, self.claims)
+            await self._start_tx(conn)
             self.conn = conn
+        elif self._tx is None:
+            # Transação já commitada por `commit_now`: a conexão continua
+            # emprestada, mas precisa de uma tx nova (com os claims de novo,
+            # porque `SET LOCAL` morre junto com a transação anterior).
+            await self._start_tx(self.conn)
         return self.conn
 
     async def close(self, exc: BaseException | None) -> None:
         if self.conn is None:
             return
         try:
-            if exc is None:
+            if self._tx is None:
+                pass  # já commitada por `commit_now` e nada foi escrito depois
+            elif exc is None:
                 await self._tx.commit()
             else:
                 await self._tx.rollback()
@@ -89,6 +100,7 @@ class _RLSHolder:
         finally:
             await self._acquire_cm.__aexit__(None, None, None)
             self.conn = None
+            self._tx = None
 
 
 _request_holder: ContextVar[_RLSHolder | None] = ContextVar("_request_holder", default=None)
@@ -189,23 +201,27 @@ async def commit_now() -> None:
     ANTES desse teardown rodar (``fastapi/routing.py::request_response``:
     ``await response(...)`` acontece antes do ``async with AsyncExitStack()``
     fechar). Ou seja: por padrão, um `303 Redirect` pode chegar ao browser e
-    ser seguido ANTES do INSERT que ele referencia estar commitado — o SELECT
-    seguinte, em outra transação, não enxerga a linha ainda (RLS não vê o que
-    não foi commitado) e devolve 404 mesmo com o registro gravado com sucesso
-    (bug real, 2026-08-27: chamado do RH criado, redirect pro detalhe 404).
+    ser seguido ANTES do INSERT/UPDATE que ele referencia estar commitado — o
+    SELECT seguinte, em outra transação, não enxerga a escrita ainda (RLS não
+    vê o que não foi commitado). Sintomas reais já vistos: 404 na abertura de
+    chamado (2026-08-27) e tela de atendimento reexibindo o status antigo
+    depois de encerrar (2026-09-03/2026-09-10).
 
-    Chame isto logo após um INSERT cujo ID alimenta um redirect para uma
-    página que lê aquele MESMO registro (ex.: abertura de chamado → detalhe).
-    Reaplica os claims numa transação nova para que as chamadas seguintes do
-    mesmo request continuem funcionando normalmente."""
+    Hoje **toda** rota que não é de leitura passa por isto automaticamente
+    (:class:`app.routes.transacao.CommitBeforeResponseRoute`, aplicada via
+    ``route_class`` dos routers), então normalmente não é preciso chamar à mão
+    — só quando o próprio handler precisa que a escrita esteja durável ANTES
+    de um passo seguinte dele mesmo (ex.: ``criar_chamado``, que dispara
+    triagem/notificações que releem o chamado).
+
+    Idempotente e barato: sem holder, sem conexão aberta ou já commitado, é
+    no-op. A transação seguinte é aberta preguiçosamente pela próxima query do
+    request (``_RLSHolder.get_conn``), reaplicando os claims."""
     holder = _request_holder.get()
-    if holder is None or holder.conn is None:
+    if holder is None or holder.conn is None or holder._tx is None:
         return
-    conn = holder.conn
-    await holder._tx.commit()
-    holder._tx = conn.transaction()
-    await holder._tx.start()
-    await _apply_rls_claims(conn, holder.claims)
+    tx, holder._tx = holder._tx, None
+    await tx.commit()
 
 
 @asynccontextmanager

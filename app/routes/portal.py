@@ -59,6 +59,7 @@ from app.repositories.chamados import (
     validar_nota,
     validar_telefone_contato,
 )
+from app.routes.transacao import CommitBeforeResponseRoute
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
 from app.services.ia_resumo import gerar_e_salvar_resumo
@@ -67,7 +68,9 @@ from app.templating import portal_base_template, render
 
 log = logging.getLogger("app.portal")
 
-router = APIRouter(prefix="/portal", tags=["portal"])
+router = APIRouter(
+    prefix="/portal", tags=["portal"], route_class=CommitBeforeResponseRoute
+)
 
 
 @dataclass(frozen=True)

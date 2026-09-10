@@ -45,12 +45,13 @@ from app.auth.dependencies import (
 from app.auth.routes import home_for
 from app.auth.session import REFRESH_COOKIE, SessionTokens, current_access_token, set_session
 from app.config import get_settings
+from app.routes.transacao import CommitBeforeResponseRoute
 from app.security.csrf import get_csrf
 from app.templating import render
 
 log = logging.getLogger("app.routes.mfa")
 
-router = APIRouter(prefix="/mfa", tags=["mfa"])
+router = APIRouter(prefix="/mfa", tags=["mfa"], route_class=CommitBeforeResponseRoute)
 
 
 async def _csrf_guard(request: Request) -> None:

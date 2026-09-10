@@ -17,11 +17,12 @@ from app.auth.dependencies import CurrentUser, get_optional_user
 from app.auth.session import REFRESH_COOKIE, SessionTokens, clear_session, set_session
 from app.auth.supabase_client import create_isolated_client, ensure_supabase
 from app.config import get_settings
+from app.routes.transacao import CommitBeforeResponseRoute
 from app.security.csrf import get_csrf
 from app.security.password_policy import SENHA_MIN_CHARS
 from app.templating import render
 
-router = APIRouter(tags=["auth"])
+router = APIRouter(tags=["auth"], route_class=CommitBeforeResponseRoute)
 
 # Destino pós-login por papel. ADMIN/OPERADOR (staff) vão ao Workspace (Fase 4);
 # o painel /admin (Fase 5) ainda não existe. CLIENTE (funcionário) vai ao Portal.
