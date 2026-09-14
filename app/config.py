@@ -198,6 +198,15 @@ class Settings(BaseSettings):
     # esqueceu de mandar a foto ainda consegue anexar depois). `<= 0` desliga
     # o recurso — mídia sempre abre conversa nova, como antes. Default 30min.
     whatsapp_intake_anexo_janela_s: float = Field(default=1800.0)
+    # Validade (segundos) de uma conversa em COLETANDO sem mensagem nova:
+    # passado isso, a próxima mensagem do telefone abre uma conversa NOVA e a
+    # antiga vira EXPIRADA (2026-09-14: um "oi" foi encaixado numa conversa
+    # de teste de 3 SEMANAS atrás, presa em "qual é o seu setor?", e o bot
+    # retomou aquele roteiro — a pessoa nem lembrava dele). `<= 0` desliga
+    # (comportamento antigo: conversa aberta vale para sempre). Default 24h —
+    # quem responde a pergunta do bot no dia seguinte ainda continua de onde
+    # parou; depois disso, começa do zero.
+    whatsapp_intake_conversa_expira_s: float = Field(default=86400.0)
     # Intervalo (segundos) da varredura de reconciliação de conversas
     # travadas por restart/redeploy — mesma rede de segurança da triagem
     # (`ia_triagem_reconciliacao_intervalo_s`). `<= 0` desliga a varredura.

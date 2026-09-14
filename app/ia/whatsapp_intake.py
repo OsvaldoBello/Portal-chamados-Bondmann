@@ -577,7 +577,9 @@ async def _receber_mensagem(msg: dict[str, Any]) -> None:
                 _agendar(_anexar_midia_pos_criacao(alvo, perfil, msg, telefone, settings))
                 return
 
-        conversa_id = await _abrir_ou_obter_conversa(conn, perfil, telefone)
+        conversa_id = await _abrir_ou_obter_conversa(
+            conn, perfil, telefone, expira_s=settings.whatsapp_intake_conversa_expira_s
+        )
         await conn.execute(
             """
             UPDATE whatsapp_conversas
@@ -609,11 +611,30 @@ async def _receber_mensagem(msg: dict[str, Any]) -> None:
     _agendar(processar_conversa(conversa_id))
 
 
-async def _abrir_ou_obter_conversa(conn: Any, perfil: dict[str, Any], telefone: str) -> str:
+async def _abrir_ou_obter_conversa(
+    conn: Any, perfil: dict[str, Any], telefone: str, *, expira_s: float = 0.0
+) -> str:
     """Id da conversa aberta deste telefone, criando uma se não houver.
 
     O índice único parcial (migration 0086) garante no banco que só existe uma
-    conversa em ``COLETANDO``/``PROCESSANDO`` por telefone."""
+    conversa em ``COLETANDO``/``PROCESSANDO`` por telefone.
+
+    Antes de reaproveitar, expira a conversa em ``COLETANDO`` parada há mais de
+    ``expira_s`` (status ``EXPIRADA``, já previsto no CHECK da 0086 e até aqui
+    nunca usado) — a mensagem nova então abre conversa do zero. Só
+    ``COLETANDO``: uma ``PROCESSANDO`` antiga é a task que morreu no restart,
+    e disso cuida a reconciliação, não a expiração. ``expira_s <= 0`` desliga."""
+    if expira_s > 0:
+        await conn.execute(
+            """
+            UPDATE whatsapp_conversas
+               SET status = 'EXPIRADA', atualizada_em = now()
+             WHERE telefone = $1 AND status = 'COLETANDO'
+               AND atualizada_em < now() - ($2 * interval '1 second')
+            """,
+            telefone,
+            expira_s,
+        )
     existente = await conn.fetchval(
         """
         SELECT id::text FROM whatsapp_conversas

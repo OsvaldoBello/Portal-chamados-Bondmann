@@ -2886,3 +2886,58 @@ async def test_reconciliacao_passa_margem_como_timedelta_para_o_interval():
     assert capturado["args"] == (whatsapp_intake._MARGEM_TRAVADA,)
     assert all(not isinstance(a, str) for a in capturado["args"])
     assert capturado["sql"].count("now() - $1::interval") == 2
+
+
+# --------------------------------------------------------------------------
+# Expiração de conversa parada (2026-09-14)
+# --------------------------------------------------------------------------
+
+
+def _updates_expiracao(conn: FakeConn) -> list[tuple]:
+    return [
+        args for sql, args in conn.executes
+        if "SET status = 'EXPIRADA'" in sql and "status = 'COLETANDO'" in sql
+    ]
+
+
+async def test_mensagem_nova_expira_conversa_coletando_parada_antes_de_reaproveitar():
+    """Bug real (2026-09-14): um "oi" foi encaixado numa conversa de teste de
+    3 SEMANAS atrás, presa em COLETANDO ("qual é o seu setor?"), e o bot
+    retomou aquele roteiro. Agora, antes de procurar conversa aberta, o
+    intake expira a COLETANDO sem atividade há mais de
+    `whatsapp_intake_conversa_expira_s` — a mensagem cai numa conversa nova.
+    O UPDATE tem que vir ANTES do SELECT de conversa aberta, senão o índice
+    único parcial da 0086 ainda devolveria a antiga."""
+    conn = FakeConn()
+    with ambiente(
+        conn, _settings(whatsapp_intake_conversa_expira_s=3600), saida=_saida_completa(),
+        capturar_agendamentos=True,
+    ):
+        await whatsapp_intake.processar_mensagens_whatsapp(_payload(corpo="oi"))
+
+    updates = _updates_expiracao(conn)
+    assert updates == [(_TELEFONE, 3600)]
+    sql_expira = next(s for s, _ in conn.executes if "SET status = 'EXPIRADA'" in s)
+    # Só COLETANDO expira — PROCESSANDO é caso da reconciliação, não daqui.
+    assert "status = 'COLETANDO'" in sql_expira and "PROCESSANDO" not in sql_expira
+    assert "atualizada_em < now() - ($2 * interval '1 second')" in sql_expira
+
+
+async def test_expiracao_desligada_nao_toca_na_conversa_aberta():
+    """`WHATSAPP_INTAKE_CONVERSA_EXPIRA_S=0` = comportamento antigo (conversa
+    aberta vale para sempre)."""
+    conn = FakeConn()
+    with ambiente(
+        conn, _settings(whatsapp_intake_conversa_expira_s=0), saida=_saida_completa(),
+        capturar_agendamentos=True,
+    ):
+        await whatsapp_intake.processar_mensagens_whatsapp(_payload(corpo="oi"))
+
+    assert _updates_expiracao(conn) == []
+
+
+def test_expiracao_default_e_de_24h():
+    assert Settings(
+        session_secret="segredo-real-de-teste-nao-default",
+        csrf_secret="outro-segredo-real-de-teste-nao-default",
+    ).whatsapp_intake_conversa_expira_s == 86400.0
