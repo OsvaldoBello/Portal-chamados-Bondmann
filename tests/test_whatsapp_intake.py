@@ -2858,3 +2858,31 @@ async def test_audio_chega_ao_modelo_na_rodada_que_ele_foi_enviado():
         prompt_enviado = whatsapp_intake.chamar_modelo_estruturado.await_args_list[0].args[0]
         texto_prompt = json.dumps(prompt_enviado, ensure_ascii=False)
         assert "enviou um áudio" in texto_prompt
+
+
+# --------------------------------------------------------------------------
+# Reconciliação — margem como timedelta (bug real de produção, 2026-09-14)
+# --------------------------------------------------------------------------
+
+
+async def test_reconciliacao_passa_margem_como_timedelta_para_o_interval():
+    """`$1::interval` no asyncpg exige `timedelta`; com a string "2 minutes" o
+    driver levanta `'str' object has no attribute 'days'` ANTES de a query
+    rodar. O loop engolia a exceção com um WARN por minuto, então a rede de
+    segurança contra restart nunca reprocessou conversa nenhuma em produção
+    (mesmo bug da triagem em 2026-07-30). Aqui o `fetch` é falso: se a
+    margem chegar como `str`, o teste falha antes de qualquer SQL."""
+    capturado: dict = {}
+
+    class _Conn:
+        async def fetch(self, sql, *args):
+            capturado["sql"] = sql
+            capturado["args"] = args
+            return []
+
+    ids = await whatsapp_intake._conversas_travadas(_Conn())
+    assert ids == []
+    assert whatsapp_intake._MARGEM_TRAVADA == timedelta(minutes=2)
+    assert capturado["args"] == (whatsapp_intake._MARGEM_TRAVADA,)
+    assert all(not isinstance(a, str) for a in capturado["args"])
+    assert capturado["sql"].count("now() - $1::interval") == 2

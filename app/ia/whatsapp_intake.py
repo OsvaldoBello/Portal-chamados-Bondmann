@@ -42,7 +42,7 @@ import re
 import time
 import unicodedata
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -138,7 +138,13 @@ _LEMBRETE_CAMPO_STICKY_TRAVADO = {
 # Margem antes de considerar uma conversa "travada" na reconciliação — evita
 # corrida com a task recém-disparada (mesmo papel de `_MARGEM_ORFAO` na
 # triagem, onde 1 min já se mostrou suficiente em produção).
-_MARGEM_TRAVADA = "2 minutes"
+# `timedelta`, NUNCA string: o asyncpg codifica `$1::interval` a partir de
+# `timedelta` e rejeita `str` ("'str' object has no attribute 'days'") — foi
+# exatamente o bug da triagem em 2026-07-30, e aqui ele passou despercebido
+# desde o deploy do intake porque o loop engole a exceção com um WARN por
+# minuto (visto em produção em 2026-09-14). A rede de segurança contra
+# restart/redeploy nunca tinha rodado de verdade.
+_MARGEM_TRAVADA = timedelta(minutes=2)
 
 # Mensagens fixas — mesmo tom amigável que o prompt exige do modelo (decisão
 # do gestor, 2026-08-18): quem lê não distingue o que veio da IA do que veio
