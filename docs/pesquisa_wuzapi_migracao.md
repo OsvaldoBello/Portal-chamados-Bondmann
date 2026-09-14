@@ -284,7 +284,7 @@ Meta (`entry[].changes[].value.messages[]`) → wuzapi (evento por mensagem):
 | Imagem | `type:"image"` → `image.id`, `image.caption` | `Message.imageMessage` → `url`+`mediaKey`+`fileEncSHA256`… , `caption` |
 | Documento | `type:"document"` → `document.id`, `document.filename` | `Message.documentMessage` → idem + `fileName` |
 | Documento com legenda | igual ao documento | **`documentWithCaptionMessage.message.documentMessage`** (envelope!) |
-| Assinatura | `X-Hub-Signature-256: sha256=<hex>` (HMAC do body com App Secret) | `x-hmac-signature` (HMAC-SHA256 com `WUZAPI_GLOBAL_HMAC_KEY`) |
+| Assinatura | `X-Hub-Signature-256: sha256=<hex>` (HMAC do body com App Secret) | `x-hmac-signature` (HMAC-SHA256 **hex, sem prefixo**, com a chave **do usuário** — `POST /session/hmac/config`; `WUZAPI_GLOBAL_HMAC_KEY` só assina o webhook global. Confirmado no fonte v1.0.8, 2026-09-14) |
 | Formato | JSON sempre | `WEBHOOK_FORMAT=json` (cru) ou `form` (`jsonData=…&token=…`) — **use `json`** |
 | Reentrega | at-least-once da Meta | `WEBHOOK_RETRY_*` |
 
@@ -490,12 +490,18 @@ retry infinito durante a volta). Tempo estimado: um restart.
 Três pontos que a documentação pública não fecha e que valem um `curl` cada,
 logo depois do pareamento:
 
-1. **Campo do binário em `/chat/downloadX`.** O cliente aceita `Data`,
-   `data`, `Base64`, `base64` e `Content`, com ou sem prefixo `data:` — mas
-   confirme qual é o da sua versão e simplifique o código depois:
-   `curl -X POST …/chat/downloadimage -d @descritor.json | head -c 200`
-2. **Codificação do `x-hmac-signature`** (hex ou base64). O validador aceita
-   os dois; olhe o header de um evento real e trave num só.
+1. ~~**Campo do binário em `/chat/downloadX`.**~~ **Confirmado no fonte
+   (v1.0.8, `handlers.go::DownloadImage/DownloadDocument`, 2026-09-14):**
+   `{"data":{"Mimetype":"…","Data":"data:<mime>;base64,…"}}` — campo `Data`
+   com prefixo `data:`. O cliente segue aceitando os outros nomes por
+   tolerância, mas não é mais incógnita.
+2. ~~**Codificação do `x-hmac-signature`**~~ **Confirmado no fonte
+   (`helpers.go::generateHmacSignature`):** hex minúsculo, sem prefixo, sobre
+   o corpo JSON. **E o achado que importa:** a chave é a **do usuário**
+   (`users.hmac_key`, via `hmacKey` no `POST /admin/users` ou
+   `POST /session/hmac/config`) — `WUZAPI_GLOBAL_HMAC_KEY` só assina o
+   webhook global. Usuário sem chave = evento sem header = 403 no portal.
+   Passo 4a do runbook do Railway.
 3. **Ponto de montagem real do `dbdata`** na tag da imagem que você fixou
    (`docker compose exec wuzapi ls -la /app/dbdata` — no Railway,
    `railway ssh -s wuzapi` e depois `ls -la /app/dbdata`).

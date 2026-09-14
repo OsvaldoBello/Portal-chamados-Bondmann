@@ -66,9 +66,17 @@ SESSION_DEVICE_NAME=Portal Chamados Bondmann
 TZ=America/Sao_Paulo
 ```
 
-`WUZAPI_GLOBAL_HMAC_KEY` aqui é a mesma string que vai virar
-`WUZAPI_WEBHOOK_HMAC_KEY` no portal (seção 3) — o wuzapi assina com ela, o
-portal confere com ela.
+> ⚠️ **Corrigido em 2026-09-14, lendo o fonte do wuzapi (`main.go`,
+> `wmiau.go`, `helpers.go` na tag `sha-9487eca` / v1.0.8):**
+> `WUZAPI_GLOBAL_HMAC_KEY` assina **só o webhook global**
+> (`WUZAPI_GLOBAL_WEBHOOK`, que não usamos). O webhook **por usuário** — o
+> que chama o portal — é assinado com a chave **do usuário**, guardada
+> criptografada em `users.hmac_key` e definida ou no `POST /admin/users`
+> (campo `hmacKey`) ou depois via `POST /session/hmac/config`. Sem essa
+> chave no usuário, o evento chega ao portal **sem `x-hmac-signature`** e a
+> rota responde 403 → o wuzapi tenta 5× com backoff (30s, 60s, 120s…) e
+> desiste. O passo 4a abaixo é o que fecha isso. Pode manter a env global
+> setada (não atrapalha), mas ela sozinha **não** assina nada do portal.
 
 Equivalente via CLI (depois de `railway link` apontando pro serviço `wuzapi`
 deste projeto):
@@ -143,7 +151,7 @@ aquecimento):
 ```env
 WUZAPI_BASE_URL=http://wuzapi.railway.internal:8080
 WUZAPI_TOKEN=<o token do usuário, criado no passo 4>
-WUZAPI_WEBHOOK_HMAC_KEY=<a MESMA WUZAPI_GLOBAL_HMAC_KEY do passo 1>
+WUZAPI_WEBHOOK_HMAC_KEY=<a MESMA chave configurada no usuário do wuzapi, passo 4a>
 ```
 
 `WUZAPI_BASE_URL` usando o hostname `.railway.internal` só funciona **de
@@ -198,6 +206,39 @@ curl -s -H "Token: <o token acima>" http://localhost:8080/session/status
 `webhook` no passo 1 aponta para o **domínio público do portal** (o mesmo
 onde `/api/webhooks/whatsapp` já responde hoje) — é a Meta/Railway do lado de
 fora chamando o portal, direção oposta da rede privada interna.
+
+### 4a. Chave HMAC do usuário (obrigatória — sem ela o portal recusa o webhook)
+
+Ainda dentro do `railway ssh -s wuzapi`, com o token do usuário do passo 1.
+Primeiro veja se já está configurada:
+
+```bash
+curl -s -H "Token: <token do usuário>" http://localhost:8080/session/hmac/config
+# {"code":200,"data":{"hmac_key":"***",...}}  → já tem chave
+# {"code":200,"data":{"hmac_key":"", ...}}    → falta configurar
+```
+
+Se faltar (ou se quiser trocar), grave a **mesma string** que está em
+`WUZAPI_WEBHOOK_HMAC_KEY` no serviço do portal (mínimo 32 caracteres —
+o wuzapi recusa menos que isso com 400):
+
+```bash
+curl -s -X POST http://localhost:8080/session/hmac/config   -H "Token: <token do usuário>" -H "Content-Type: application/json"   -d '{"hmac_key":"<WUZAPI_WEBHOOK_HMAC_KEY do portal>"}'
+```
+
+Confirme com o `GET` de cima (`"hmac_key":"***"`). Detalhes do que o
+wuzapi manda, confirmados no fonte (v1.0.8) e já aceitos por
+`app/routes/wuzapi.py::assinatura_valida`:
+
+- header `x-hmac-signature`, **HMAC-SHA256 em hex minúsculo, sem prefixo
+  `sha256=`**, calculado sobre o corpo JSON exatamente como enviado;
+- corpo (com `WEBHOOK_FORMAT=json`): `{"type":"Message","event":{...},
+  "instanceName":"...","userID":"..."}` — `event` é o `events.Message` do
+  whatsmeow serializado (`Info.Sender`, `Info.ID`, `Info.IsFromMe`,
+  `Message.conversation` / `imageMessage` / `documentMessage`…);
+- `POST /chat/downloadimage|downloaddocument` respondem
+  `{"data":{"Mimetype":"…","Data":"data:<mime>;base64,…"}}` — é o campo
+  `Data` com prefixo `data:` que `WuzapiClient.baixar_midia` já lê.
 
 ---
 
@@ -311,3 +352,39 @@ deve carregar a rotina diária.
 Só depois desse checklist fechado é que faz sentido considerar a Fase 2
 (`WHATSAPP_PROVIDER=wuzapi` num departamento piloto) — aquecimento de 7 dias
 sem automação antes disso, como já registrado na pesquisa.
+
+---
+
+## 8. Fase 2 — ligar o bot no wuzapi (2026-09-14)
+
+Pré-requisito que passou despercebido na Fase 1: **o código da branch
+`feat/whatsapp-provider-wuzapi` nunca tinha ido pra produção** — o Railway
+builda o portal a partir de `claude/develop`, e até o merge de 2026-09-14
+`POST /api/webhooks/wuzapi` respondia 404 lá (o monitor de sessão também não
+rodava, apesar das envs estarem setadas). Ordem de execução:
+
+1. **Deploy do portal com o merge** (`claude/develop` → Railway). Confirmar:
+   `curl -s -o /dev/null -w '%{http_code}' -X POST -d '{}' -H 'Content-Type: application/json' https://<domínio-do-portal>/api/webhooks/wuzapi`
+   deve dar **403** (rota existe, recusa sem assinatura) — não 404.
+2. **Chave HMAC no usuário do wuzapi** (seção 4a) igual à
+   `WUZAPI_WEBHOOK_HMAC_KEY` do portal. Conferir também, no mesmo `GET
+   /webhook` com o token do usuário, que `webhook` aponta pra
+   `https://<domínio-do-portal>/api/webhooks/wuzapi` e `subscribe` contém
+   `Message`.
+3. **`WHATSAPP_PROVIDER=wuzapi`** no serviço do portal (Railway redeploya
+   sozinho ao salvar variável). A partir daqui:
+   - a rota da Meta (`/api/webhooks/whatsapp`) passa a **aceitar e
+     descartar** (200 sem processar) — quem escrever pro número antigo não
+     recebe resposta do chip novo;
+   - o intake responde pelo wuzapi com "digitando…" e atraso humanizado.
+4. **Teste ao vivo**: mensagem real de um perfil cadastrado pro chip novo.
+   Acompanhar com `scripts/monitor_whatsapp_intake.py --interval 3` (lê
+   `whatsapp_mensagens_recebidas`/`whatsapp_conversas`/`ia_whatsapp_intake`)
+   e com `railway logs -s wuzapi` (`Webhook call successful` = o portal
+   respondeu 2xx; `non-2xx status code` = assinatura/rota errada).
+5. Se algo quebrar: **`WHATSAPP_PROVIDER=meta`** de volta — as duas rotas e
+   as duas credenciais continuam vivas; nenhum deploy de código.
+
+Critério de saída da Fase 2 (pesquisa, seção 8): 30 dias sem incidente e
+zero denúncia antes de ligar notificações ativas (Fase 3, ainda só proposta
+em `docs/wuzapi/PATCHES.md` seção 4).

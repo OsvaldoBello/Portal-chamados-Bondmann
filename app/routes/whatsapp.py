@@ -103,6 +103,16 @@ async def whatsapp_receive(request: Request):
     tipo_evento, ids = _metadados_evento(payload)
     log.info("WhatsApp webhook: evento=%s ids=%s", tipo_evento, ids)
 
+    if (settings.whatsapp_provider or "meta").strip().lower() != "meta":
+        # Provedor ativo é outro (wuzapi): aceita e descarta, espelho do que
+        # `app/routes/wuzapi.py` faz durante um rollback. Sem isto, uma
+        # mensagem mandada ao número ANTIGO da Meta seria processada pelo
+        # intake e respondida pelo chip NOVO (`get_client()` segue o
+        # provedor ativo) — a pessoa escreve para um número e recebe
+        # resposta de outro. O 200 evita a reentrega da Meta.
+        log.info("WhatsApp webhook: evento=%s descartado (provedor ativo != meta)", tipo_evento)
+        return JSONResponse({"success": True})
+
     # Intake de chamado (kill switch `WHATSAPP_INTAKE_ATIVO`, default off):
     # grava as mensagens e agenda o processamento pesado numa task — o corpo
     # da mensagem nunca é logado aqui (PII). Nunca lança: a Meta precisa do

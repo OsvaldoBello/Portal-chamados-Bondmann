@@ -84,3 +84,40 @@ def test_assinatura_valida_aceita():
             )
     assert resp.status_code == 200
     assert resp.json()["success"] is True
+
+
+def _post_com_intake(settings) -> tuple[int, int]:
+    """POST válido em dev; devolve (status, nº de chamadas ao intake)."""
+    chamadas = []
+
+    async def _falso_intake(payload):
+        chamadas.append(payload)
+
+    with (
+        patch("app.routes.whatsapp.get_settings", return_value=settings),
+        patch("app.ia.whatsapp_intake.processar_mensagens_whatsapp", _falso_intake),
+    ):
+        with TestClient(app) as client:
+            resp = client.post("/api/webhooks/whatsapp", json=_PAYLOAD)
+    return resp.status_code, len(chamadas)
+
+
+def test_provider_wuzapi_descarta_evento_da_meta_sem_processar():
+    """Com `WHATSAPP_PROVIDER=wuzapi`, mensagem no número antigo da Meta é
+    aceita (200, pra Meta não reentregar) mas NÃO entra no intake — senão o
+    chip novo responderia a quem escreveu pro número antigo."""
+    settings = _settings(
+        environment="development", whatsapp_intake_ativo=True, whatsapp_provider="wuzapi"
+    )
+    status, chamadas = _post_com_intake(settings)
+    assert status == 200
+    assert chamadas == 0
+
+
+def test_provider_meta_segue_processando():
+    settings = _settings(
+        environment="development", whatsapp_intake_ativo=True, whatsapp_provider="meta"
+    )
+    status, chamadas = _post_com_intake(settings)
+    assert status == 200
+    assert chamadas == 1
