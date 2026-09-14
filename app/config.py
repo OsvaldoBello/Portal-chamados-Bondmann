@@ -116,6 +116,46 @@ class Settings(BaseSettings):
     # Versão da Graph API usada nas chamadas de envio.
     whatsapp_api_version: str = Field(default="v21.0")
 
+    # --- Provedor de WhatsApp (migração para wuzapi/whatsmeow, 2026-09-01) ---
+    # "meta" = Cloud API (Graph); "wuzapi" = container próprio falando o
+    # protocolo do WhatsApp Web. Trocar aqui é o rollback inteiro: as
+    # credenciais dos dois provedores convivem no .env e nenhum call site
+    # muda (ver `app/whatsapp_client.py` e `docs/pesquisa_wuzapi_migracao.md`).
+    whatsapp_provider: str = Field(default="meta")
+    # URL INTERNA do wuzapi (ex.: http://wuzapi:8080). Nunca um endereço
+    # público: a API inteira é protegida só pelo header `Token`.
+    wuzapi_base_url: str = Field(default="")
+    # Token do usuário do wuzapi (header `Token` de todas as chamadas de
+    # runtime). Vazio = envio desligado, mesmo kill switch implícito do
+    # `whatsapp_access_token`.
+    wuzapi_token: str = Field(default="")
+    # Chave HMAC (>= 32 chars) que assina os webhooks do wuzapi — mesmo papel
+    # do `whatsapp_app_secret` na Meta. Sem ela, o webhook é recusado em
+    # produção.
+    wuzapi_webhook_hmac_key: str = Field(default="")
+    # Timeout padrão das chamadas ao wuzapi (rede interna; o download de
+    # mídia e o envio de documento usam timeouts próprios, maiores).
+    wuzapi_timeout_s: float = Field(default=15.0)
+
+    # --- Monitor de sessão do wuzapi (Fase 1 da migração, 2026-09-02) ---
+    # E-mail que recebe o alerta quando a sessão cai (e o aviso de
+    # recuperação). Vazio = monitor desligado — mesmo kill switch implícito
+    # do resto do projeto (não faz sentido rodar o loop sem ninguém pra
+    # avisar).
+    wuzapi_monitor_alerta_email: str = Field(default="")
+    # Intervalo entre checagens de `GET /session/status`. `<= 0` desliga.
+    wuzapi_monitor_intervalo_s: float = Field(default=300.0)
+    # Falhas CONSECUTIVAS antes de mandar o alerta — evita e-mail por causa
+    # de uma instabilidade de rede de um ciclo só.
+    wuzapi_monitor_falhas_para_alertar: int = Field(default=2)
+
+    # --- Humanização da resposta (só tem efeito com provider=wuzapi) ---
+    # Faixa do atraso de "digitando…" antes de cada mensagem do bot, escalando
+    # com o tamanho do texto. Resposta instantânea é o artefato de automação
+    # mais visível num número comum (ver Eixo 2 da pesquisa).
+    whatsapp_digitacao_min_s: float = Field(default=1.0)
+    whatsapp_digitacao_max_s: float = Field(default=2.5)
+
     # --- Intake de chamado via WhatsApp (IA como intérprete, 2026-08-18) ---
     # Kill switch geral: false = webhook continua só logando, nenhuma
     # conversa/chamado é criado (mesmo padrão de `ia_triagem_ativa`).

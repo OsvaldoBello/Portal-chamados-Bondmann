@@ -1,0 +1,121 @@
+# WUZAPI + Portal de Chamados — stack de referência (docs/wuzapi/)
+#
+# Uso: `docker compose -f docs/wuzapi/docker-compose.yml --env-file docs/wuzapi/.env up -d`
+#
+# Três decisões que valem ler antes de subir:
+#
+# 1. **O wuzapi NUNCA é exposto na internet.** O bind é `127.0.0.1` e o portal
+#    fala com ele pelo nome do serviço na rede interna (`http://wuzapi:8080`).
+#    A API inteira é protegida só por um header `Token:` — publicar a porta é
+#    entregar o WhatsApp da empresa para quem varrer a faixa de IP. Para
+#    escanear o QR Code, use um túnel SSH (ver README-runbook.md).
+# 2. **A sessão vive no volume `wuzapi-dbdata`.** É `dbdata/main.db` (chaves
+#    do whatsmeow — Signal/Noise, identidade do device pareado) e
+#    `dbdata/users.db` (usuários/token/webhook do wuzapi). Perder esse volume
+#    = novo QR Code, e restart de container com o volume intacto = reconexão
+#    automática, sem QR.
+# 3. **`-skipmedia`**: o wuzapi não baixa a mídia sozinho nem embute base64 no
+#    webhook; o portal baixa sob demanda em `/chat/downloadX`. Ver
+#    docs/wuzapi/rota_webhook_wuzapi.py para o porquê.
+
+services:
+  wuzapi:
+    # Build direto do repositório oficial, com a tag fixada — imagem de
+    # terceiro que roda o WhatsApp da empresa não fica em `latest`.
+    build:
+      context: https://github.com/asternic/wuzapi.git#v1.13.0
+    container_name: wuzapi
+    restart: unless-stopped
+    # `-skipmedia`: sem base64 gigante no webhook (ver acima).
+    # `-logtype json`: log estruturado, igual ao resto da stack.
+    command: ["-logtype", "json", "-skipmedia"]
+    environment:
+      WUZAPI_ADMIN_TOKEN: ${WUZAPI_ADMIN_TOKEN:?defina no .env}
+      # Chave de assinatura dos webhooks (>= 32 chars) — o portal valida o
+      # header `x-hmac-signature` com ela.
+      WUZAPI_GLOBAL_HMAC_KEY: ${WUZAPI_WEBHOOK_HMAC_KEY:?defina no .env}
+      WUZAPI_GLOBAL_ENCRYPTION_KEY: ${WUZAPI_ENCRYPTION_KEY:?defina no .env}
+      # JSON cru no corpo (o form-urlencoded com `jsonData` é o default e é
+      # mais chato de assinar/parsear).
+      WEBHOOK_FORMAT: json
+      # É o nome que aparece em "Aparelhos conectados" no celular pareado —
+      # deixe explícito para ninguém desconectar achando que é invasão.
+      SESSION_DEVICE_NAME: Portal Chamados Bondmann
+      TZ: America/Sao_Paulo
+      # --- Postgres (opcional) --------------------------------------------
+      # Com as 5 variáveis abaixo preenchidas, o wuzapi usa Postgres em vez do
+      # SQLite do volume. Só vale a pena com mais de uma instância; para um
+      # número só, SQLite + volume + backup é mais simples e mais rápido.
+      # DB_USER: ${DB_USER}
+      # DB_PASSWORD: ${DB_PASSWORD}
+      # DB_NAME: ${DB_NAME}
+      # DB_HOST: db
+      # DB_PORT: "5432"
+      # DB_SSLMODE: disable
+    volumes:
+      # Sessão + usuários. Confirme uma vez, com o container de pé, que os
+      # arquivos estão mesmo aqui:
+      #   docker compose exec wuzapi ls -la /app/dbdata
+      # Se a imagem mudar o WORKDIR, ajuste o alvo do mount (ou passe
+      # `-datadir /app/dbdata` no command).
+      - wuzapi-dbdata:/app/dbdata
+    ports:
+      # Só loopback do host: dashboard/QR via túnel SSH, nunca aberto.
+      - "127.0.0.1:8081:8080"
+    networks: [interna]
+    healthcheck:
+      # `/session/status` exige token; o 401 já prova que o processo responde.
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/session/status || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  portal:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: portal-chamados
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      WHATSAPP_PROVIDER: wuzapi
+      WUZAPI_BASE_URL: http://wuzapi:8080
+      WUZAPI_TOKEN: ${WUZAPI_TOKEN:?defina no .env}
+      WUZAPI_WEBHOOK_HMAC_KEY: ${WUZAPI_WEBHOOK_HMAC_KEY}
+    depends_on:
+      wuzapi:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks: [interna]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # Backup da sessão: `sqlite3 .backup` a cada 6h, 14 dias de retenção.
+  # Container minúsculo, sem cron do host (funciona igual em VPS e em swarm).
+  wuzapi-backup:
+    image: alpine:3.20
+    container_name: wuzapi-backup
+    restart: unless-stopped
+    depends_on: [wuzapi]
+    volumes:
+      - wuzapi-dbdata:/dbdata:ro
+      - ./backups:/backups
+      - ./backup_wuzapi.sh:/backup_wuzapi.sh:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "apk add --no-cache sqlite >/dev/null &&
+       while true; do sh /backup_wuzapi.sh; sleep 21600; done"
+    networks: [interna]
+
+networks:
+  interna:
+    driver: bridge
+
+volumes:
+  wuzapi-dbdata:

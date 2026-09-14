@@ -39,6 +39,7 @@ from app.routes.perfil import register_perfil_routes
 from app.routes.portal import register_portal_routes
 from app.routes.whatsapp import register_whatsapp_routes
 from app.routes.workspace import register_workspace_routes
+from app.routes.wuzapi import register_wuzapi_routes
 from app.security.csrf import init_csrf
 from app.security.headers import SecurityHeadersMiddleware
 from app.security.jwt_verifier import init_verifier
@@ -96,14 +97,26 @@ async def lifespan(app: FastAPI):
 
     intake_task = whatsapp_intake.iniciar_reconciliacao(settings)
 
+    # Monitor de sessão do wuzapi (Fase 1 da migração — alerta por e-mail se
+    # a conexão com o WhatsApp cair). `None` sem WUZAPI_BASE_URL/TOKEN ou sem
+    # e-mail de alerta configurado.
+    from app.services.wuzapi_monitor import iniciar_monitor
+
+    wuzapi_monitor_task = iniciar_monitor(settings)
+
     try:
         yield
     finally:
-        for task in (reconciliacao_task, intake_task):
+        for task in (reconciliacao_task, intake_task, wuzapi_monitor_task):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        # Pool HTTP do cliente de WhatsApp (só existe com provider=wuzapi;
+        # com a Meta é no-op, cada chamada abre e fecha o próprio client).
+        from app.whatsapp_client import fechar_cliente_http
+
+        await fechar_cliente_http()
         await close_pool()
         await close_storage()
 
@@ -164,6 +177,7 @@ def create_app() -> FastAPI:
     register_common_routes(app)
     register_perfil_routes(app)
     register_whatsapp_routes(app)
+    register_wuzapi_routes(app)
     register_mfa_routes(app, limiter)
 
     # Tratamento de erro centralizado (Seção 6.3): sem vazar stack/segredos.
