@@ -176,6 +176,19 @@ async def test_alertar_falha_de_envio_nao_lanca(monkeypatch):
 # --------------------------------------------------------------------------
 
 
+async def _esperar(condicao, *, timeout_s: float = 2.0) -> None:
+    """Espera a condição com TEMPO REAL. O loop do monitor dorme
+    `wuzapi_monitor_intervalo_s` (10ms aqui) por ciclo — `asyncio.sleep(0)`
+    só cede o event loop sem avançar o relógio, então num runner rápido (CI)
+    N yields acabavam antes do primeiro ciclo e o teste falhava sem bug
+    nenhum no monitor (visto em 2026-09-14)."""
+    passo = 0.01
+    for _ in range(int(timeout_s / passo)):
+        if condicao():
+            return
+        await asyncio.sleep(passo)
+
+
 async def test_loop_so_alerta_apos_falhas_consecutivas(monkeypatch):
     """1 falha isolada não deve gerar e-mail; a 2ª consecutiva (limiar=2) sim."""
     respostas = iter(
@@ -200,10 +213,7 @@ async def test_loop_so_alerta_apos_falhas_consecutivas(monkeypatch):
     monkeypatch.setattr("app.services.wuzapi_monitor._alertar", _fake_alertar)
 
     task = asyncio.create_task(_loop_monitor(_settings(wuzapi_monitor_falhas_para_alertar=2)))
-    for _ in range(20):
-        await asyncio.sleep(0)
-        if alertas:
-            break
+    await _esperar(lambda: bool(alertas))
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -226,10 +236,7 @@ async def test_loop_alerta_recuperacao_depois_de_falha(monkeypatch):
     monkeypatch.setattr("app.services.wuzapi_monitor._alertar", _fake_alertar)
 
     task = asyncio.create_task(_loop_monitor(_settings(wuzapi_monitor_falhas_para_alertar=2)))
-    for _ in range(20):
-        await asyncio.sleep(0)
-        if len(alertas) >= 2:
-            break
+    await _esperar(lambda: len(alertas) >= 2)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
