@@ -75,7 +75,7 @@ from pydantic import BaseModel
 
 from app.config import Settings, get_settings
 from app.db import admin_connection
-from app.domain.formularios_quimico import rotular
+from app.domain.formularios_dinamicos import rotular_chamado
 from app.ia import anexos_contexto, cliente, contexto_quimico
 from app.ia.catalogo_prompt import linha_catalogo, nome_categoria
 from app.ia.chamada_estruturada import chamar_modelo_estruturado
@@ -145,7 +145,9 @@ def _linhas_chamado(
         "Descrição:",
         str(chamado.get("descricao") or ""),
     ]
-    pares = rotular(chamado.get("categoria"), chamado.get("dados_formulario") or {})
+    pares = rotular_chamado(
+        chamado.get("categoria"), chamado.get("subcategoria"), chamado.get("dados_formulario")
+    )
     if pares:
         linhas += ["", "Campos do formulário:"]
         linhas += [f"- {rotulo}: {valor}" for rotulo, valor in pares]

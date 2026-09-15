@@ -997,6 +997,7 @@ async def notificar_novo_chamado_email(chamado: dict, destinatarios_ids: list[st
 </html>
 """
 
+    grupos_excluidos = settings.notificacao_novo_chamado_grupos_excluidos_set
     for destinatario_id in ids:
         try:
             res = await client.auth.admin.get_user_by_id(destinatario_id)
@@ -1007,6 +1008,9 @@ async def notificar_novo_chamado_email(chamado: dict, destinatarios_ids: list[st
                 continue
         except Exception as e:
             log.error(f"Erro ao buscar e-mail do staff {destinatario_id}: {e}")
+            continue
+        if email.strip().lower() in grupos_excluidos:
+            log.info(f"Novo chamado: {email} é caixa de grupo, aviso individual pulado.")
             continue
         await enviar_email(email, assunto, corpo_texto, corpo_html)
 

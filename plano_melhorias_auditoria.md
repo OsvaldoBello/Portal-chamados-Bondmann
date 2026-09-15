@@ -16,7 +16,7 @@
 > Ordem obrigatória: o item 0.1 destrava o 0.4 (o CI valida a cadeia de migrations).
 
 ### 0.1 · A1 — Reconstruir a migration `0015_subcategorias` 🟡 ✅ **Concluído 2026-07-14**
-- [x] Extrair do Supabase de produção (`iurlzlhbnoemkzgexcfk`) o DDL real: tabela
+- [x] Extrair do Supabase de produção (`<project-ref>`) o DDL real: tabela
       `subcategorias`, coluna `chamados.subcategoria_id`, índices, policies RLS,
       alteração do trigger `enforce_cliente_so_avaliacao` e seed (Acessos 5 / Dúvida 3 /
       Equipamento 5 / Financeiro 4 — ver changelog 2026-07-03 do plano mestre).
@@ -533,12 +533,12 @@
     reproduzir no CI (`ubuntu-latest`).
 
 ### 2.4 · M6 — `[DECISÃO DO GESTOR]` Colocalizar app e banco 🟡 ✅ **Decisão tomada e executada 2026-07-16**
-- Piso atual de ~320ms/query é latência até us-east-2. Opções: **(a)** deploy do app na
-  mesma região do Supabase (Railway us-east) · **(b)** migrar o projeto Supabase para
+- Piso atual de ~320ms/query é latência até <região>. Opções: **(a)** deploy do app na
+  mesma região do Supabase (Railway na mesma região) · **(b)** migrar o projeto Supabase para
   região próxima do app (mais invasivo).
 - [x] Decisão + execução: opção **(a)** — Osvaldo configurou manualmente a região do
-      serviço Railway para `us-east`, alinhando com o Supabase (`iurlzlhbnoemkzgexcfk`,
-      confirmado via MCP em `us-east-2`). Ajuste de infra feito direto no painel do
+      serviço Railway para a região do Supabase, alinhando com o Supabase (`<project-ref>`,
+      confirmado via MCP em `<região>`). Ajuste de infra feito direto no painel do
       Railway (fora do escopo de PR/código).
 - [ ] Medir `/portal` antes/depois em produção (meta: < 600ms) — **pendente**: ainda sem
       números registrados do antes/depois pós-mudança de região.
@@ -546,7 +546,7 @@
   concluídas; falta só a medição para fechar o critério de aceite numérico.
 - **Notas de execução:**
   - Confirmado via MCP do Supabase (`list_projects`) que o projeto de produção está em
-    `us-east-2` (AWS Ohio), `status=ACTIVE_HEALTHY`.
+    `<região>`, `status=ACTIVE_HEALTHY`.
   - Consulta ao MCP do Railway (`list-projects`) não retornou nenhum projeto acessível
     nesta conta/token — não foi possível verificar programaticamente o serviço/região via
     MCP; a mudança foi confirmada diretamente pelo Osvaldo, feita manualmente no painel do

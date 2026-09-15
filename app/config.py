@@ -100,6 +100,17 @@ class Settings(BaseSettings):
     # Região da conta: US = https://api.mailgun.net | EU = https://api.eu.mailgun.net
     mailgun_base_url: str = Field(default="https://api.mailgun.net")
 
+    # --- Aviso de chamado novo (revisto 2026-09-08) ---
+    # CSV de e-mails de caixa de grupo (ex.: ti@bondmann.com.br, rh@bondmann.com.br)
+    # que NÃO recebem o aviso de chamado novo — já espalham a mensagem pra equipe
+    # por fora do Portal. Substitui o filtro anterior (excluir role ADMIN inteiro),
+    # que também emudecia contas ADMIN pessoais (ex.: os ADMIN individuais do
+    # setor de TI, que não são caixa de grupo nenhuma).
+    notificacao_novo_chamado_grupos_excluidos: str = Field(
+        default="ti@bondmann.com.br,rh@bondmann.com.br,admin.rh@bondmann.com.br,"
+        "admin.compras@bondmann.com.br,admin.quimico@bondmann.com.br,admin.marketing@bondmann.com.br"
+    )
+
     # --- WhatsApp Cloud API (Meta) ---
     # Token arbitrário definido por nós e colado no painel da Meta ("Verificar
     # token"); usado só no handshake GET de assinatura do webhook.
@@ -136,6 +147,37 @@ class Settings(BaseSettings):
     # Timeout padrão das chamadas ao wuzapi (rede interna; o download de
     # mídia e o envio de documento usam timeouts próprios, maiores).
     wuzapi_timeout_s: float = Field(default=15.0)
+
+    # --- Automação de criação/desligamento de usuários (RH → TI, 2026-09-14) ---
+    # Governada por plano_md_mestre_automacao_acessos.md (Seção 5). Kill switch
+    # geral: false = a API do worker responde vazio e o card no atendimento
+    # mostra "pausada" (jobs na fila ficam esperando, nada é cancelado).
+    automacao_ativa: bool = Field(default=False)
+    # Tipos de job liberados (CSV) — permite ligar só a CRIACAO no rollout.
+    automacao_tipos: str = Field(default="CRIACAO,DESLIGAMENTO,REVOGAR_LICENCA")
+    # Token do worker (header `X-Automacao-Token`, comparado em tempo constante).
+    # Vazio = API fechada (fail-closed), mesmo com `automacao_ativa=true`.
+    automacao_worker_token: str = Field(default="")
+    # Versão do contrato payload/resultado (docs/automacao_api.md). O worker
+    # confere no `/saude` e recusa rodar se divergir.
+    automacao_contrato_versao: str = Field(default="1")
+    # Job EXECUTANDO sem heartbeat há mais que isto é dado como morto (FALHOU +
+    # aviso). Etapas do Playwright podem levar minutos — 15 min de folga.
+    automacao_heartbeat_timeout_s: float = Field(default=900.0)
+    # Intervalo da vigilância (jobs travados + silêncio do worker). `<= 0` desliga.
+    automacao_vigilancia_intervalo_s: float = Field(default=60.0)
+    # Sem nenhum contato do worker por este tempo, com job NA_FILA vencido,
+    # avisa por e-mail (uma vez por hora, não em loop).
+    automacao_worker_silencio_s: float = Field(default=1800.0)
+    # E-mail da TI que recebe: pendências de um job, job travado e worker mudo.
+    # Vazio = sem e-mail (as notas internas continuam sendo gravadas).
+    automacao_alerta_email: str = Field(default="")
+    # Dias entre o desligamento e a revogação da licença M365 (regra interna).
+    automacao_licenca_dias: int = Field(default=15)
+    # Horários (Brasília) usados para agendar: criação roda às HH do dia útil
+    # anterior ao início; desligamento às HH da data informada.
+    automacao_hora_criacao: int = Field(default=7)
+    automacao_hora_desligamento: int = Field(default=18)
 
     # --- Monitor de sessão do wuzapi (Fase 1 da migração, 2026-09-02) ---
     # E-mail que recebe o alerta quando a sessão cai (e o aviso de
@@ -421,6 +463,15 @@ class Settings(BaseSettings):
     @property
     def mailgun_ativo(self) -> bool:
         return bool(self.mailgun_api_key and self.mailgun_domain)
+
+    @property
+    def notificacao_novo_chamado_grupos_excluidos_set(self) -> set[str]:
+        """E-mails de caixa de grupo a excluir do aviso de chamado novo (CSV → set, lowercase)."""
+        return {
+            e.strip().lower()
+            for e in self.notificacao_novo_chamado_grupos_excluidos.split(",")
+            if e.strip()
+        }
 
     @property
     def is_production(self) -> bool:

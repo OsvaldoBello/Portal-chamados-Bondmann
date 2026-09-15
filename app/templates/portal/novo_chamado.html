@@ -124,13 +124,17 @@
         {% endfor %}
       </div>
 
-      {# Campos dinâmicos por categoria (Químico). Recarregados via HTMX ao trocar
-         a categoria (evento `change` vindo do #categoria-select). Visibilidade
-         controlada por novo_chamado.js conforme o departamento de destino. #}
+      {# Campos dinâmicos da escolha (Químico por categoria; TI "Usuários e
+         Acessos" por subcategoria — F1 da automação de acessos). Recarregados
+         via HTMX ao trocar a categoria OU a subcategoria; o servidor decide se
+         há layout (app/domain/formularios_dinamicos.py). Visibilidade do bloco
+         e dos campos condicionais controlada por novo_chamado.js. #}
       <div id="campos-dinamicos" style="display:none"
-        hx-get="/portal/chamados/campos" hx-trigger="change from:#categoria-select"
-        hx-include="#categoria-select" hx-target="#campos-dinamicos" hx-swap="innerHTML">
-        {% include "portal/_campos_quimico.html" %}
+        hx-get="/portal/chamados/campos"
+        hx-trigger="change from:#categoria-select, change from:#subcategoria-select"
+        hx-include="#departamento-select, #categoria-select, #subcategoria-select"
+        hx-target="#campos-dinamicos" hx-swap="innerHTML">
+        {% include "portal/_campos_dinamicos.html" %}
       </div>
 
       {# Assunto — escondido quando o departamento é o Químico (novo_chamado.js

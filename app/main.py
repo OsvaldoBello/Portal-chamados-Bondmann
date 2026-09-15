@@ -32,6 +32,7 @@ from app.ia import triagem as ia_triagem
 from app.observability import RequestContextMiddleware, configure_logging, configure_sentry
 from app.ratelimit import limiter
 from app.routes.admin import register_admin_routes
+from app.routes.automacao_api import register_automacao_api_routes
 from app.routes.common import register_common_routes
 from app.routes.health import router as health_router
 from app.routes.mfa import register_mfa_routes
@@ -104,10 +105,17 @@ async def lifespan(app: FastAPI):
 
     wuzapi_monitor_task = iniciar_monitor(settings)
 
+    # Vigilância da fila da automação de acessos (jobs sem heartbeat, worker
+    # mudo) — plano_md_mestre_automacao_acessos.md, Seção 5.4. `None` com
+    # AUTOMACAO_ATIVA desligada.
+    from app.services.automacao import iniciar_vigilancia
+
+    automacao_task = iniciar_vigilancia(settings)
+
     try:
         yield
     finally:
-        for task in (reconciliacao_task, intake_task, wuzapi_monitor_task):
+        for task in (reconciliacao_task, intake_task, wuzapi_monitor_task, automacao_task):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -179,6 +187,7 @@ def create_app() -> FastAPI:
     register_whatsapp_routes(app)
     register_wuzapi_routes(app)
     register_mfa_routes(app, limiter)
+    register_automacao_api_routes(app)
 
     # Tratamento de erro centralizado (Seção 6.3): sem vazar stack/segredos.
     # Registra na base do Starlette para também capturar o 404 de rota inexistente

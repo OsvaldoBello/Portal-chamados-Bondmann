@@ -2,7 +2,7 @@
 -- (Sprint 0 / plano_melhorias_auditoria.md)
 --
 -- Achado durante a reconstrução da 0015 (ver notas de execução do item 0.1):
--- em produção (`iurlzlhbnoemkzgexcfk`) existe uma função `rls_auto_enable()` +
+-- em produção (`<project-ref>`) existe uma função `rls_auto_enable()` +
 -- um event trigger `ensure_rls` (ddl_command_end em CREATE TABLE / CREATE
 -- TABLE AS / SELECT INTO) que habilita RLS automaticamente em qualquer tabela
 -- nova criada no schema `public`. Nenhuma migration deste repositório jamais

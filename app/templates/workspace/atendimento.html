@@ -171,6 +171,117 @@
     </div>
     {% endif %}
 
+    {# ---------- Automação de acessos (F2 — plano_md_mestre_automacao_acessos.md) ---------- #}
+    {% if automacao %}
+    {% set job = automacao.ultimo %}
+    <div class="bg-white border border-line/60 rounded-xl shadow-card p-5 space-y-4" id="automacao-card">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <svg class="w-4 h-4 text-navy" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v4m0 12v4M4.9 4.9l2.8 2.8m8.6 8.6 2.8 2.8M2 12h4m12 0h4M4.9 19.1l2.8-2.8m8.6-8.6 2.8-2.8"/>
+          </svg>
+          <h3 class="font-display font-bold text-navy text-sm">Automação de acessos — {{ automacao.tipo_label }}</h3>
+        </div>
+        {% if job %}
+        {% set cor = 'bg-emerald-50 text-emerald-800 border-emerald-200' if job.status == 'CONCLUIDO'
+                 else ('bg-amber-50 text-amber-800 border-amber-200' if job.status in ('CONCLUIDO_COM_PENDENCIAS', 'NA_FILA', 'EXECUTANDO')
+                 else 'bg-rose-50 text-rose-800 border-rose-200') %}
+        <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full border {{ cor }}">
+          {{ automacao_status_label.get(job.status, job.status) }}{% if job.dry_run %} · simulação{% endif %}
+        </span>
+        {% else %}
+        <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full border bg-navy-100 text-navy border-navy-100">Aguardando aprovação da TI</span>
+        {% endif %}
+      </div>
+
+      {% if automacao_erro %}
+      <p class="text-sm text-rose-800 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{{ automacao_erro }}</p>
+      {% endif %}
+      {% if automacao.aviso %}
+      <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{{ automacao.aviso }}</p>
+      {% endif %}
+
+      {% if job %}
+      <div class="text-xs text-muted space-y-0.5">
+        <div>Aprovada por <strong class="text-ink">{{ job.aprovado_por_nome or '—' }}</strong> {{ fmt_dt(job.aprovado_em) }}
+          {% if job.reexecucao_de %} · reexecução das pendências{% endif %}</div>
+        {% if job.status == 'NA_FILA' %}<div>Execução liberada a partir de <strong class="text-ink">{{ fmt_dt(job.executar_apos) }}</strong></div>{% endif %}
+        {% if job.status == 'EXECUTANDO' %}<div>Em execução{% if job.etapa_atual %}: <strong class="text-ink">{{ job.etapa_atual }}</strong>{% endif %} · worker {{ job.worker_id or '—' }} · último sinal {{ fmt_dt(job.heartbeat_at) if job.heartbeat_at else '—' }}</div>{% endif %}
+        {% if job.finalizado_em %}<div>Finalizada {{ fmt_dt(job.finalizado_em) }}{% if job.worker_id %} · worker {{ job.worker_id }}{% endif %}</div>{% endif %}
+        {% if job.erro %}<div class="text-rose-700">Erro: {{ job.erro }}</div>{% endif %}
+      </div>
+      {% if job.resultado %}
+      <ul class="text-sm space-y-1">
+        {% for etapa in job.resultado %}
+        <li class="flex items-start gap-2">
+          <span class="{{ 'text-emerald-600' if etapa.status == 'SUCCESS' else ('text-rose-600' if etapa.status == 'FAILED' else 'text-amber-600') }} font-bold text-xs mt-0.5">
+            {{ 'OK' if etapa.status == 'SUCCESS' else ('FALHOU' if etapa.status == 'FAILED' else 'PULADA') }}
+          </span>
+          <span class="text-ink">{{ etapa.nome }}{% if etapa.erro %} <span class="text-muted">— {{ etapa.erro }}</span>{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% endif %}
+
+      {% if automacao.resumo and (not job or automacao.pode_executar) %}
+      <details class="text-xs" {% if not job %}open{% endif %}>
+        <summary class="cursor-pointer text-muted font-semibold">Dados que serão enviados ao worker</summary>
+        <dl class="mt-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-1">
+          {% for rotulo, valor in automacao.resumo %}
+          <dt class="text-muted">{{ rotulo }}</dt><dd class="text-ink">{{ valor }}</dd>
+          {% endfor %}
+        </dl>
+      </details>
+      {% endif %}
+
+      {% if automacao.pode_executar or automacao.pode_cancelar %}
+      <div class="border-t border-line/60 pt-3 flex flex-wrap items-center gap-2">
+        {% if automacao.pode_executar %}
+        <form method="post" action="/workspace/chamados/{{ chamado.id }}/automacao/executar{% if origem %}?origem={{ origem }}{% endif %}"
+              class="flex flex-wrap items-center gap-2">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="flex items-center gap-1.5 text-xs text-muted mr-2">
+            <input type="checkbox" required class="rounded ring-1 ring-line text-navy-700 focus:ring-navy-500">
+            Conferi os dados acima
+          </label>
+          {% if automacao.pode_reexecutar %}
+          <button type="submit" name="modo" value="reexecutar" {% if not automacao.ativa or not automacao.tipo_liberado %}disabled{% endif %}
+                  class="px-3 py-1.5 rounded-lg bg-navy text-white text-xs font-semibold disabled:opacity-40">Reexecutar pendências</button>
+          {% endif %}
+          <button type="submit" name="modo" value="real" {% if not automacao.ativa or not automacao.tipo_liberado %}disabled{% endif %}
+                  class="px-3 py-1.5 rounded-lg bg-navy text-white text-xs font-semibold disabled:opacity-40">
+            {{ 'Executar automação' if not automacao.pode_reexecutar else 'Executar do zero' }}
+          </button>
+          <button type="submit" name="modo" value="simulacao" {% if not automacao.ativa or not automacao.tipo_liberado %}disabled{% endif %}
+                  class="px-3 py-1.5 rounded-lg ring-1 ring-line text-navy text-xs font-semibold disabled:opacity-40">Simular (dry-run)</button>
+        </form>
+        {% endif %}
+        {% if automacao.pode_cancelar %}
+        <form method="post" action="/workspace/chamados/{{ chamado.id }}/automacao/{{ job.id }}/cancelar{% if origem %}?origem={{ origem }}{% endif %}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="px-3 py-1.5 rounded-lg ring-1 ring-rose-200 text-rose-700 text-xs font-semibold">Cancelar execução</button>
+        </form>
+        {% endif %}
+      </div>
+      {% elif not job and chamado.status != 'RESOLVIDO' %}
+      <p class="text-xs text-muted border-t border-line/60 pt-3">Inicie o atendimento para poder executar a automação.</p>
+      {% endif %}
+
+      {% if automacao.historico %}
+      <details class="text-xs">
+        <summary class="cursor-pointer text-muted">Execuções anteriores ({{ automacao.historico|length }})</summary>
+        <ul class="mt-2 space-y-1">
+          {% for h in automacao.historico %}
+          <li class="text-muted">{{ fmt_dt(h.aprovado_em) }} · {{ automacao_status_label.get(h.status, h.status) }}{% if h.dry_run %} · simulação{% endif %} · {{ h.aprovado_por_nome or '—' }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+    </div>
+    {% endif %}
+
     {# ---------- Dados do formulário (categorias com layout dinâmico) ---------- #}
     {% if dados_formulario %}
     <div class="bg-white rounded-xl shadow-card border border-line/60 p-6">

@@ -3266,7 +3266,7 @@ async def _pos_criacao(
         equipe = await repo.operadores(
             claims, departamento_id=str(departamento["id"]), excluir_id=perfil["id"]
         )
-        destinatarios = [str(o["id"]) for o in equipe if o.get("role") == "OPERADOR"]
+        destinatarios = [str(o["id"]) for o in equipe]
         if destinatarios:
             await notificar_novo_chamado_email(
                 {

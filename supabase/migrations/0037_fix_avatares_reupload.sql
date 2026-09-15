@@ -11,7 +11,7 @@
 -- NENHUMA policy de SELECT, `authenticated` não enxerga nenhuma linha do
 -- bucket (nem a própria), então o UPDATE silenciosamente afeta 0 linhas e o
 -- Storage responde erro. Confirmado ao vivo (simulação de claims, projeto
--- iurlzlhbnoemkzgexcfk): sem a policy, `UPDATE ... WHERE bucket_id='avatares'
+-- <project-ref>): sem a policy, `UPDATE ... WHERE bucket_id='avatares'
 -- AND name='<uid>/avatar.png'` para o próprio dono retorna 0 linhas; com ela,
 -- retorna a linha normalmente.
 --

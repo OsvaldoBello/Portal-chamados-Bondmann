@@ -1,6 +1,6 @@
 # Benchmark do sistema — resultados
 
-> Executado em **2026-07-04** contra o Supabase de produção (`iurlzlhbnoemkzgexcfk`,
+> Executado em **2026-07-04** contra o Supabase de produção (`<project-ref>`,
 > região us-east-2), medindo a **camada de banco sob RLS** — o gargalo real do sistema
 > (a Seção 2 do plano mestre estima piso de ~320 ms/request só de latência de rede ao
 > banco; o tempo de CPU das queries é ordens de grandeza menor).

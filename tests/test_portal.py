@@ -1466,7 +1466,9 @@ def _abertura_ocorrencia(**over):
 def test_campos_fragmento_do_quimico_renderiza_campos():
     repo = _repo_quimico()
     with portal_client(repo) as client:
-        resp = client.get("/portal/chamados/campos", params={"categoria_id": "cq"})
+        resp = client.get(
+            "/portal/chamados/campos", params={"departamento_id": "dq", "categoria_id": "cq"}
+        )
     assert resp.status_code == 200
     assert 'name="campo__descricao_situacao"' in resp.text
     assert "Descrição da ocorrência" in resp.text
@@ -1784,3 +1786,260 @@ def test_chamado_combinado_nao_pede_avaliacao_nem_reabertura():
         r = c.get("/portal/chamados/aaa")
     assert "Reabrir chamado" not in r.text
     assert "Como você avalia a resolução deste chamado?" not in r.text
+
+
+# --------------------------------------------------------------------------
+# Abertura estruturada da TI — "Usuários e Acessos" → Criação / Desligamento
+# (F1 da automação de acessos, plano_md_mestre_automacao_acessos.md, Seção 4)
+# --------------------------------------------------------------------------
+_CAT_ACESSOS = "Usuários e Acessos"
+_SUB_CRIACAO = "Criação de Novo Usuário"
+_SUB_DESLIG = "Desligamento / Bloqueio de Acesso"
+_PERFIL_REP = "Representante Comercial (Externo)"
+_PERFIL_INT = "Colaborador Interno (Escritório/Fábrica)"
+
+
+def _repo_acessos(**kw):
+    """FakeRepo com a TI recebendo chamados e o catálogo real de acessos
+    (categoria + 2 subcategorias da migration 0026) mais uma subcategoria
+    comum. Autor do RH por padrão (passa no gate D3)."""
+    kw.setdefault("departamento", "RH")
+    kw.setdefault("departamento_id", "d2")
+    return FakeRepo(
+        categorias=[{"id": "ca", "nome": _CAT_ACESSOS}, {"id": "ch", "nome": "Hardware"}],
+        subcategorias={
+            "ca": [
+                {"id": "sc", "nome": _SUB_CRIACAO},
+                {"id": "sd", "nome": _SUB_DESLIG},
+                {"id": "ss", "nome": "Redefinição de Senha"},
+            ],
+            "ch": [{"id": "sh", "nome": "Notebook"}],
+        },
+        **kw,
+    )
+
+
+def _abertura_criacao_representante(**over):
+    base = {
+        "titulo": "", "descricao": "",  # escondidos na tela: derivados no servidor
+        "departamento_id": "d1", "categoria_id": "ca", "subcategoria_id": "sc",
+        "setor": "RH", "telefone_contato": "51999998888",
+        "campo__nome_completo": "João Pedro Souza",
+        "campo__email": "joao.souza@bondmann.com.br",
+        "campo__perfil": _PERFIL_REP,
+        "campo__telefone": "11988887777",
+        "campo__regiao_wmw": "082-ARARAQUARA",
+        "campo__dispositivo_wmw": "IOS (iPhone / iPad)",
+    }
+    base.update(over)
+    return base
+
+
+def test_campos_fragmento_criacao_para_autor_do_rh():
+    repo = _repo_acessos()
+    with portal_client(repo) as client:
+        resp = client.get(
+            "/portal/chamados/campos",
+            params={"departamento_id": "d1", "categoria_id": "ca", "subcategoria_id": "sc"},
+        )
+    assert resp.status_code == 200
+    assert 'data-layout="acessos"' in resp.text
+    assert 'data-oculta-assunto="1"' in resp.text
+    assert 'data-sugere-email-de="nome_completo"' in resp.text
+    assert 'name="campo__regiao_wmw"' in resp.text and "082-ARARAQUARA" in resp.text
+    # campo condicional carrega o controlador e os valores que o exibem
+    assert 'data-visivel-se-campo="perfil"' in resp.text
+    # o select de setor do portal vem do catálogo vivo (FakeRepo.departamentos)
+    assert '<option value="Financeiro"' in resp.text
+
+
+def test_campos_fragmento_desligamento_e_subcategoria_sem_layout():
+    repo = _repo_acessos()
+    with portal_client(repo) as client:
+        desl = client.get(
+            "/portal/chamados/campos",
+            params={"departamento_id": "d1", "categoria_id": "ca", "subcategoria_id": "sd"},
+        )
+        senha = client.get(
+            "/portal/chamados/campos",
+            params={"departamento_id": "d1", "categoria_id": "ca", "subcategoria_id": "ss"},
+        )
+        # cascade: categoria trocou para Hardware, mas o select ainda carrega a
+        # subcategoria antiga (sc) — não pertence à categoria, não conta.
+        stale = client.get(
+            "/portal/chamados/campos",
+            params={"departamento_id": "d1", "categoria_id": "ch", "subcategoria_id": "sc"},
+        )
+    assert 'name="campo__encaminhar_para"' in desl.text
+    assert "data-layout" not in senha.text
+    assert "data-layout" not in stale.text
+
+
+def test_campos_fragmento_negado_para_autor_fora_do_gate():
+    """D3: funcionário comum (Financeiro) abre a mesma subcategoria com o
+    formulário livre — o fragmento volta vazio."""
+    repo = _repo_acessos(departamento="Financeiro", departamento_id="d4")
+    with portal_client(repo) as client:
+        resp = client.get(
+            "/portal/chamados/campos",
+            params={"departamento_id": "d1", "categoria_id": "ca", "subcategoria_id": "sc"},
+        )
+    assert resp.status_code == 200
+    assert "data-layout" not in resp.text
+
+
+def test_criar_criacao_de_usuario_grava_dados_e_deriva_assunto():
+    repo = _repo_acessos()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_criacao_representante(),
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303, resp.text
+    criado = repo.criados[0]
+    assert criado["subcategoria_id"] == "sc"
+    assert criado["titulo"] == "Criação de usuário — João Pedro Souza (Representante)"
+    assert "joao.souza@bondmann.com.br" in criado["descricao"]
+    dados = criado["dados_formulario"]
+    assert dados["perfil"] == _PERFIL_REP
+    assert dados["regiao_wmw"] == "082-ARARAQUARA"
+    assert "cargo" not in dados and "licencas_sap" not in dados  # só para Interno
+    assert criado["prioridade"] == "MEDIA"  # prioridade continua visível/padrão
+
+
+def test_criar_criacao_de_usuario_interno_com_licencas_sap():
+    repo = _repo_acessos()
+    dados_form = _abertura_criacao_representante(
+        campo__perfil=_PERFIL_INT, campo__regiao_wmw="", campo__dispositivo_wmw="",
+        campo__cargo="Assistente Financeira",
+        campo__portal_papel="Funcionário (abre chamados)",
+        campo__portal_setor="Financeiro",
+    )
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        # checkbox_multi: httpx serializa valor-lista como múltiplas entradas
+        # do mesmo campo — simula os checkboxes marcados do form real.
+        resp = client.post(
+            "/portal/chamados",
+            data={**dados_form, "campo__licencas_sap": ["PROFESSIONAL", "CRM"]},
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303, resp.text
+    dados = repo.criados[0]["dados_formulario"]
+    assert dados["licencas_sap"] == ["PROFESSIONAL", "CRM"]
+    assert dados["portal_setor"] == "Financeiro"
+    assert "regiao_wmw" not in dados
+
+
+def test_criar_criacao_sem_regiao_para_representante_re_renderiza_com_erro():
+    repo = _repo_acessos()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_criacao_representante(campo__regiao_wmw=""),
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "Região comercial" in resp.text
+    # re-render preserva o que foi digitado e reexibe o layout
+    assert 'value="João Pedro Souza"' in resp.text
+    assert 'data-layout="acessos"' in resp.text
+    assert repo.criados == []
+
+
+def test_criar_criacao_com_email_fora_do_dominio_e_recusado():
+    repo = _repo_acessos()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_criacao_representante(campo__email="joao@gmail.com"),
+            headers={"X-CSRF-Token": token},
+        )
+    assert resp.status_code == 400
+    assert "@bondmann.com.br" in resp.text
+
+
+def test_criar_desligamento_grava_dados_e_deriva_assunto():
+    repo = _repo_acessos(departamento="TI", departamento_id="d1")
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data={
+                "titulo": "", "descricao": "",
+                "departamento_id": "d1", "categoria_id": "ca", "subcategoria_id": "sd",
+                "setor": "TI", "telefone_contato": "51999998888",
+                "campo__email": "joao.souza@bondmann.com.br",
+                "campo__nome_completo": "João Pedro Souza",
+                "campo__perfil": _PERFIL_REP,
+                "campo__data_desligamento": "2026-09-30",
+                "campo__regiao": "082-ARARAQUARA",
+                "campo__motivo": "Encerramento de Contrato de Trabalho",
+                "campo__encaminhar_para": "pedidos@bondmann.com.br",
+            },
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303, resp.text
+    criado = repo.criados[0]
+    assert criado["titulo"] == "Desligamento de acessos — João Pedro Souza (Representante)"
+    assert criado["dados_formulario"]["data_desligamento"] == "2026-09-30"
+    assert criado["dados_formulario"]["encaminhar_para"] == "pedidos@bondmann.com.br"
+
+
+def test_criar_fora_do_gate_ignora_campos_e_exige_assunto():
+    """Autor comum na mesma subcategoria: `campo__*` é descartado (nada em
+    dados_formulario) e Assunto/Descrição voltam a ser obrigatórios."""
+    repo = _repo_acessos(departamento="Financeiro", departamento_id="d4")
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        sem_assunto = client.post(
+            "/portal/chamados",
+            data=_abertura_criacao_representante(setor="Financeiro"),
+            headers={"X-CSRF-Token": token},
+        )
+        com_assunto = client.post(
+            "/portal/chamados",
+            data=_abertura_criacao_representante(
+                setor="Financeiro", titulo="Novo colega", descricao="Precisa de e-mail",
+            ),
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert sem_assunto.status_code == 400
+    assert "assunto" in sem_assunto.text.lower()
+    assert com_assunto.status_code == 303
+    assert repo.criados[0]["dados_formulario"] == {}
+    assert repo.criados[0]["titulo"] == "Novo colega"
+
+
+def test_lider_admin_de_outro_setor_passa_no_gate():
+    repo = _repo_acessos(role="ADMIN", departamento="Comercial", departamento_id="d9")
+    with portal_client(repo, user=_admin) as client:
+        resp = client.get(
+            "/portal/chamados/campos",
+            params={"departamento_id": "d1", "categoria_id": "ca", "subcategoria_id": "sc"},
+        )
+    assert 'data-layout="acessos"' in resp.text
+
+
+def test_detalhe_rotula_campos_da_criacao_de_usuario():
+    repo = _repo_acessos(
+        chamado=_chamado(
+            categoria=_CAT_ACESSOS, subcategoria=_SUB_CRIACAO,
+            dados_formulario={"nome_completo": "João Pedro Souza", "perfil": _PERFIL_REP,
+                              "regiao_wmw": "082-ARARAQUARA"},
+        )
+    )
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa")
+    assert resp.status_code == 200
+    assert "Nome completo do colaborador" in resp.text
+    assert "Região comercial (WMW / SAP)" in resp.text
+    assert "082-ARARAQUARA" in resp.text

@@ -37,10 +37,20 @@ O `name` de cada campo é a chave estável em `dados_formulario` — trocar um
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass, field
-from datetime import date
 from typing import Any
+
+# Motor genérico (definição de campo, validação, prefill, rótulos) — extraído
+# daqui em 2026-09-14 (F1 da automação de acessos) para servir também os
+# layouts por subcategoria da TI. `CampoDef`/`TIPOS_VALIDOS` continuam
+# importáveis deste módulo (re-export) — `app/ia/whatsapp_intake.py` e os
+# testes dependem desse caminho.
+from app.domain.campos_dinamicos import (  # noqa: F401 — re-export
+    TIPOS_VALIDOS,
+    CampoDef,
+    rotular_campos,
+    validar_campos,
+    valores_para_template as _valores_para_template,
+)
 
 # Nomes das categorias do Químico. DEVEM casar exatamente com os `nome` semeados
 # na migration 0049 — é por eles que a rota casa a categoria escolhida com o
@@ -49,12 +59,6 @@ CAT_OCORRENCIA = "Registro de Ocorrência"
 CAT_VISITA = "Solicitação de Visita Técnica"
 CAT_ANALISE = "Solicitação de Análise Laboratorial"
 CAT_DESENVOLVIMENTO = "Solicitação de Desenvolvimento"
-
-# Tipos de campo suportados pelo partial `_campos_quimico.html` e pela validação.
-# ``checkbox_multi``: 0..N opções marcadas — valor gravado é ``list[str]``.
-TIPOS_VALIDOS = {"text", "textarea", "select", "date", "number", "email", "tel", "checkbox_multi"}
-
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # Unidades Bondmann (radio nos forms de Visita Técnica e Análise Laboratorial).
 _UNIDADES = ("Matriz Canoas/RS", "Filial Indaiatuba/SP")
@@ -190,24 +194,6 @@ def titulo_e_descricao_automaticos(
     titulo = f"{nome_categoria} — {identificador}" if identificador else nome_categoria
     descricao = str(dados.get(_CAMPO_NARRATIVA[nome_categoria], "") or "") or nome_categoria
     return titulo[:160], descricao
-
-
-@dataclass(frozen=True)
-class CampoDef:
-    """Definição de um campo dinâmico de formulário.
-
-    ``name`` é a chave em ``dados_formulario`` (e o sufixo do input HTML
-    ``campo__<name>``). ``opcoes`` se aplica a ``select``/``checkbox_multi``.
-    ``min_chars`` valida um tamanho mínimo em campos de texto (ex.: Lote, Fone).
-    """
-
-    name: str
-    label: str
-    tipo: str = "text"
-    obrigatorio: bool = False
-    opcoes: tuple[str, ...] = field(default_factory=tuple)
-    ajuda: str = ""
-    min_chars: int = 0
 
 
 # Ordem da lista = ordem de exibição no formulário.
@@ -375,101 +361,25 @@ def validar_payload(
 ) -> tuple[bool, str | None, dict[str, Any]]:
     """Valida as respostas dos campos dinâmicos de uma categoria do Químico.
 
-    ``dados`` mapeia ``name -> lista de valores brutos`` como submetidos (um
-    campo normal chega como lista de 1 item; um ``checkbox_multi`` pode chegar
-    com 0..N). Retorna ``(ok, erro, limpo)``: ``limpo`` só contém as chaves
-    conhecidas do schema (defesa em profundidade contra campos forjados no
-    POST) — valor ``str`` para a maioria dos tipos, ``list[str]`` para
-    ``checkbox_multi``. Categoria sem layout (não-Químico) ⇒ ``(True, None, {})``.
+    Delegado a ``campos_dinamicos.validar_campos`` (mesmo contrato:
+    ``dados`` mapeia ``name -> lista de valores brutos``; retorna
+    ``(ok, erro, limpo)`` com só as chaves conhecidas do schema). Categoria
+    sem layout (não-Químico) ⇒ ``(True, None, {})``.
     """
-    campos = campos_da_categoria(nome_categoria)
-    if not campos:
-        return True, None, {}
-
-    limpo: dict[str, Any] = {}
-    for campo in campos:
-        brutos = dados.get(campo.name) or []
-        if campo.tipo == "checkbox_multi":
-            marcados = [v.strip() for v in brutos if v.strip()]
-            invalidas = [v for v in marcados if v not in campo.opcoes]
-            if invalidas:
-                return False, f'Opção inválida no campo "{campo.label}".', {}
-            if campo.obrigatorio and not marcados:
-                return False, f'Selecione ao menos uma opção em "{campo.label}".', {}
-            if marcados:
-                limpo[campo.name] = marcados
-            continue
-
-        valor = (brutos[0] if brutos else "").strip()
-        if not valor:
-            if campo.obrigatorio:
-                return False, f'Preencha o campo "{campo.label}".', {}
-            continue  # opcional vazio: não grava chave
-        if campo.tipo == "select" and valor not in campo.opcoes:
-            return False, f'Opção inválida no campo "{campo.label}".', {}
-        if campo.tipo == "date":
-            try:
-                date.fromisoformat(valor)
-            except ValueError:
-                return False, f'Data inválida no campo "{campo.label}".', {}
-        if campo.tipo == "number":
-            try:
-                int(valor)
-            except ValueError:
-                return False, f'Valor numérico inválido no campo "{campo.label}".', {}
-        if campo.tipo == "email" and not _EMAIL_RE.match(valor):
-            return False, f'E-mail inválido no campo "{campo.label}".', {}
-        if campo.min_chars and len(valor) < campo.min_chars:
-            return (
-                False,
-                f'O campo "{campo.label}" precisa de pelo menos {campo.min_chars} caracteres.',
-                {},
-            )
-        limpo[campo.name] = valor
-    return True, None, limpo
+    return validar_campos(campos_da_categoria(nome_categoria), dados)
 
 
 def valores_para_template(
     nome_categoria: str | None, dados: dict[str, list[str]]
 ) -> dict[str, Any]:
-    """Normaliza os valores brutos submetidos para prefill no template Jinja.
-
-    Espelha o formato de ``validar_payload`` (``str`` normal / ``list[str]``
-    para ``checkbox_multi``), mas SEM validar — usado só para reexibir o que o
-    usuário digitou quando o formulário volta com erro."""
-    campos = campos_da_categoria(nome_categoria)
-    resultado: dict[str, Any] = {}
-    for campo in campos:
-        brutos = dados.get(campo.name) or []
-        if campo.tipo == "checkbox_multi":
-            resultado[campo.name] = [v for v in brutos if v]
-        elif brutos:
-            resultado[campo.name] = brutos[0]
-    return resultado
+    """Prefill (sem validar) dos campos da categoria — ver
+    ``campos_dinamicos.valores_para_template``."""
+    return _valores_para_template(campos_da_categoria(nome_categoria), dados)
 
 
 def rotular(nome_categoria: str | None, dados: dict[str, Any]) -> list[tuple[str, str]]:
-    """Pares ``(label, valor)`` para exibição, na ordem do schema.
-
-    Usa o schema da categoria para rotular as chaves de ``dados_formulario``.
-    Valores ``list`` (``checkbox_multi``) são juntados com "; ". Chaves
-    presentes em ``dados`` mas ausentes do schema (ex.: campo removido depois
-    de gravado) são anexadas ao final com o próprio ``name`` como rótulo, para
-    não sumir com dado histórico."""
-    if not dados:
-        return []
-
-    def _texto(valor: Any) -> str:
-        return "; ".join(valor) if isinstance(valor, list) else str(valor)
-
-    campos = campos_da_categoria(nome_categoria)
-    vistos: set[str] = set()
-    pares: list[tuple[str, str]] = []
-    for campo in campos:
-        if campo.name in dados and dados[campo.name]:
-            pares.append((campo.label, _texto(dados[campo.name])))
-            vistos.add(campo.name)
-    for chave, valor in dados.items():
-        if chave not in vistos and valor:
-            pares.append((chave, _texto(valor)))
-    return pares
+    """Pares ``(label, valor)`` para exibição, na ordem do schema da categoria
+    do Químico — ver ``campos_dinamicos.rotular_campos``. Para um chamado
+    qualquer (inclusive os layouts por subcategoria da TI), usar
+    ``formularios_dinamicos.rotular_chamado``."""
+    return rotular_campos(campos_da_categoria(nome_categoria), dados)

@@ -2,7 +2,7 @@
 --
 -- Fecha dois buracos de GRANT que só se manifestam num Supabase LOCAL do zero
 -- (`supabase start`, é assim que o CI "E2E RLS" / `tests/e2e -m rls` sobe o
--- banco) — em produção (iurlzlhbnoemkzgexcfk) ambos já "funcionavam" por
+-- banco) — em produção (<project-ref>) ambos já "funcionavam" por
 -- drift (privilégio aplicado fora de migration), o mesmo padrão de drift já
 -- documentado nas migrations 0045/0046.
 --

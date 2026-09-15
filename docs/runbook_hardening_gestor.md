@@ -158,7 +158,7 @@ de **6** caracteres, enquanto a aplicação e o `supabase/config.toml` local já
 ### Caminho pelo dashboard do Supabase
 
 1. <https://supabase.com/dashboard> → projeto de **produção**
-   (`iurlzlhbnoemkzgexcfk`).
+   (`<project-ref>`).
 2. Menu lateral **Authentication** → **Sign In / Providers** (ou **Policies**,
    conforme a versão do painel) → seção **Password**.
 3. Campo **Minimum password length**: trocar **6 → 8**.
@@ -198,7 +198,7 @@ precisa do mesmo ajuste.
 
 ### Caminho pelo dashboard do Supabase
 
-1. <https://supabase.com/dashboard> → projeto de **produção** (`iurlzlhbnoemkzgexcfk`).
+1. <https://supabase.com/dashboard> → projeto de **produção** (`<project-ref>`).
 2. **Authentication** → **Multi-Factor Authentication** (em algumas versões do
    painel: **Sign In / Providers** → seção **Multi-Factor Authentication**).
 3. Habilitar **TOTP (Authenticator app)** — tanto *enroll* quanto *verify*.
@@ -227,7 +227,7 @@ Químico: enxerga o catálogo/fichas/playbooks e **não tem permissão** nas
 quantidades das formulações (`base_quimico_formulacoes`) — garantia de banco,
 já verificada em produção.
 
-1. **Definir a senha** (SQL Editor do Supabase, projeto `iurlzlhbnoemkzgexcfk`):
+1. **Definir a senha** (SQL Editor do Supabase, projeto `<project-ref>`):
 
    ```sql
    ALTER ROLE ia_worker PASSWORD '<senha-forte-gerada>';
@@ -240,7 +240,7 @@ já verificada em produção.
    Supavisor 6543, trocando usuário e senha):
 
    ```text
-   IA_WORKER_DATABASE_URL=postgresql://ia_worker.iurlzlhbnoemkzgexcfk:<senha>@<host-supavisor>:6543/postgres
+   IA_WORKER_DATABASE_URL=postgresql://ia_worker.<project-ref>:<senha>@<host-supavisor>:6543/postgres
    IA_TRIAGEM_DEPARTAMENTOS=TI,Dpto Químico
    ```
 

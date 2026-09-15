@@ -29,9 +29,11 @@ from app.anexos import assinar_anexos, processar_uploads
 from app.auth.dependencies import CurrentUser, require_role
 from app.config import get_settings
 from app.db import rls_request_scope
-from app.domain.formularios_quimico import rotular
+from app.domain import automacao as automacao_dom
+from app.domain.formularios_dinamicos import rotular_chamado
 from app.domain.periodo import periodo_invertido
 from app.domain.sla_visual import estado_sla
+from app.repositories.automacao import AutomacaoRepo, get_automacao_repo
 from app.repositories.chamados import (
     PRAZO_PROJETO_MAX_DIAS,
     PRAZO_PROJETO_MIN_DIAS,
@@ -44,6 +46,7 @@ from app.repositories.chamados import (
 from app.routes.transacao import CommitBeforeResponseRoute
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
+from app.services import automacao as automacao_svc
 from app.services.atendimento import AtendimentoService
 from app.templating import render
 
@@ -528,11 +531,26 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         else None
     )
     settings = get_settings()
+    # Automação de acessos (F2 — plano_md_mestre_automacao_acessos.md): card
+    # com o estado do job e as ações do TI. Só consulta a fila quando a
+    # subcategoria é automatizável (evita uma query em todo chamado). Agir
+    # exige `pode_atender` (atendimento iniciado por alguém que não é o autor
+    # — mesma segregação das demais ações).
+    automacao_card = None
+    if automacao_dom.tipo_da_subcategoria(chamado.get("subcategoria")) and chamado.get("dados_formulario"):
+        jobs = await _automacao_repo(request).jobs_do_chamado(ctx.user.claims, chamado_id)
+        automacao_card = automacao_svc.montar_card(
+            chamado, jobs, settings, pode_agir=perm.pode_atender
+        )
     ctx_render = {
         "perfil": ctx.perfil,
         "chamado": chamado,
         "mensagens": mensagens,
-        "dados_formulario": rotular(chamado.get("categoria"), chamado.get("dados_formulario") or {}),
+        "automacao": automacao_card,
+        "automacao_status_label": automacao_dom.STATUS_LABEL,
+        "dados_formulario": rotular_chamado(
+            chamado.get("categoria"), chamado.get("subcategoria"), chamado.get("dados_formulario")
+        ),
         "operadores": operadores,
         "departamentos": departamentos,
         "categorias_edit": categorias_edit,
@@ -602,6 +620,78 @@ async def mensagens_fragmento(
     resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = "no-cache"
     return resp
+
+
+def _automacao_repo(request: Request) -> AutomacaoRepo:
+    """Repositório da fila de automação honrando `dependency_overrides` (os
+    testes trocam por um fake) sem exigir `Depends` em todos os callers de
+    `_carregar_atendimento` (re-renders de erro chamam direto)."""
+    fabrica = request.app.dependency_overrides.get(get_automacao_repo, get_automacao_repo)
+    return fabrica()
+
+
+@router.post("/chamados/{chamado_id}/automacao/executar")
+async def automacao_executar(
+    request: Request,
+    chamado_id: str,
+    modo: str = Form("real"),  # real | simulacao | reexecutar
+    origem: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    automacao_repo: AutomacaoRepo = Depends(get_automacao_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Gate humano (D2): o TI aprova a execução da automação de acessos para
+    este chamado — o job nasce NA_FILA e o worker o pega quando `executar_apos`
+    vencer. `simulacao` = dry-run (roda já, nada é alterado nos sistemas);
+    `reexecutar` = novo job só com as etapas pendentes do anterior."""
+    chamado = await repo.obter(ctx.user.claims, chamado_id)
+    if chamado is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+    perm = AtendimentoService.permissoes(chamado, ctx.perfil, ctx.user.id)
+    if not perm.pode_atender:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para executar a automação.")
+    modo = (modo or "real").strip().lower()
+    try:
+        await automacao_svc.aprovar(
+            automacao_repo, ctx.user.claims, chamado,
+            aprovado_por=ctx.user.id,
+            dry_run=(modo == "simulacao"),
+            reexecutar=(modo == "reexecutar"),
+        )
+    except automacao_svc.AprovacaoInvalida as exc:
+        return await _carregar_atendimento(
+            request, chamado_id, ctx, repo, origem=origem, automacao_erro=str(exc)
+        )
+    return _voltar(chamado_id, origem)
+
+
+@router.post("/chamados/{chamado_id}/automacao/{job_id}/cancelar")
+async def automacao_cancelar(
+    request: Request,
+    chamado_id: str,
+    job_id: str,
+    origem: str = "",
+    ctx: StaffCtx = Depends(staff_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+    automacao_repo: AutomacaoRepo = Depends(get_automacao_repo),
+    _: None = Depends(_csrf_guard),
+):
+    """Cancela um job ainda NA_FILA (RLS só permite essa transição ao staff do
+    departamento do chamado)."""
+    chamado = await repo.obter(ctx.user.claims, chamado_id)
+    if chamado is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+    perm = AtendimentoService.permissoes(chamado, ctx.perfil, ctx.user.id)
+    if not perm.pode_atender:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sem permissão para cancelar a automação.")
+    ok = await automacao_repo.cancelar_job(ctx.user.claims, chamado_id, job_id, ctx.user.id)
+    if not ok:
+        return await _carregar_atendimento(
+            request, chamado_id, ctx, repo, origem=origem,
+            automacao_erro="A execução não está mais na fila (já começou ou terminou).",
+        )
+    return _voltar(chamado_id, origem)
 
 
 def _voltar(chamado_id: str, origem: str = "") -> RedirectResponse:

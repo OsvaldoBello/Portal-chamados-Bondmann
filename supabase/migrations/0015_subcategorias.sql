@@ -6,7 +6,7 @@
 -- ⚠️ RECONSTRUÇÃO (2026-07-14, Sprint 0 / item 0.1 do plano de melhorias): o
 -- arquivo original desta migration nunca chegou a ser commitado no git (a
 -- cadeia local pulava de 0014 direto para 0016), embora ela estivesse de fato
--- aplicada em produção (`iurlzlhbnoemkzgexcfk`, registrada em
+-- aplicada em produção (`<project-ref>`, registrada em
 -- `supabase_migrations.schema_migrations` como `20260703224156`). O DDL abaixo
 -- foi reconstruído por introspecção da produção (colunas, FKs, índices,
 -- policies e o corpo atual de `enforce_cliente_so_avaliacao`), portanto é

@@ -64,7 +64,14 @@ async def ready(request: Request) -> JSONResponse:
         if not settings.is_production:
             corpo["db_error"] = f"{type(exc).__name__}: {exc}"
         return JSONResponse(corpo, status_code=503)
-    return JSONResponse({"status": "ready"})
+    corpo_ok: dict = {"status": "ready"}
+    if settings.automacao_ativa:
+        # Último contato do worker da automação de acessos (F2) — só
+        # informativo: worker mudo não derruba a readiness do portal.
+        from app.services.automacao import estado_worker
+
+        corpo_ok["automacao_worker"] = estado_worker()
+    return JSONResponse(corpo_ok)
 
 
 @router.get("/metrics")

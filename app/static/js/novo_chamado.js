@@ -1,8 +1,10 @@
-/* Abertura de chamado (Portal) — ajustes específicos do departamento Marketing.
- * Quando o departamento de destino é o Marketing:
- *   - exibe o aviso de prazo (mínimo de 48h);
- *   - troca o texto de ajuda (placeholder) da descrição pelo texto do Marketing.
- * CSP-safe: JS externo, sem eval/inline. Padrão vanilla do projeto (ver shell.js).
+/* Abertura de chamado (Portal) — ajustes por departamento e por layout dinâmico.
+ * Marketing: aviso de prazo (48h), placeholder próprio, data de entrega no lugar
+ * de prioridade. Químico: rótulo "Formulários", sem subcategoria, anexos maiores.
+ * Layout dinâmico (bloco #campos-dinamicos, servido por /portal/chamados/campos):
+ * esconde Assunto/Descrição/Prioridade conforme os data-* do wrapper, mostra/
+ * esconde campos condicionais (data-visivel-se-*) e sugere o e-mail corporativo
+ * (data-sugere-email-de). CSP-safe: JS externo, sem eval/inline (ver shell.js).
  */
 (function () {
   "use strict";
@@ -47,34 +49,95 @@
       var mkt = descricao.getAttribute("data-placeholder-marketing") || "";
       descricao.setAttribute("placeholder", marketing ? mkt : padrao);
     }
-    // Marketing → data de entrega (por demanda); demais → prioridade. Químico
-    // não pergunta prioridade (esconde e mantém o valor padrão MEDIA do select).
-    if (campoPrioridade) campoPrioridade.style.display = (marketing || quimico) ? "none" : "block";
+    // Marketing → data de entrega (por demanda); demais → prioridade (o layout
+    // dinâmico do Químico também esconde — ver aplicarLayoutDinamico).
     if (campoData) campoData.style.display = marketing ? "block" : "none";
     if (campoVolume) campoVolume.style.display = marketing ? "block" : "none";
-    // Químico → bloco de campos dinâmicos por categoria (carregados via HTMX).
-    if (camposDinamicos) camposDinamicos.style.display = quimico ? "block" : "none";
+    // Bloco de campos dinâmicos, Assunto/Descrição e Prioridade: decididos pelo
+    // layout servido (Químico ou TI "Usuários e Acessos"), não pelo departamento.
+    aplicarLayoutDinamico(marketing);
     // Químico → nenhuma categoria do setor tem subcategoria (0049): esconde o
     // campo em vez de deixá-lo parado em "Escolha a categoria primeiro".
     if (campoSubcategoria) campoSubcategoria.style.display = quimico ? "none" : "block";
     // Químico → rótulo "Categoria" vira "Formulários" (são os 3 formulários do
     // setor, não uma categoria genérica).
     if (categoriaLabel) categoriaLabel.textContent = quimico ? "Formulários" : "Categoria";
-    // Químico → esconde Assunto/Descrição (o servidor deriva os dois das
-    // respostas do formulário dinâmico, app/domain/formularios_quimico.py).
-    // Tira o `required` junto: um campo obrigatório escondido via display:none
-    // continua bloqueando o envio nativo do formulário (a barra de validação do
-    // HTML5 não isenta elementos só por estarem sem `display`).
-    if (campoAssunto) campoAssunto.style.display = quimico ? "none" : "block";
-    if (tituloInput) tituloInput.required = !quimico;
-    if (campoDescricao) campoDescricao.style.display = quimico ? "none" : "block";
-    if (descricao) descricao.required = !quimico;
     // Químico aceita anexos maiores (laudos/fotos/vídeos de análise) — troca o
     // aviso de limite exibido pelo mesmo padrão do placeholder do Marketing.
     if (anexosHint) {
       var hintPadrao = anexosHint.getAttribute("data-hint-padrao") || "";
       var hintQuimico = anexosHint.getAttribute("data-hint-quimico") || "";
       anexosHint.innerHTML = quimico ? hintQuimico : hintPadrao;
+    }
+  }
+
+  // Wrapper do layout dinâmico atual (null quando a escolha não tem campos).
+  function layoutAtual() {
+    return camposDinamicos ? camposDinamicos.querySelector("[data-layout]") : null;
+  }
+
+  // Sugestão de e-mail corporativo a partir do nome (mesma regra da automação:
+  // primeiro nome + "." + último sobrenome, sem acentos, minúsculo).
+  function sugerirEmail(nome) {
+    var limpo = (nome || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    var partes = limpo.split(/\s+/).filter(function (p) { return /^[a-z0-9]+$/.test(p); });
+    if (!partes.length) return "";
+    var local = partes.length > 1 ? partes[0] + "." + partes[partes.length - 1] : partes[0];
+    return local + "@bondmann.com.br";
+  }
+
+  // Campos condicionais (data-visivel-se-*): mostra só quando o campo
+  // controlador (um select do mesmo layout) está num dos valores listados.
+  // Inputs escondidos ficam `disabled` — não são submetidos e não travam a
+  // validação nativa (um `required` invisível bloquearia o envio).
+  function aplicarCondicionais(wrapper) {
+    var blocos = wrapper.querySelectorAll(".campo-dinamico[data-visivel-se-campo]");
+    for (var i = 0; i < blocos.length; i++) {
+      var bloco = blocos[i];
+      var controlador = wrapper.querySelector('[name="campo__' + bloco.getAttribute("data-visivel-se-campo") + '"]');
+      var valores = (bloco.getAttribute("data-visivel-se-valores") || "").split("||");
+      var visivel = !!controlador && valores.indexOf(controlador.value) >= 0;
+      bloco.style.display = visivel ? "block" : "none";
+      var inputs = bloco.querySelectorAll("input, select, textarea");
+      for (var j = 0; j < inputs.length; j++) inputs[j].disabled = !visivel;
+    }
+  }
+
+  // Aplica o layout dinâmico servido em #campos-dinamicos: visibilidade do
+  // bloco, de Assunto/Descrição (derivados no servidor quando escondidos —
+  // tira o `required` junto, senão o navegador bloqueia o envio de um campo
+  // obrigatório invisível) e de Prioridade; campos condicionais; e-mail sugerido.
+  function aplicarLayoutDinamico(marketing) {
+    if (typeof marketing === "undefined") marketing = ehMarketing();
+    var wrapper = layoutAtual();
+    var temLayout = !!wrapper;
+    var ocultaAssunto = temLayout && wrapper.getAttribute("data-oculta-assunto") === "1";
+    var ocultaPrioridade = temLayout && wrapper.getAttribute("data-oculta-prioridade") === "1";
+    if (camposDinamicos) camposDinamicos.style.display = temLayout ? "block" : "none";
+    if (campoAssunto) campoAssunto.style.display = ocultaAssunto ? "none" : "block";
+    if (tituloInput) tituloInput.required = !ocultaAssunto;
+    if (campoDescricao) campoDescricao.style.display = ocultaAssunto ? "none" : "block";
+    if (descricao) descricao.required = !ocultaAssunto;
+    if (campoPrioridade) campoPrioridade.style.display = (marketing || ocultaPrioridade) ? "none" : "block";
+    if (!wrapper) return;
+    aplicarCondicionais(wrapper);
+    if (wrapper.getAttribute("data-ligado") === "1") return; // listeners já instalados neste swap
+    wrapper.setAttribute("data-ligado", "1");
+    wrapper.addEventListener("change", function (evt) {
+      if (evt.target && evt.target.tagName === "SELECT") aplicarCondicionais(wrapper);
+    });
+    var fonteEmail = wrapper.getAttribute("data-sugere-email-de");
+    var emailInput = wrapper.querySelector('[name="campo__email"]');
+    var fonteInput = fonteEmail ? wrapper.querySelector('[name="campo__' + fonteEmail + '"]') : null;
+    if (emailInput && fonteInput) {
+      if (!emailInput.value) emailInput.setAttribute("data-auto", "1");
+      fonteInput.addEventListener("input", function () {
+        if (emailInput.getAttribute("data-auto") !== "1") return; // o usuário editou o e-mail à mão
+        emailInput.value = sugerirEmail(fonteInput.value);
+      });
+      emailInput.addEventListener("input", function () {
+        emailInput.setAttribute("data-auto", emailInput.value ? "0" : "1");
+      });
     }
   }
 
@@ -153,9 +216,11 @@
 
   // A recarga das <option>s de subcategoria (cascade da categoria) muda a
   // seleção — reavalia o aviso de formulário obrigatório depois de qualquer
-  // swap do select (inclui o pré-select de "Outros" acima).
+  // swap do select (inclui o pré-select de "Outros" acima). O swap do bloco de
+  // campos dinâmicos (troca de categoria/subcategoria) reaplica o layout.
   document.body.addEventListener("htmx:afterSwap", function (evt) {
     var alvo = evt.detail && evt.detail.target;
     if (alvo && alvo.id === "subcategoria-select") aplicarFormularioObrigatorio();
+    if (alvo && alvo.id === "campos-dinamicos") aplicarLayoutDinamico();
   });
 })();

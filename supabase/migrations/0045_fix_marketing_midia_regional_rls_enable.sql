@@ -1,7 +1,7 @@
 -- 0045_fix_marketing_midia_regional_rls_enable.sql — Sprint 0 / item 0.1
 --
 -- Achado durante a reconstrução da 0015 (validação "aplicar do zero" contra um
--- projeto de teste limpo): em produção (`iurlzlhbnoemkzgexcfk`), a tabela
+-- projeto de teste limpo): em produção (`<project-ref>`), a tabela
 -- `marketing_midia_regional` tem RLS HABILITADA (`relrowsecurity = true`),
 -- mas NENHUMA migration deste repositório jamais executa
 -- `ALTER TABLE marketing_midia_regional ENABLE ROW LEVEL SECURITY` — nem 0024

@@ -38,14 +38,7 @@ from app.anexos import (
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.config import get_settings
 from app.db import commit_now, rls_request_scope
-from app.domain.formularios_quimico import (
-    campos_da_categoria,
-    observacao_categoria,
-    rotular,
-    titulo_e_descricao_automaticos,
-    validar_payload,
-    valores_para_template,
-)
+from app.domain.formularios_dinamicos import layout_para, rotular_chamado
 from app.domain.formularios_rh import formulario_da_subcategoria
 from app.domain.periodo import periodo_invertido
 from app.ia import triagem
@@ -284,16 +277,22 @@ async def _render_form(
     # Id do departamento Químico — o front usa para exibir o bloco de campos
     # dinâmicos por categoria (novo_chamado.js).
     quimico_dep_id = PortalService.quimico_dep_id(departamentos)
-    # Re-render de erro: se a categoria escolhida é do Químico, reexibe os campos
-    # dinâmicos já preenchidos (para o usuário não perder o que digitou).
-    campos_quimico: tuple = ()
+    # Re-render de erro: se a escolha (departamento/categoria/subcategoria) tem
+    # um layout dinâmico (Químico por categoria; TI "Usuários e Acessos" por
+    # subcategoria — F1 da automação de acessos), reexibe os campos já
+    # preenchidos (para o usuário não perder o que digitou).
+    layout = None
     dados_form: dict = {}
-    observacao_quimico = ""
-    if quimico_dep_id and dep_sel == quimico_dep_id and form.get("categoria_id"):
-        nome_cat = await repo.nome_categoria(ctx.user.claims, form["categoria_id"])
-        campos_quimico = campos_da_categoria(nome_cat)
-        dados_form = valores_para_template(nome_cat, form.get("dados_formulario") or {})
-        observacao_quimico = observacao_categoria(nome_cat)
+    if dep_sel and form.get("categoria_id"):
+        layout = await _layout_da_escolha(
+            ctx, repo, setores_ativos,
+            departamento_id=dep_sel,
+            categoria_id=form["categoria_id"],
+            subcategoria_id=form.get("subcategoria_id") or "",
+            subcategorias=subcategorias,
+        )
+        if layout:
+            dados_form = layout.prefill(form.get("dados_formulario") or {})
     usuarios_copia = await repo.usuarios_para_copia(ctx.user.claims, excluir_id=ctx.user.id)
     return render(
         request,
@@ -305,9 +304,8 @@ async def _render_form(
             "subcategorias": subcategorias,
             "marketing_dep_id": marketing_dep_id,
             "quimico_dep_id": quimico_dep_id,
-            "campos_quimico": campos_quimico,
+            "layout": layout,
             "dados_form": dados_form,
-            "observacao_quimico": observacao_quimico,
             "prioridades": PRIORIDADES,
             "data_entrega_min": PortalService.data_entrega_min().isoformat(),
             "form": form,
@@ -376,30 +374,71 @@ async def subcategorias_fragmento(
     return render(request, "portal/_subcategorias_options.html", {"subcategorias": subs})
 
 
+async def _layout_da_escolha(
+    ctx: PortalCtx,
+    repo: ChamadosRepo,
+    setores_ativos: list[dict],
+    *,
+    departamento_id: str,
+    categoria_id: str,
+    subcategoria_id: str,
+    subcategorias: list[dict] | None = None,
+):
+    """Resolve o layout dinâmico da combinação escolhida na abertura (nomes do
+    catálogo → `formularios_dinamicos.layout_para`). ``subcategorias`` = lista
+    ativa da categoria, se já carregada (evita nova query); a subcategoria só
+    conta se pertencer à categoria — no cascade da tela, a troca de categoria
+    dispara o fragmento com o id da subcategoria ANTIGA ainda no select."""
+    if not categoria_id:
+        return None
+    # Departamento opcional: o Químico resolve só pela categoria; os layouts da
+    # TI exigem o departamento (conferido pelo nome dentro de `layout_para`).
+    dep_nome = next(
+        (d["nome"] for d in setores_ativos if str(d["id"]) == departamento_id), None
+    )
+    nome_cat = await repo.nome_categoria(ctx.user.claims, categoria_id)
+    if not nome_cat:
+        return None
+    nome_sub = None
+    if subcategoria_id:
+        if subcategorias is None:
+            subcategorias = await repo.subcategorias_ativas(ctx.user.claims, categoria_id)
+        nome_sub = next(
+            (s["nome"] for s in subcategorias if str(s["id"]) == subcategoria_id), None
+        )
+    return layout_para(
+        departamento=dep_nome,
+        categoria=nome_cat,
+        subcategoria=nome_sub,
+        perfil_autor=ctx.perfil,
+        setores_portal=tuple(d["nome"] for d in setores_ativos),
+    )
+
+
 @router.get("/chamados/campos")
 async def campos_fragmento(
     request: Request,
+    departamento_id: str = "",
     categoria_id: str = "",
+    subcategoria_id: str = "",
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
-    """Cascade da abertura (Químico): campos dinâmicos da categoria escolhida
-    (carregado via HTMX quando o usuário muda a categoria). Categorias sem layout
-    específico devolvem fragmento vazio. Declarado ANTES da rota dinâmica
+    """Cascade da abertura: campos dinâmicos da escolha atual (carregado via
+    HTMX quando o usuário muda a categoria OU a subcategoria). Escolhas sem
+    layout devolvem fragmento vazio. Declarado ANTES da rota dinâmica
     ``/chamados/{chamado_id}``."""
-    categoria_id = categoria_id.strip()
-    nome_cat = (
-        await repo.nome_categoria(ctx.user.claims, categoria_id) if categoria_id else None
+    setores_ativos = await repo.departamentos_ativos(ctx.user.claims)
+    layout = await _layout_da_escolha(
+        ctx, repo, setores_ativos,
+        departamento_id=departamento_id.strip(),
+        categoria_id=categoria_id.strip(),
+        subcategoria_id=subcategoria_id.strip(),
     )
-    campos = campos_da_categoria(nome_cat)
     return render(
         request,
-        "portal/_campos_quimico.html",
-        {
-            "campos_quimico": campos,
-            "dados_form": {},
-            "observacao_quimico": observacao_categoria(nome_cat),
-        },
+        "portal/_campos_dinamicos.html",
+        {"layout": layout, "dados_form": {}},
     )
 
 
@@ -541,23 +580,38 @@ async def criar_chamado(
     else:
         subcategoria_id = ""  # categoria sem subcategorias → chamado sem subcategoria
 
-    # Layout dinâmico do Químico: valida os campos da categoria escolhida e monta
-    # o `dados_formulario` (só chaves conhecidas do schema — defesa em profundidade
-    # contra `campo__*` forjados). Fora do Químico, fica `{}`. Calculado ANTES da
-    # checagem de assunto/descrição porque a tela de abertura esconde esses dois
-    # campos para o Químico (usuário pediu 2026-07-22) — são derivados das
-    # respostas do formulário em vez de digitados.
+    # Layout dinâmico (Químico por categoria; TI "Usuários e Acessos" por
+    # subcategoria, só para autores RH/TI/ADMIN — D3): valida os campos da
+    # escolha e monta o `dados_formulario` (só chaves conhecidas do schema e
+    # visíveis para o payload — defesa em profundidade contra `campo__*`
+    # forjados). Sem layout, fica `{}`. Calculado ANTES da checagem de
+    # assunto/descrição porque a tela esconde esses dois campos quando há
+    # layout — são derivados das respostas do formulário em vez de digitados.
+    layout = await _layout_da_escolha(
+        ctx, repo, setores_ativos,
+        departamento_id=departamento_id,
+        categoria_id=categoria_id,
+        subcategoria_id=subcategoria_id,
+        subcategorias=subs_da_categoria,
+    )
+    # `eh_quimico` continua sendo "destino é o Dpto Químico" (não "tem layout"):
+    # governa o limite de anexo e o resumo por IA do setor, independentes do
+    # layout da categoria.
     quimico_dep_id = PortalService.quimico_dep_id(setores_ativos)
     eh_quimico = bool(quimico_dep_id) and departamento_id == quimico_dep_id
     nome_categoria_val: str | None = None
-    dados_formulario_val: dict[str, object] = {}
     if eh_quimico:
-        nome_categoria_val = await repo.nome_categoria(ctx.user.claims, categoria_id)
-        ok, erro_campo, limpo = validar_payload(nome_categoria_val, dados_brutos)
+        nome_categoria_val = (
+            layout.chave if layout else await repo.nome_categoria(ctx.user.claims, categoria_id)
+        )
+    dados_formulario_val: dict[str, object] = {}
+    if layout:
+        ok, erro_campo, limpo = layout.validar(dados_brutos)
         if not ok:
             return await _erro(erro_campo or "Preencha os campos do formulário.")
         dados_formulario_val = limpo
-        titulo, descricao = titulo_e_descricao_automaticos(nome_categoria_val, limpo)
+        if layout.oculta_assunto:
+            titulo, descricao = layout.titulo_e_descricao(limpo)
 
     if not titulo or not descricao:
         return await _erro("Informe o assunto e a descrição do chamado.")
@@ -692,20 +746,20 @@ async def criar_chamado(
     # avisava quem já estivesse com o sino/Realtime do Workspace aberto —
     # ninguém era notificado por e-mail da entrada de um chamado NOVO na
     # fila (relatado pelo TI). Mesma lista de quem pode ser designado
-    # responsável (``FilaRepo.operadores``), exclui o próprio autor.
-    # Só role OPERADOR recebe o aviso: os ADMIN do setor (ex.: ti@bondmann.com.br,
-    # rh@bondmann.com.br) são caixas de grupo que já espalham a mensagem para a
-    # própria equipe por fora do Portal — incluí-los aqui duplicava o aviso.
+    # responsável (``FilaRepo.operadores``: role OPERADOR ou ADMIN), exclui
+    # o próprio autor. Caixas de grupo (ex.: ti@bondmann.com.br) são
+    # filtradas por e-mail dentro de ``notificar_novo_chamado_email`` — role
+    # ADMIN sozinha não identifica caixa de grupo (a maioria dos ADMIN de
+    # setor é conta pessoal, não caixa compartilhada).
     equipe_destino = await repo.operadores(
         ctx.user.claims, departamento_id=departamento_id, excluir_id=ctx.user.id
     )
-    operadores_destino = [o for o in equipe_destino if o.get("role") == "OPERADOR"]
-    if operadores_destino:
+    if equipe_destino:
         from app.notification import agendar_notificacao_novo_chamado
         await agendar_notificacao_novo_chamado(
             tarefa_ia,
             {"id": str(novo["id"]), "codigo": novo["codigo"], "titulo": titulo, "departamento_nome": dep_destino_nome},
-            [str(o["id"]) for o in operadores_destino],
+            [str(o["id"]) for o in equipe_destino],
         )
 
     # "Em cópia" (Fase 8): observadores escolhidos já na abertura — multi-setorial,
@@ -783,7 +837,9 @@ async def detalhe_chamado(
             "perfil": ctx.perfil,
             "chamado": chamado,
             "mensagens": mensagens,
-            "dados_formulario": rotular(chamado.get("categoria"), chamado.get("dados_formulario") or {}),
+            "dados_formulario": rotular_chamado(
+                chamado.get("categoria"), chamado.get("subcategoria"), chamado.get("dados_formulario")
+            ),
             "formulario_pendente": formulario_pendente,
             "pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id),
             "pode_reabrir": PortalService.pode_reabrir(chamado, ctx.user.id),
