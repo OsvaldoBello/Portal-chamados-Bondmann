@@ -152,12 +152,17 @@ do envio); se aparecer alguma, é bug — abrir chamado para a TI.
 
 ## 7. Limitações conhecidas (2026-09-15)
 
+- **Subnet router provisório**: hoje é o notebook do gestor (`sap-subnet-router`,
+  Windows). Se ele desligar/sair da rede, só as etapas SAP falham (`FAILED`),
+  o resto segue. Antes do rollout ao RH (F5), repetir a Seção 3.1-A num
+  servidor sempre ligado, aprovar a rota nele e remover a máquina antiga do
+  console (a ACL e a auth key não mudam).
+
 - **Estoque de licenças SAP** (`sap_licenses.json`) é um arquivo local — num
   container é efêmero e reseta a cada deploy. A checagem "sem estoque = etapa
   falha" só é confiável na CLI on-prem. Candidato a v2: consultar o Service
   Layer ao vivo.
-- Teste E2E real (F4) ainda não executado: Docker não estava disponível na
-  máquina de desenvolvimento; a imagem foi escrita mas não construída. Primeiro
-  build acontece no Railway.
+- Teste E2E real (F4) ainda não executado. Imagem construída e rodando no
+  Railway desde 2026-09-15 (handshake + túnel validados).
 - Dry-run ainda consulta a listagem de times do Skore (`get_all_teams`) —
   chamada de leitura, cai em fallback se falhar.

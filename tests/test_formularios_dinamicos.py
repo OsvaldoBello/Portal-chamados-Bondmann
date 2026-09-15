@@ -183,6 +183,13 @@ def test_desligamento_valida_e_regiao_so_para_comerciais():
     assert not ok and "Data inválida" in erro
 
 
+def test_desligamento_motivo_e_opcional():
+    """Pedido do gestor (2026-09-15): o RH nem sempre sabe/quer informar o motivo."""
+    ok, erro, limpo = validar_campos(ac.CAMPOS_DESLIGAMENTO, _desligamento(motivo=[""]))
+    assert ok, erro
+    assert "motivo" not in limpo
+
+
 def test_titulo_e_descricao_automaticos_criacao_e_desligamento():
     titulo, descricao = ac.titulo_e_descricao_automaticos(
         ac.SUB_CRIACAO_USUARIO,

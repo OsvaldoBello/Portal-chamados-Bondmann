@@ -101,6 +101,13 @@ def test_payload_interno_mapeia_papel_e_licencas():
     assert p["regiao"] is None and p["dispositivo_wmw"] is None
 
 
+def test_payload_desligamento_sem_motivo_usa_padrao():
+    p = dom.montar_payload(dom.TIPO_DESLIGAMENTO, {**DADOS_DESLIG, "motivo": ""}, CHAMADO)
+    assert p["motivo"] == ac.MOTIVO_DESLIGAMENTO_PADRAO
+    p = dom.montar_payload(dom.TIPO_DESLIGAMENTO, {k: v for k, v in DADOS_DESLIG.items() if k != "motivo"}, CHAMADO)
+    assert p["motivo"] == ac.MOTIVO_DESLIGAMENTO_PADRAO
+
+
 def test_payload_desligamento():
     p = dom.montar_payload(dom.TIPO_DESLIGAMENTO, DADOS_DESLIG, CHAMADO)
     assert p["perfil"] == "SUPERVISOR" and p["regiao"]["codigo"] == "127"

@@ -40,6 +40,9 @@ DEPARTAMENTO_TI = "TI"
 CAT_USUARIOS_E_ACESSOS = "Usuários e Acessos"
 SUB_CRIACAO_USUARIO = "Criação de Novo Usuário"
 SUB_DESLIGAMENTO = "Desligamento / Bloqueio de Acesso"
+# Motivo usado quando o RH deixa o campo em branco (pedido do gestor, 2026-09-15);
+# é o mesmo default histórico da CLI da automação.
+MOTIVO_DESLIGAMENTO_PADRAO = "Encerramento de Contrato de Trabalho"
 
 # Setores de origem cujos autores enxergam o layout (D3). Comparação pelo nome
 # do departamento do PERFIL (`perfis.departamento_id` → `departamentos.nome`),
@@ -188,7 +191,10 @@ CAMPOS_DESLIGAMENTO: tuple[CampoDef, ...] = (
         opcoes=REGIOES_WMW, visivel_se=_SO_COMERCIAIS,
         ajuda="A região é transferida para RH2020 no SAP.",
     ),
-    CampoDef("motivo", "Motivo do desligamento", "text", obrigatorio=True, placeholder="Encerramento de Contrato de Trabalho"),
+    CampoDef(
+        "motivo", "Motivo do desligamento", "text", placeholder=MOTIVO_DESLIGAMENTO_PADRAO,
+        ajuda=f"Opcional. Em branco, a TI registra \"{MOTIVO_DESLIGAMENTO_PADRAO}\".",
+    ),
     CampoDef(
         "encaminhar_para", "Encaminhar os e-mails recebidos para", "email", obrigatorio=True,
         dominio_email=DOMINIO_CORPORATIVO, placeholder="pedidos@bondmann.com.br",

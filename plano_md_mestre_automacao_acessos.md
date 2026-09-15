@@ -5,7 +5,7 @@
 > WMW Vendas e CompanySIP via Playwright). Deve ser revisado ao final de cada PR desta frente
 > (Seção 9).
 >
-> **Status:** 🟡 `F1, F2 e F3 em código (migration 0091 em produção; worker + Docker prontos, sem deploy) — F3a (túnel) e F4 a seguir` · **Criado em:** 2026-09-14 · **Atualizado em:** 2026-09-15
+> **Status:** 🟡 `F1–F3a em produção (portal 1fdeade; worker no Railway com túnel Tailscale validado, AUTOMACAO_ATIVA=false) — F4 (homologação) a seguir` · **Criado em:** 2026-09-14 · **Atualizado em:** 2026-09-15
 >
 > **Relação com os outros docs:** convenções de stack, RLS, testes, deploy e a regra dura de
 > segredos vêm do [`plano_mestre_desenvolvimento.md`](plano_mestre_desenvolvimento.md) e
@@ -270,7 +270,7 @@ Regras:
 | `perfil` | select | sim | — | REPRESENTANTE / INTERNO / SUPERVISOR |
 | `data_desligamento` | date | sim | — | `executar_apos`; default hoje |
 | `regiao` | select | sim | `perfil ∈ {REPRESENTANTE, SUPERVISOR}` | mesma lista WMW; região a transferir para RH2020 |
-| `motivo` | text | sim | — | default "Encerramento de Contrato de Trabalho" |
+| `motivo` | text | **não** (gestor, 2026-09-15) | — | em branco ⇒ "Encerramento de Contrato de Trabalho" (preenchido pelo portal no payload) |
 | `encaminhar_para` | email | sim | — | default `pedidos@bondmann.com.br`; SDR adiciona o 2º destinatário na automação |
 | `observacoes` | textarea | não | — | só TI |
 
@@ -517,7 +517,7 @@ Decisões D1–D4 respondidas viram texto fixo na Seção 0.2 (removendo a marca
 | Formulários dinâmicos por subcategoria (generalização do Químico) | ✅ Código completo (2026-09-14) | F1 | `campos_dinamicos.py` (motor + `visivel_se`), `formularios_dinamicos.py` (registro), Químico delega; partial `_campos_dinamicos.html`; cascade por subcategoria |
 | Layouts Criação / Desligamento + gate D3 | ✅ Código completo (2026-09-14) | F1 | `formularios_acessos.py`; 117 regiões WMW; e-mail `@bondmann.com.br` + sugestão; 37 testes novos; validado no browser com repo fake. Pendente: deploy + conferir com o RH os rótulos das tabelas 4.2/4.3 |
 | `automacao_jobs` + card no atendimento + API do worker + vigilância | ✅ Código completo (2026-09-14); migration `0091` aplicada em produção | F2 | `docs/automacao_api.md` v1; 36 testes; envs `AUTOMACAO_*` a configurar no Railway (`AUTOMACAO_ATIVA=false` até a F4). Pendente: e2e RLS da 0091 |
-| Túnel Tailscale (subnet router on-prem + ACL + auth key) | ⏳ Depende da infra | F3a | pré-requisito do passo SAP |
-| `worker.py` + Dockerfile (Playwright + Tailscale) + serviço Railway + runbook | ✅ Código completo (2026-09-15) | F3 | repo `Automação/` (agora com git local): `worker.py`, `models/factories.py`, `flow.py` (on_step/skip_steps/REVOGAR_LICENCA), `Dockerfile` + `entrypoint.sh` + `railway.json`, 22 testes; runbook em `docs/runbook_automacao_worker.md`. Pendente: build da imagem e serviço no Railway (depende de F3a para o passo SAP) |
+| Túnel Tailscale (subnet router on-prem + ACL + auth key) | ✅ Validado (2026-09-15) | F3a | Subnet router **provisório na máquina do gestor** (Windows, `sap-subnet-router`, rota `10.151.4.40/32`, key expiry off); ACL `tag:automacao-worker → 10.151.4.40:50000`; log do worker: `SAP alcançável via túnel … HTTP 400`. **Pendente:** migrar o router para um servidor sempre ligado antes do rollout (F5) |
+| `worker.py` + Dockerfile (Playwright + Tailscale) + serviço Railway + runbook | ✅ Em produção (2026-09-15) | F3 | repo GitHub privado `OsvaldoBello/Bondmann-automacao-acessos`; serviço `automacao-worker` no projeto Railway do portal (`railway-automacao-1`, handshake ok, pausado por `AUTOMACAO_ATIVA=false`); runbook em `docs/runbook_automacao_worker.md` |
 | Homologação (dry-run + usuário de teste + revogação de licença) | ⏳ | F4 | — |
 | Rollout com gate → avaliação de auto-execução da criação | ⏳ | F5 | — |

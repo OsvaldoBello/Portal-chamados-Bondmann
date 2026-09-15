@@ -160,7 +160,7 @@ def montar_payload(
                 "perfil": perfil,
                 "data_desligamento": dados.get("data_desligamento") or None,
                 "regiao": _regiao(dados.get("regiao")),
-                "motivo": str(dados.get("motivo") or "").strip(),
+                "motivo": str(dados.get("motivo") or "").strip() or ac.MOTIVO_DESLIGAMENTO_PADRAO,
                 "encaminhar_para": str(dados.get("encaminhar_para") or "").strip().lower(),
                 "observacoes": (str(dados.get("observacoes") or "").strip() or None),
             }
