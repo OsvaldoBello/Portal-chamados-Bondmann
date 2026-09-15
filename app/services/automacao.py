@@ -275,15 +275,29 @@ async def _criar_conta_portal(payload: dict[str, Any], aprovado_por: str) -> tup
     return True, f"conta {email} criada como {papel} em {setor_nome}"
 
 
+def destinatarios_alerta(settings: Settings) -> list[str]:
+    """`AUTOMACAO_ALERTA_EMAIL` aceita vários endereços separados por vírgula
+    ou ponto-e-vírgula (admins da TI escolhidos pelo gestor)."""
+    brutos = (settings.automacao_alerta_email or "").replace(";", ",").split(",")
+    vistos: list[str] = []
+    for e in (b.strip().lower() for b in brutos):
+        if e and "@" in e and e not in vistos:
+            vistos.append(e)
+    return vistos
+
+
 async def _email_alerta_ti(settings: Settings, assunto: str, corpo: str) -> None:
-    if not settings.automacao_alerta_email:
+    destinos = destinatarios_alerta(settings)
+    if not destinos:
+        log.warning("[AUTOMACAO] alerta NÃO enviado (AUTOMACAO_ALERTA_EMAIL vazia): %s", assunto)
         return
     from app.notification import enviar_email
 
-    try:
-        await enviar_email(settings.automacao_alerta_email, assunto, corpo)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("[AUTOMACAO] alerta por e-mail falhou: %s", type(exc).__name__)
+    for para in destinos:
+        try:
+            await enviar_email(para, assunto, corpo)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("[AUTOMACAO] alerta por e-mail para %s falhou: %s", para, type(exc).__name__)
 
 
 async def processar_resultado(
@@ -384,16 +398,17 @@ async def processar_resultado(
         except Exception:  # noqa: BLE001
             log.exception("[AUTOMACAO] revogação de licença não agendada (job %s)", job.get("id"))
 
-    # 6) Aviso à TI quando sobrou trabalho manual.
+    # 6) Alerta detalhado aos admins da TI quando algo falhou (regra do gestor,
+    #    2026-09-15): cada etapa com o erro devolvido, o que ficou por fazer, link.
     if status_final in (dom.STATUS_COM_PENDENCIAS, dom.STATUS_FALHOU):
-        pend = [e["nome"] for e in etapas if not dom.etapa_concluida(e)]
+        rotulo = "FALHOU" if status_final == dom.STATUS_FALHOU else "com pendências"
         await _email_alerta_ti(
             settings,
-            f"[Automação de acessos] Pendências no chamado {codigo}",
-            f"A execução ({tipo}{' — simulação' if dry_run else ''}) terminou com status {status_final}.\n\n"
-            + ("Erro: " + str(erro_geral) + "\n\n" if erro_geral else "")
-            + "Etapas pendentes:\n- " + "\n- ".join(pend or ["(nenhuma etapa reportada)"])
-            + f"\n\nDetalhe na nota interna do chamado: {site}/workspace/chamados/{chamado_id}\n",
+            f"[Automação de acessos] {tipo} {rotulo} — chamado {codigo}{' (simulação)' if dry_run else ''}",
+            dom.texto_email_alerta_ti(
+                job, etapas, status_final, erro_geral=erro_geral,
+                link=f"{site}/workspace/chamados/{chamado_id}",
+            ),
         )
 
 

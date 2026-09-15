@@ -161,8 +161,15 @@ licença M365 (`assignLicenses`). Devolver uma etapa única.
 3. `dry_run: true` ⇒ rodar os fluxos em modo simulado (o `--dry-run` que já
    existe), sem tocar em sistema nenhum, e devolver as etapas normalmente.
 4. Heartbeat antes de cada etapa; `409` ⇒ abortar sem enviar resultado.
-5. Nunca pedir interação (sem TTY): falha numa etapa ⇒ `FAILED`/`SKIPPED` e
-   segue — o portal decide o que fazer com as pendências.
+5. Nunca pedir interação (sem TTY). **Erro crítico aborta** (regra do gestor,
+   2026-09-15): a primeira etapa `FAILED` interrompe o fluxo e as seguintes
+   voltam como `SKIPPED` com `error_message: "não executada — fluxo abortado
+   após falha em '<etapa>'"`. O portal classifica como
+   `CONCLUIDO_COM_PENDENCIAS`/`FALHOU`, alerta os admins da TI por e-mail com o
+   erro de cada etapa e oferece "Reexecutar pendências" (só as não concluídas).
+   Exceção que **não** é erro: no `DESLIGAMENTO` de INTERNO, usuário inexistente
+   no SAP (nem por código, nem por e-mail) volta `SUCCESS` com
+   `details.user_found=false` e a nota "não encontrado no SAP — nada a bloquear".
 6. `POST /jobs/{id}/resultado` uma única vez; em erro de rede, repetir o
    POST (idempotente: `409` na segunda entrega significa que a primeira chegou).
 7. Log em stdout, com `job_id` e `chamado.codigo`; senhas mascaradas.

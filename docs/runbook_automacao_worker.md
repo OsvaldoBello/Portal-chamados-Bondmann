@@ -41,7 +41,10 @@ Railway ─ portal (web)  ◄── HTTPS (token) ── Railway ─ automacao-w
 
 Essas credenciais ficam **só** no serviço do worker — nunca no serviço web do
 portal (Seção 7 do plano). No portal, as envs são `AUTOMACAO_*` (ver
-`.env.example`); `AUTOMACAO_ATIVA=false` é o kill switch global.
+`.env.example`); `AUTOMACAO_ATIVA=false` é o kill switch global e
+**`AUTOMACAO_ALERTA_EMAIL`** (lista separada por vírgula) define quem recebe os
+alertas — sem ela **nenhum alerta sai** (fica só um warning no log do portal).
+Valor acordado com o gestor: `osvaldo.bello@bondmann.com.br,giordano.burtet@bondmann.com.br`.
 
 ## 3. Deploy no Railway
 
@@ -129,6 +132,8 @@ O mesmo `Dockerfile` roda numa VM on-prem (plano B): `docker run --env-file .env
 | `tailscale up FALHOU — abortando` (reinicia em loop) | auth key expirada/revogada ou sem a tag | gerar nova key no console do Tailscale (reusable, ephemeral, pre-authorized) |
 | Etapas SAP `FAILED` com timeout/conexão; resto `SUCCESS` | subnet router on-prem fora, rota não aprovada, ACL | checar o servidor on-prem (`tailscale status`), rota e ACL; reexecutar pendências |
 | Etapa WMW/SIP `FAILED` ("locator", "timeout") | mudança de tela nos portais | rodar a CLI local em `--headed`, corrigir seletor no `services/*_scraper.py`; TI conclui à mão enquanto isso |
+| Etapas `SKIPPED — não executada (fluxo abortado após falha em X)` | uma etapa anterior falhou; o worker aborta por regra | corrigir a causa da etapa X (o alerta traz o erro) e usar "Reexecutar pendências" |
+| Etapa SAP ✅ com "não encontrado no SAP — nada a bloquear" | colaborador nunca teve usuário SAP | nada a fazer; não é pendência |
 | Job `FALHOU` com "worker parou no meio" | worker reiniciado/derrubado durante o job | criação: o portal reenfileira uma vez; desligamento: **não** reenfileira — conferir nos sistemas o que foi feito antes de reexecutar |
 | `Job abortado: … heartbeat 409` | vigilância do portal deu o job como morto (worker travou > 15 min) ou job cancelado | nada a fazer no worker; ver o card |
 | Handshake ok mas nada roda | `AUTOMACAO_ATIVA=false`, ou `AUTOMACAO_TIPOS`/`WORKER_TIPOS` sem interseção, ou `executar_apos` no futuro | ver `/saude` (`ativa`, `tipos`, `fila`) e a data agendada no card |

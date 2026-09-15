@@ -199,6 +199,59 @@ def test_reexecucao_etapas_puladas_contam_como_concluidas():
     assert "Pendências para ação manual da TI: SAP" in nota and "TI: M365" not in nota
 
 
+def test_mensagem_publica_concorda_com_o_tipo():
+    etapas = [{"nome": "M365", "status": "SUCCESS", "erro": None, "detalhes": {}}]
+    txt = dom.texto_mensagem_publica({"tipo": "DESLIGAMENTO"}, etapas, [], dom.STATUS_CONCLUIDO)
+    assert txt.startswith("O desligamento de acessos foi concluído")
+    txt = dom.texto_mensagem_publica({"tipo": "DESLIGAMENTO"}, etapas, [], dom.STATUS_COM_PENDENCIAS)
+    assert txt.startswith("O desligamento de acessos foi executado parcialmente")
+    txt = dom.texto_mensagem_publica({"tipo": "CRIACAO"}, etapas, [], dom.STATUS_COM_PENDENCIAS)
+    assert txt.startswith("A criação de acessos foi executada parcialmente")
+
+
+def test_email_alerta_ti_e_detalhado():
+    """Regra do gestor (2026-09-15): o alerta precisa trazer o erro de cada etapa."""
+    job = _job(tipo="DESLIGAMENTO", status=dom.STATUS_COM_PENDENCIAS, worker_id="railway-automacao-1",
+               payload={"nome_completo": "Jonatã Brito", "email": "jonata.brito@bondmann.com.br", "perfil": "INTERNO"},
+               claimed_at=datetime(2026, 9, 15, 20, 26, 0, tzinfo=UTC), finalizado_em=datetime(2026, 9, 15, 20, 26, 14, tzinfo=UTC))
+    etapas = [
+        {"nome": "Microsoft 365 (MS Graph) - Bloqueio e Encaminhamento", "status": "SUCCESS", "erro": None, "detalhes": {}},
+        {"nome": "SAP Business One (Service Layer) - Bloqueio", "status": "FAILED",
+         "erro": "SAP respondeu 503 ao consultar Users('jonata.brito'): Service Unavailable", "detalhes": {"tentativa": 2}},
+        {"nome": "WMW", "status": "SKIPPED", "erro": "não executada — fluxo abortado após falha em 'SAP'", "detalhes": {}},
+    ]
+    txt = dom.texto_email_alerta_ti(job, etapas, dom.STATUS_COM_PENDENCIAS, erro_geral=None, link="https://p/x")
+    assert "BD-1" in txt and "Jonatã Brito · jonata.brito@bondmann.com.br · INTERNO" in txt
+    assert "railway-automacao-1" in txt and "17:26:00 → 15/09/2026 17:26:14" in txt
+    assert "erro: SAP respondeu 503" in txt and "tentativa: 2" in txt
+    assert "fluxo abortado após falha em 'SAP'" in txt
+    assert "Ficou por fazer" in txt and "  - SAP Business One (Service Layer) - Bloqueio" in txt and "  - WMW" in txt
+    assert "Microsoft 365" not in txt.split("Ficou por fazer")[1]
+    assert txt.rstrip().endswith("Chamado no portal: https://p/x")
+    txt2 = dom.texto_email_alerta_ti(job, [], dom.STATUS_FALHOU, erro_geral="payload inválido: perfil desconhecido", link="l")
+    assert "ERRO FORA DO FLUXO" in txt2 and "payload inválido" in txt2
+
+
+def test_alerta_vai_para_todos_os_admins_configurados(settings_automacao, monkeypatch):
+    enviados = []
+
+    async def fake_enviar(para, assunto, corpo, *a, **k):
+        enviados.append((para, assunto))
+        return True
+
+    import app.notification as notif
+
+    monkeypatch.setattr(notif, "enviar_email", fake_enviar)
+    monkeypatch.setattr(settings_automacao, "automacao_alerta_email", "osvaldo.bello@bondmann.com.br, Giordano.Burtet@bondmann.com.br;osvaldo.bello@bondmann.com.br")
+    assert svc.destinatarios_alerta(settings_automacao) == ["osvaldo.bello@bondmann.com.br", "giordano.burtet@bondmann.com.br"]
+    _run(svc._email_alerta_ti(settings_automacao, "assunto", "corpo"))
+    assert [p for p, _ in enviados] == ["osvaldo.bello@bondmann.com.br", "giordano.burtet@bondmann.com.br"]
+    monkeypatch.setattr(settings_automacao, "automacao_alerta_email", "")
+    enviados.clear()
+    _run(svc._email_alerta_ti(settings_automacao, "assunto", "corpo"))
+    assert enviados == []
+
+
 def test_textos_publico_com_credenciais_so_quando_concluido():
     job = {"tipo": "CRIACAO", "dry_run": False, "worker_id": "w1"}
     etapas = [{"nome": "M365", "status": "SUCCESS", "erro": None, "detalhes": {}}]

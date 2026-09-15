@@ -215,6 +215,14 @@ Regras:
    em dry-run). Qualquer `SKIPPED`/`FAILED` deixa o chamado em atendimento; o card mostra o
    que foi feito e o que ficou pendente para ação manual do TI. Reabertura pelo RH continua
    valendo como em qualquer chamado.
+   **Erro crítico aborta (gestor, 2026-09-15):** a primeira etapa `FAILED` interrompe o
+   fluxo no worker (as restantes voltam `SKIPPED — não executada`), e o portal envia
+   **alerta detalhado** (colaborador, cada etapa com o erro devolvido, o que ficou por
+   fazer, link) aos admins da TI em `AUTOMACAO_ALERTA_EMAIL` — hoje Osvaldo e Giordano
+   (contas Selettus fora). Não é erro: desligamento de INTERNO sem usuário no SAP
+   (etapa conclui com "não encontrado — nada a bloquear").
+   **Licença M365:** fica 15 dias após o desligamento (`REVOGAR_LICENCA` agendado às
+   07h de `data_desligamento + AUTOMACAO_LICENCA_DIAS`) — confirmado pelo gestor.
 3. **Kill switch global** (`AUTOMACAO_ATIVA=false` → API responde vazio, cards mostram "pausado")
    e **por tipo** (`AUTOMACAO_TIPOS=CRIACAO,DESLIGAMENTO`).
 4. **Dry-run de ponta a ponta**: job com `dry_run=true` roda o fluxo simulado da automação

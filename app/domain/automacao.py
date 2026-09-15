@@ -332,6 +332,12 @@ _TIPO_LABEL = {
     TIPO_DESLIGAMENTO: "desligamento de acessos",
     TIPO_REVOGAR_LICENCA: "revogação da licença Microsoft 365",
 }
+# Artigo + rótulo, para frases como "O desligamento foi executado" (concordância).
+_TIPO_FRASE = {
+    TIPO_CRIACAO: ("A", "criação de acessos", "concluída", "executada"),
+    TIPO_DESLIGAMENTO: ("O", "desligamento de acessos", "concluído", "executado"),
+    TIPO_REVOGAR_LICENCA: ("A", "revogação da licença Microsoft 365", "concluída", "executada"),
+}
 _ETAPA_ICONE = {ETAPA_SUCCESS: "✅", ETAPA_FAILED: "❌", ETAPA_SKIPPED: "⏭️"}
 
 
@@ -383,18 +389,75 @@ def texto_mensagem_publica(
             f"Simulação da automação de {tipo} executada (nada foi alterado nos sistemas). "
             "A TI vai conferir o resultado e dar sequência."
         )
+    artigo, _, concluida, executada = _TIPO_FRASE.get(str(job.get("tipo")), ("A", tipo, "concluída", "executada"))
     if status_final == STATUS_CONCLUIDO:
-        partes = [f"A {tipo} foi concluída em todos os sistemas:", ""]
+        partes = [f"{artigo} {tipo} foi {concluida} em todos os sistemas:", ""]
         partes += _linhas_etapas(etapas, com_detalhes=False)
         if credenciais:
             partes += ["", "Credenciais e dados de acesso:"]
             partes += [f"• {rotulo}: {valor}" for rotulo, valor in credenciais]
             partes += ["", "Guarde estas informações e repasse ao colaborador por canal seguro."]
         return "\n".join(partes)
-    partes = [f"A {tipo} foi executada parcialmente:", ""]
+    partes = [f"{artigo} {tipo} foi {executada} parcialmente:", ""]
     partes += _linhas_etapas(etapas, com_detalhes=False) or ["(nenhuma etapa concluída)"]
     partes += ["", "A TI vai concluir manualmente o que ficou pendente e retornar por aqui."]
     return "\n".join(partes)
+
+
+def texto_email_alerta_ti(
+    job: dict[str, Any],
+    etapas: list[dict[str, Any]],
+    status_final: str,
+    *,
+    erro_geral: str | None,
+    link: str,
+) -> str:
+    """Alerta aos admins da TI (regra do gestor, 2026-09-15): detalhado o
+    bastante para agir sem abrir o log — quem, o quê, cada etapa com o erro
+    que o sistema devolveu, o que ficou por fazer e onde continuar."""
+    tipo = _TIPO_LABEL.get(str(job.get("tipo")), str(job.get("tipo")))
+    payload = job.get("payload") or {}
+    quem = " · ".join(
+        str(v) for v in (payload.get("nome_completo"), payload.get("email"), payload.get("perfil")) if v
+    )
+    partes = [
+        f"Chamado: {job.get('chamado_codigo') or '—'} — {job.get('chamado_titulo') or ''}".rstrip(" —"),
+        f"Automação: {tipo}{' (SIMULAÇÃO — nada foi alterado)' if job.get('dry_run') else ''}",
+        f"Colaborador: {quem or '—'}",
+        f"Status final: {STATUS_LABEL.get(status_final, status_final)} ({status_final})",
+        f"Worker: {job.get('worker_id') or '—'} · job {job.get('id') or '—'} · tentativa {job.get('tentativas') or 1}",
+    ]
+    inicio, fim = job.get("claimed_at"), job.get("finalizado_em")
+    if inicio or fim:
+        partes.append(f"Execução: {_fmt_dt(inicio)} → {_fmt_dt(fim)}")
+    partes.append("")
+    if erro_geral:
+        partes += ["ERRO FORA DO FLUXO (o worker não completou as etapas):", f"  {erro_geral}", ""]
+    partes.append("Etapas:")
+    for e in etapas:
+        linha = f"  {_ETAPA_ICONE.get(e['status'], '•')} {e['status']:<8} {e['nome']}"
+        partes.append(linha)
+        if e.get("erro"):
+            partes.append(f"        erro: {e['erro']}")
+        if e["status"] == ETAPA_FAILED and e.get("detalhes"):
+            for k, v in e["detalhes"].items():
+                if v not in (None, "", [], {}):
+                    partes.append(f"        {k}: {v}")
+    pendentes = [e["nome"] for e in etapas if not etapa_concluida(e)]
+    partes.append("")
+    if pendentes:
+        partes += ["Ficou por fazer (ação manual ou 'Reexecutar pendências' no card):"]
+        partes += [f"  - {n}" for n in pendentes]
+    else:
+        partes.append("Nenhuma etapa pendente.")
+    partes += ["", f"Chamado no portal: {link}", ""]
+    return "\n".join(partes)
+
+
+def _fmt_dt(valor: Any) -> str:
+    if not isinstance(valor, datetime):
+        return "—"
+    return valor.astimezone(TZ_BR).strftime("%d/%m/%Y %H:%M:%S")
 
 
 def texto_email_neutro(codigo: str, status_final: str) -> str:
