@@ -81,6 +81,21 @@ class PortalService:
         )
 
     @staticmethod
+    def pode_responder(chamado: dict, user_id: str) -> bool:
+        """Regra de UI: só o AUTOR do chamado manda mensagem pelo portal — quem
+        está "em cópia" (observador, migration 0034) tem acesso de leitura +
+        notificação, mas nunca responde (mesma trava documentada na 0034: "sem
+        poder responder/alterar"). A RLS (`mensagens_insert`, migration 0042)
+        já recusa a inserção de quem não é o autor, mas sem esta checagem em
+        Python o formulário aparecia pra qualquer observador — o clique gerava
+        um WITH CHECK 42501 não tratado, que a rota devolvia como "Erro
+        interno." em vez de simplesmente não oferecer a ação."""
+        return (
+            str(chamado.get("cliente_id")) == str(user_id)
+            and chamado.get("status") != "RESOLVIDO"
+        )
+
+    @staticmethod
     def pode_excluir(chamado: dict, user_id: str) -> bool:
         """Regra de UI: o autor pode excluir o PRÓPRIO chamado só enquanto
         ele ainda não foi atendido — decisão do gestor (2026-08-20),

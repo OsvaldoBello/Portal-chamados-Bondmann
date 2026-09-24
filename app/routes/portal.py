@@ -844,6 +844,7 @@ async def detalhe_chamado(
             "pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id),
             "pode_reabrir": PortalService.pode_reabrir(chamado, ctx.user.id),
             "pode_excluir": PortalService.pode_excluir(chamado, ctx.user.id),
+            "pode_responder": PortalService.pode_responder(chamado, ctx.user.id),
             "confirmar_exclusao": bool(excluir),
             "avaliar_pendente": bool(avaliar_pendente),
             "observadores": observadores,
@@ -974,6 +975,16 @@ async def responder_chamado(
             {"chamado_id": chamado_id, "erro": msg},
             status_code=code,
         )
+
+    chamado = await repo.obter(ctx.user.claims, chamado_id)
+    if chamado is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+    if not PortalService.pode_responder(chamado, ctx.user.id):
+        # Defesa em profundidade: o formulário já não aparece pra quem está só
+        # em cópia (0034), mas um POST forjado direto pra cá cairia na RLS
+        # (`mensagens_insert`, 0042) como um WITH CHECK 42501 não tratado —
+        # "Erro interno." em vez de uma mensagem que faça sentido pro usuário.
+        return _erro("Só o autor do chamado pode enviar mensagens.", status.HTTP_403_FORBIDDEN)
 
     try:
         anexos = await _processar_uploads(

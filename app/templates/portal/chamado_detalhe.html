@@ -143,7 +143,7 @@
     {% include "portal/_mensagens.html" %}
   </div>
 
-  {% if chamado.status != 'RESOLVIDO' %}
+  {% if pode_responder %}
   {# multipart: mensagem + anexos (validação server-side — Seção 3.9). #}
   <form method="post" action="/portal/chamados/{{ chamado.id }}/mensagens"
         enctype="multipart/form-data" class="mt-5 space-y-3">

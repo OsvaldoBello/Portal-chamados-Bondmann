@@ -1736,8 +1736,14 @@ def test_responder_em_depto_nao_habilitado_nao_agenda_re_triagem():
     executar.assert_not_called()
 
 
-def test_responder_como_nao_autor_nao_agenda_re_triagem():
-    """Só a resposta do AUTOR reagenda (observador/terceiro não conta)."""
+def test_responder_como_nao_autor_e_recusado_e_nao_agenda_re_triagem():
+    """Quem está só "em cópia" (observador, migration 0034) nunca responde pelo
+    portal — nem chega a agendar re-triagem. Antes desta checagem em Python
+    (`PortalService.pode_responder`), o formulário aparecia pra qualquer
+    observador e o POST caía direto na RLS (`mensagens_insert`, 0042), que
+    recusa com um WITH CHECK 42501 não tratado — "Erro interno." em vez de um
+    403 com mensagem clara (bug relatado por Alessandro Leodin em cópia num
+    chamado de Eduardo Becker, 2026-09-24)."""
     repo = FakeRepo(chamado=_chamado(status="NOVO", departamento="TI", cliente_id="outro-uuid"))
     with _hook_triagem(_settings_triagem()) as executar:
         with portal_client(repo) as client:
@@ -1748,7 +1754,8 @@ def test_responder_como_nao_autor_nao_agenda_re_triagem():
                 headers={"X-CSRF-Token": token},
                 follow_redirects=False,
             )
-    assert resp.status_code == 303
+    assert resp.status_code == 403
+    assert "Só o autor do chamado pode enviar mensagens." in resp.text
     executar.assert_not_called()
 
 
