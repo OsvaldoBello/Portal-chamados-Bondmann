@@ -13,15 +13,15 @@ import pytest
 
 from app.domain import formularios_acessos as ac
 from app.domain.campos_dinamicos import (
+    VALOR_CHECKBOX_MARCADO,
     CampoDef,
     campo_visivel,
     campos_visiveis,
     rotular_campos,
     validar_campos,
     valores_para_template,
-    VALOR_CHECKBOX_MARCADO,
 )
-from app.domain.formularios_dinamicos import layout_para, rotular_chamado, Layout
+from app.domain.formularios_dinamicos import Layout, layout_para, rotular_chamado
 from app.domain.formularios_quimico import CAT_OCORRENCIA
 from app.templating import templates
 
