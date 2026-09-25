@@ -39,7 +39,7 @@ homologado conforme o DoD).
 
 | Fase | Entrega | Repositório | Depende de | Estado | Atualizado em | Observações |
 |---|---|---|---|---|---|---|
-| **F0** | Levantamento: schema da `regioes`, `IB_CO_REGIAO`, lista de equipes, usuário `PAOLAK`, e-mails dos gerentes, grupos de Gerência, API de líderes da UBD | — | — | 🟢 Pronto | 2026-09-25 | Só leitura (Seção 1); ⚠️ #2 contradiz V3 (`U_IB_CodCom2` vazio em 100% das regiões) — decisão do gestor pendente antes da F3 |
+| **F0** | Levantamento: schema da `regioes`, `IB_CO_REGIAO`, lista de equipes, usuário `PAOLAK`, e-mails dos gerentes, grupos de Gerência, API de líderes da UBD | — | — | 🟢 Pronto | 2026-09-25 | Só leitura (Seção 1); #2 resolvido na F0b: gerente = `U_IB_CodCom4` (V3 revisada) |
 | **F1** | Correção SAP: busca por `$filter`, bloqueio por `InternalKey`, código `PAOLAK`, colisão na criação | worker | — | 🟡 Em processo | 2026-09-25 | Resolve o caso Paola |
 | **F2** | Checkbox "Urgência" no desligamento + horário padrão 17h | portal | — | 🟡 Em processo | 2026-09-25 | Independente; pode ir junto com F1 |
 | **F3** | Perfil GERENTE; campos Equipe/Gerência correspondente; ocupar/devolver vaga na `IB_CO_REGIAO`; grupos de Gerência; contrato v2 | portal + worker | F0 | 🔵 Projetado | 2026-09-25 | Corrige o `RH2020` gravado em supervisor |
@@ -51,11 +51,11 @@ homologado conforme o DoD).
 | Fase | Item | Estado |
 |---|---|---|
 | F0 | #1 Schema e cadência da `regioes` | 🟢 Pronto |
-| F0 | #2 `IB_CO_REGIAO`: `CodCom2` = gerente, `CodCom3` = supervisor | 🟢 Pronto ⚠️ contradição com V3 |
+| F0 | #2 `IB_CO_REGIAO`: supervisor = `CodCom3`, gerente = `CodCom4` (F0b) | 🟢 Pronto |
 | F0 | #3 Lista completa de equipes e gerências (`RH20xx`) | 🟢 Pronto |
 | F0 | #4 Usuário `PAOLAK` e padrão de código SAP | 🟢 Pronto |
 | F0 | #5 E-mails dos 8 gerentes internos (confirmados pelo gestor) | 🟢 Pronto (7/8; 1 a confirmar) |
-| F0 | #6 Grupos de Gerência no M365/Exchange | 🟢 Pronto (a confirmar qual grupo) |
+| F0 | #6 Grupos de Gerência no M365/Exchange | 🟢 Pronto — grupo `Gerencia` (V10) |
 | F0 | #7 API UBD: formato de `leaders`, leitura e `PATCH` de líderes | 🟢 Pronto |
 | F1 | `find_internal_user` por `$filter` | 🟡 Em processo |
 | F1 | Bloqueio via `PATCH Users(<InternalKey>)` | 🟡 Em processo |
@@ -88,13 +88,17 @@ Texto fixo (2026-09-25).
 |---|---|
 | **V1** | A tabela `regioes` (Supabase de outro projeto da Bondmann) **se auto-atualiza a partir do SAP** e é **SOMENTE LEITURA**: nenhum INSERT/UPDATE/DELETE/DDL, nem em teste. |
 | **V2** | Criação e desligamento de supervisor e gerente **atualizam a `IB_CO_REGIAO`**, como a automação já faz para representante. |
-| **V3** | Os PNs `RH20xx` são **marcadores de vaga** (como `RH2020` é "sem representante"). Na criação, o PN (CardCode) da pessoa **substitui** o marcador em todas as regiões da equipe ou gerência; no desligamento, o marcador **volta**. Supervisor = `U_IB_CodCom3`; gerente = `U_IB_CodCom2` (confirmação na F0 #2). |
+| **V3** | Os PNs `RH20xx` são **marcadores de vaga** (como `RH2020` é "sem representante"). Na criação, o PN (CardCode) da pessoa **substitui** o marcador em todas as regiões da equipe ou gerência; no desligamento, o marcador **volta**. Supervisor = `U_IB_CodCom3`; gerente = **`U_IB_CodCom4`** (F0b, 2026-09-25 — `CodCom2` não é usado). Hoje os dois campos guardam o **PN da pessoa** (ex.: `RH2004 BRUNO TIARA DA SILVA` como gerente em 54 regiões) e o marcador só aparece quando a vaga está aberta (ex.: `RH2021 EQUIPE MG 2`). Marcadores de gerência: `RH2005 GERENTE SP`, `RH2033 GERENTE MG/RJ`. |
 | **V4** | Sincronização de liderança = **espelho com proteção**: remove só os líderes que constam na `regioes` como supervisor ou gerente de alguma região; preserva os líderes postos à mão. |
 | **V5** | Na UBD, o **supervisor** tem como líder o gerente das regiões da equipe; o **gerente** fica sem líder. A sincronização cobre **representantes e supervisores**. |
 | **V6** | Interno: campo novo e obrigatório **"Gerência responsável"** (8 gerências + "Outra"; "Outra" ⇒ `gestor_email` obrigatório). |
 | **V7** | Abordagem: **o portal lê a `regioes` e resolve os líderes; o worker aplica na UBD**. A sincronização é mais um tipo de job na fila existente. |
 | **V8** | Na F0, o SAP é consultado pela **Service Layer da automação** (`SAPService`, via túnel), somente GET. |
 | **V9** | Fora de escopo: WMW para supervisor e gerente (o fluxo WMW continua só para representante). |
+| **V10** | Grupo M365 do gerente: **`Gerencia`** (`9bc94d0a-8dca-4f3e-86fe-44cbb7692ee9`, `bd.gerencia@bondmann.com.br`) — gestor, 2026-09-25. Supervisor continua em `Supervisão` + `BD Supervisão` (já no código). |
+| **V11** | Usuário SAP no desligamento de interno (gestor, 2026-09-25): código confere e o nome no SAP é **parecido** ⇒ bloqueia; código confere com nome **não parecido** (e nada por e-mail/nome) ⇒ etapa FAILED "verificar manualmente" com os candidatos; nenhum usuário ⇒ "nada a bloquear". Entregue no worker v1.2.1. |
+| **V12** | Leitura da `regioes` pelo portal: **chave anon/publishable via PostgREST (GET)** fornecida pelo gestor. Hoje ela autentica mas devolve 0 linhas (RLS sem política de SELECT para `anon`) — **pré-requisito do gestor**: o dono do projeto cria a política de leitura. O portal nunca escreve (V1). |
+| **V13** | Simulação (dry-run) gera só a nota interna — sem mensagem pública ao RH nem mudança de status; a descrição automática do desligamento cita a urgência (gestor, 2026-09-25; entregue). |
 
 ### Gerências de internos (V6)
 
@@ -102,7 +106,7 @@ Texto fixo (2026-09-25).
 |---|---|
 | Compras | Alessandro Lodion |
 | Controladoria | Anderson Viana |
-| PCP / Recebimento / Expedição | Elias Kiesten |
+| PCP / Recebimento / Expedição | Elias **Kirsten** (confirmado pelo gestor; usuário SAP `KIRSTEN`) |
 | Laboratório / Químico | Guilherme Rosa |
 | RH | Mariana Silva |
 | Comercial | Patricia Alves |
@@ -110,7 +114,7 @@ Texto fixo (2026-09-25).
 | Filial | Rogério Rossini |
 | Outra | — (usa `gestor_email`, obrigatório) |
 
-E-mails resolvidos na F0 #5 e **confirmados pelo gestor** antes de virarem dado versionado.
+E-mails (F0 #5; Elias confirmado pelo gestor em 2026-09-25): Alessandro `alessandro@`, Anderson `anderson@`, Elias `elias@`, Guilherme `guilherme.rosa@`, Mariana `mariana.silva@`, Patricia `patricia.alves@`, Thiago `thiago.rodrigues@`, Rogério `rogerio@` (todos `@bondmann.com.br`). A F4 versiona esta tabela; o gestor revisa o PR.
 
 ---
 
@@ -222,6 +226,27 @@ isso, não é um bloqueio novo. Testado com 3 pessoas reais da amostra da `regio
 e `marcelo.neves@bondmann.com.br`, ambos `is_leader: true`) — mesmo resultado nos três. ·
 fonte: `LearningRocksService.find_user_by_email` + GET `v1/users/{id}` e `v2/users/{id}`
 (GET), doc Postman local (sem `PATCH`).
+
+### F0b — Levantamento complementar (2026-09-25, tarde; somente leitura)
+
+**#2 revisado** — Todos os campos de `IB_CO_REGIAO`: `U_IB_CodCom1..5`, `U_IB_CodCom1_Anterior`,
+`U_IB_UF`, `U_IB_assessor`, `U_IB_codigo`, `U_IB_codigo_WMW`. `U_IB_CodCom4` tem só 4 valores e é
+o **gerente**: `RH2004` BRUNO TIARA DA SILVA (`bruno.tiara@`, 54 regiões), `RH2016` ANDRE LUIZ
+MANDELLI (`andre.mandelli@`, 40), `RH2030` WALLYSSON … MEDEIROS (`wallysson.medeiros@`, 20) e
+`RH2064` VENDA DIRETA (25, marcador). `U_IB_CodCom3` é o **supervisor**: PN da pessoa (ex.:
+`RH2052` JORGE AURELIO CUNHA VAN LARE, com e-mail no PN) ou o marcador `EQUIPE …` quando a vaga
+está aberta (`RH2021`, `RH2074`, `RH2090`, `RH2024`, `RH2039`, `RH2082`, `RH2083`, `RH2084`,
+`RH2048`). Cada supervisor aparece sempre com o mesmo gerente (pares `CodCom3 → CodCom4`
+consistentes). PNs de pessoa têm `EmailAddress` preenchido — é por ele que a F3 acha o PN. ·
+fonte: GET `IB_CO_REGIAO` + `BusinessPartners?$filter=CardCode eq '…'`.
+
+**#1 revisado** — Chave anon e publishable fornecidas pelo gestor: HTTP 200 e **0 linhas** nas
+duas (RLS da `regioes` não libera SELECT para `anon`). Ver V12. · fonte: GET PostgREST
+`/rest/v1/regioes`.
+
+**#7 — consequência para a F5** — a API não devolve os líderes atuais e o `PATCH` recebe lista
+de IDs. Se o `PATCH` **substituir** a lista, a proteção de líderes manuais (V4) não é possível
+só pela API. A F5 começa por um spike com usuário de teste (F5.0) antes de qualquer código.
 
 ---
 
@@ -375,11 +400,11 @@ Validação servidor-side contra o catálogo. Título automático:
 - **SAP — `occupy_vacancy(kind, vacancy_code, email, full_name)`:**
   1. PN da pessoa via `find_business_partner`; não achou ⇒ `RuntimeError` "PN de <nome> não
      encontrado no SAP — cadastre o PN e reexecute só esta etapa".
-  2. `campo = U_IB_CodCom3` (EQUIPE) | `U_IB_CodCom2` (GERENCIA).
+  2. `campo = U_IB_CodCom3` (EQUIPE) | `U_IB_CodCom4` (GERENCIA) — V3 revisada (F0b).
   3. Regiões com `campo == vacancy_code`. **Zero** ⇒ `RuntimeError` listando quem ocupa hoje
      as regiões da vaga (sinal de que o anterior não foi desligado).
   4. `PATCH IB_CO_REGIAO('<Code>')` com `{campo: CardCode}` em cada região
-     (`update_commission_region` ganha `gerente=` → `U_IB_CodCom2`). Falha parcial ⇒
+     (`update_commission_region` ganha `gerente=` → `U_IB_CodCom4`). Falha parcial ⇒
      `RuntimeError` com as já alteradas; na reexecução, regiões que já têm o CardCode contam
      como feitas.
   5. Retorna `{card_code, campo, regioes}`.
@@ -410,8 +435,8 @@ enviado à UBD (`flow.py::_ubd` não passa `leaders`), nem quando o usuário já
 
 ### Portal
 
-- **Leitura da `regioes` (`app/integracoes/regioes.py`):** env `REGIOES_DB_URL` (role Postgres
-  só com SELECT); se só houver chave PostgREST, `REGIOES_API_URL` + `REGIOES_API_KEY` com GET.
+- **Leitura da `regioes` (`app/integracoes/regioes.py`):** PostgREST com a chave anon (V12):
+  envs `REGIOES_API_URL` + `REGIOES_API_KEY`, só GET.
   Sem env ⇒ recurso desligado (líderes "não resolvidos"). Funções:
   `lideres_da_regiao(codigo)`, `lideres_da_equipe(codigo_vaga)`, `mapa_lideranca()` (F5).
   Colunas definidas pela F0 #1. **Teste de guarda:** o módulo não contém
