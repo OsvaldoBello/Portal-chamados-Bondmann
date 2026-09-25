@@ -40,7 +40,7 @@ homologado conforme o DoD).
 | Fase | Entrega | Repositório | Depende de | Estado | Atualizado em | Observações |
 |---|---|---|---|---|---|---|
 | **F0** | Levantamento: schema da `regioes`, `IB_CO_REGIAO`, lista de equipes, usuário `PAOLAK`, e-mails dos gerentes, grupos de Gerência, API de líderes da UBD | — | — | 🟢 Pronto | 2026-09-25 | Só leitura (Seção 1); ⚠️ #2 contradiz V3 (`U_IB_CodCom2` vazio em 100% das regiões) — decisão do gestor pendente antes da F3 |
-| **F1** | Correção SAP: busca por `$filter`, bloqueio por `InternalKey`, código `PAOLAK`, colisão na criação | worker | — | 🔵 Projetado | 2026-09-25 | Resolve o caso Paola |
+| **F1** | Correção SAP: busca por `$filter`, bloqueio por `InternalKey`, código `PAOLAK`, colisão na criação | worker | — | 🟡 Em processo | 2026-09-25 | Resolve o caso Paola |
 | **F2** | Checkbox "Urgência" no desligamento + horário padrão 17h | portal | — | 🔵 Projetado | 2026-09-25 | Independente; pode ir junto com F1 |
 | **F3** | Perfil GERENTE; campos Equipe/Gerência correspondente; ocupar/devolver vaga na `IB_CO_REGIAO`; grupos de Gerência; contrato v2 | portal + worker | F0 | 🔵 Projetado | 2026-09-25 | Corrige o `RH2020` gravado em supervisor |
 | **F4** | Liderança na UBD na criação (representante, supervisor, interno); campo "Gerência responsável" | portal + worker | F0, F3 | 🔵 Projetado | 2026-09-25 | Corrige o `gestor_email` ignorado |
@@ -57,9 +57,9 @@ homologado conforme o DoD).
 | F0 | #5 E-mails dos 8 gerentes internos (confirmados pelo gestor) | 🟢 Pronto (7/8; 1 a confirmar) |
 | F0 | #6 Grupos de Gerência no M365/Exchange | 🟢 Pronto (a confirmar qual grupo) |
 | F0 | #7 API UBD: formato de `leaders`, leitura e `PATCH` de líderes | 🟢 Pronto |
-| F1 | `find_internal_user` por `$filter` | 🔵 Projetado |
-| F1 | Bloqueio via `PATCH Users(<InternalKey>)` | 🔵 Projetado |
-| F1 | Criação com código `PRIMEIRONOME + inicial` e colisão | 🔵 Projetado |
+| F1 | `find_internal_user` por `$filter` | 🟡 Em processo |
+| F1 | Bloqueio via `PATCH Users(<InternalKey>)` | 🟡 Em processo |
+| F1 | Criação com código `PRIMEIRONOME + inicial` e colisão | 🟡 Em processo |
 | F1 | Homologação: reexecução real da etapa SAP da Paola | 🔵 Projetado |
 | F2 | Tipo de campo `checkbox` no motor de formulários | 🔵 Projetado |
 | F2 | Campo `urgente` + agendamento imediato | 🔵 Projetado |
