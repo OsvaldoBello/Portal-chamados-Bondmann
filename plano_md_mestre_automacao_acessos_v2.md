@@ -39,7 +39,7 @@ homologado conforme o DoD).
 
 | Fase | Entrega | Repositório | Depende de | Estado | Atualizado em | Observações |
 |---|---|---|---|---|---|---|
-| **F0** | Levantamento: schema da `regioes`, `IB_CO_REGIAO`, lista de equipes, usuário `PAOLAK`, e-mails dos gerentes, grupos de Gerência, API de líderes da UBD | — | — | 🔵 Projetado | 2026-09-25 | Só leitura (Seção 1) |
+| **F0** | Levantamento: schema da `regioes`, `IB_CO_REGIAO`, lista de equipes, usuário `PAOLAK`, e-mails dos gerentes, grupos de Gerência, API de líderes da UBD | — | — | 🟢 Pronto | 2026-09-25 | Só leitura (Seção 1); ⚠️ #2 contradiz V3 (`U_IB_CodCom2` vazio em 100% das regiões) — decisão do gestor pendente antes da F3 |
 | **F1** | Correção SAP: busca por `$filter`, bloqueio por `InternalKey`, código `PAOLAK`, colisão na criação | worker | — | 🔵 Projetado | 2026-09-25 | Resolve o caso Paola |
 | **F2** | Checkbox "Urgência" no desligamento + horário padrão 17h | portal | — | 🔵 Projetado | 2026-09-25 | Independente; pode ir junto com F1 |
 | **F3** | Perfil GERENTE; campos Equipe/Gerência correspondente; ocupar/devolver vaga na `IB_CO_REGIAO`; grupos de Gerência; contrato v2 | portal + worker | F0 | 🔵 Projetado | 2026-09-25 | Corrige o `RH2020` gravado em supervisor |
@@ -50,13 +50,13 @@ homologado conforme o DoD).
 
 | Fase | Item | Estado |
 |---|---|---|
-| F0 | #1 Schema e cadência da `regioes` | 🔵 Projetado |
-| F0 | #2 `IB_CO_REGIAO`: `CodCom2` = gerente, `CodCom3` = supervisor | 🔵 Projetado |
-| F0 | #3 Lista completa de equipes e gerências (`RH20xx`) | 🔵 Projetado |
-| F0 | #4 Usuário `PAOLAK` e padrão de código SAP | 🔵 Projetado |
-| F0 | #5 E-mails dos 8 gerentes internos (confirmados pelo gestor) | 🔵 Projetado |
-| F0 | #6 Grupos de Gerência no M365/Exchange | 🔵 Projetado |
-| F0 | #7 API UBD: formato de `leaders`, leitura e `PATCH` de líderes | 🔵 Projetado |
+| F0 | #1 Schema e cadência da `regioes` | 🟢 Pronto |
+| F0 | #2 `IB_CO_REGIAO`: `CodCom2` = gerente, `CodCom3` = supervisor | 🟢 Pronto ⚠️ contradição com V3 |
+| F0 | #3 Lista completa de equipes e gerências (`RH20xx`) | 🟢 Pronto |
+| F0 | #4 Usuário `PAOLAK` e padrão de código SAP | 🟢 Pronto |
+| F0 | #5 E-mails dos 8 gerentes internos (confirmados pelo gestor) | 🟢 Pronto (7/8; 1 a confirmar) |
+| F0 | #6 Grupos de Gerência no M365/Exchange | 🟢 Pronto (a confirmar qual grupo) |
+| F0 | #7 API UBD: formato de `leaders`, leitura e `PATCH` de líderes | 🟢 Pronto |
 | F1 | `find_internal_user` por `$filter` | 🔵 Projetado |
 | F1 | Bloqueio via `PATCH Users(<InternalKey>)` | 🔵 Projetado |
 | F1 | Criação com código `PRIMEIRONOME + inicial` e colisão | 🔵 Projetado |
@@ -131,6 +131,97 @@ este documento atualizado com as respostas.
 
 **DoD:** as 7 perguntas respondidas aqui. Uma resposta que contradiga V3 ou inviabilize a F5
 volta para o gestor antes da fase dependente.
+
+### Respostas (2026-09-25)
+
+**#1** — A tabela `regioes` (Supabase do outro projeto) tem `regiao` como chave (PK, texto,
+ex. `"084-UBERLANDIA"`). E-mail do representante em `email_vendedor`; e-mail do supervisor em
+`email_supervisor`; e-mail do gerente em `email_gerente` (nomes livres em `supervisor`/
+`gerente`). Não existe `created_at`; existem `atualizado_em` (timestamp por linha, varia) e
+`sincronizado_em` (carimbo do lote de sincronização do SAP — igual nas 5 linhas da amostra, ou
+seja roda em lote). O intervalo típico entre atualizações não dá para fixar com uma amostra de
+5 linhas — recomendo observar `sincronizado_em` por alguns dias antes de travar
+`AUTOMACAO_SYNC_ATRASO_MIN` (chute inicial conservador: 30–60 min). ⚠️ **Risco de acesso:** a
+`SUPABASE_ANON_KEY` devolveu 401/lista vazia (RLS bloqueia leitura anônima); só a
+`SUPABASE_KEY` (chave de serviço, com poder de escrita) conseguiu ler. A F4 deve pedir ao dono
+do projeto `regioes` uma role/visão só de leitura antes de ir para produção — hoje a única
+credencial que funciona pode escrever. · fonte: `f0_regioes.py` (GET/SELECT via PostgREST),
+retry com `SUPABASE_KEY`.
+
+**#2** — 140 regiões. `U_IB_CodCom2` está **vazio em 100% das 140 regiões** (não guarda
+gerente hoje). `U_IB_CodCom1` mistura `RH2020` ("REGIAO DIRETA", marcador, 45×) com códigos
+`F######`/`FF#####` (PN de representante individual, fora do padrão `RH`). `U_IB_CodCom3` só
+tem códigos `RH20xx` (marcadores de equipe/gerência, nenhum ainda substituído por PN de pessoa
+na amostra vista — ex. `RH2064` "VENDA DIRETA" 26×, `RH2087`, `RH2052`). ⚠️ **Contradiz V3:** o
+mapeamento "`CodCom2` = gerente, `CodCom3` = supervisor" não se sustenta — `CodCom2` não é
+usado em nenhuma das 140 regiões; o gerente não aparece em campo nenhum do `IB_CO_REGIAO`
+nesta consulta. A relação de gerência hoje só existe na tabela `regioes` (Supabase), como
+texto (`gerente`/`email_gerente`) — não no SAP. **Decisão do gestor necessária antes da F3:**
+(a) existe um 4º campo ou relação hierárquica no SAP que guarde o gerente e não foi
+encontrado, ou (b) a F3 assume que o SAP só guarda representante (`CodCom1`) e supervisor
+(`CodCom3`), e o gerente é gravado/lido só no `regioes`/UBD. · fonte:
+`SAPService.get_all_regions()` (GET).
+
+**#3** — Lista completa dos PNs `RH*` obtida via GET paginado (`BusinessPartners`,
+`startswith(CardCode,'RH')`). Contém equipes (`EQUIPE <UF> <N>`, ex. `RH2029 EQUIPE RS 1`),
+duas gerências nomeadas explicitamente (`RH2005 GERENTE SP`, `RH2033 GERENTE MG/RJ`),
+marcadores especiais (`RH2020 REGIAO DIRETA`, `RH2064 VENDA DIRETA`, `RH2090 EQUIPE DIRETA
+SP`) e dezenas de PNs de pessoa física (supervisores/gerentes já substituídos, com
+`Valid`/`Frozen` indicando ativo/inativo). `RH2040 – EQUIPE RJ 1` está na lista com
+`Valid: tNO / Frozen: tYES` (inativo), confirmando a suspeita do gestor. Lista completa (140+
+itens) ficou no log do script, não reproduzida aqui por tamanho. · fonte: GET
+`BusinessPartners?$filter=startswith(CardCode,'RH')&$select=CardCode,CardName,CardForeignName,Valid,Frozen`
+(paginado).
+
+**#4** — `PAOLAK`: `InternalKey=439`, `UserName="PAOLA KEMEL"`, `eMail=null` (confirma a causa
+raiz do bug: usuário sem e-mail cadastrado), `Locked="tNO"`. Padrão de código nos 15 usuários
+internos mais recentes (`InternalKey` 433–449): **não é uma regra única** — a maioria usa
+primeiro nome em maiúsculas sem pontuação (`JULIANA`, `THAIS`, `MAICOM`, `DIOGENES`, `JOSE`,
+`UINE`), mas os 3 mais recentes (`InternalKey` 447–449) usam minúsculas, alguns com ponto para
+nome composto (`rafael`, `test_intern`, `integracao.ploomes`), e há um código curto (`LAB3`).
+Relevante para a F1 (que assume `PRIMEIRONOME + inicial`): a base real tem convenção mista, o
+gerador de código da F1 deve tolerar variação, não assumir um padrão fixo. · fonte: GET
+`Users?$filter=UserCode eq 'PAOLAK'&$select=...` e `Users?$select=...&$orderby=InternalKey
+desc&$top=15`.
+
+**#5** — 7 de 8 gerentes encontrados sem ambiguidade: Alessandro Lodion →
+`alessandro@bondmann.com.br`; Anderson Viana → `anderson@bondmann.com.br`; Guilherme Rosa →
+`guilherme.rosa@bondmann.com.br`; Mariana Silva → `mariana.silva@bondmann.com.br`; Patricia
+Alves → `patricia.alves@bondmann.com.br`; Thiago Rodrigues →
+`thiago.rodrigues@bondmann.com.br`; Rogério Rossini → `rogerio@bondmann.com.br` (cadastrado no
+Graph como "Rogerio Rossini", sem acento). Todos os 7 com `accountEnabled: true`. "Elias
+Kiesten" **não foi encontrado**; uma busca por "Elias" isolado retornou **"Elias Kirsten"**
+(`elias@bondmann.com.br`) — provável erro de grafia no nome da Seção 0 ("Kiesten" →
+"Kirsten"). **(a confirmar pelo gestor)** antes de preencher a tabela de gerências de internos
+da Seção 0. · fonte: Graph `GET /users?$search="displayName:<nome>"` (GET).
+
+**#6** — Candidatos a grupo de "Gerência": `Gerência`
+(`0dc77a73-b07a-451f-8497-4e70d93192a3`, M365 Group), `Gerência - Acompanhamento Semanal`
+(`401e4848-225d-4b5f-8f9b-692ebff76ca6`, M365 Group), `Gerencia`
+(`9bc94d0a-8dca-4f3e-86fe-44cbb7692ee9`, `bd.gerencia@bondmann.com.br`, M365 Group) —
+`Gerenciamento de Projetos wmw` é de projetos, não de liderança, e foi descartado. Candidatos
+a "Supervisão": `BD Supervisão` (`c868acc4-f8fc-449c-b996-71abc68f4b32`, sem `groupTypes` →
+não é M365 Group, provável grupo de segurança) e `Supervisão`
+(`dc770076-e3c6-4554-8fd0-9e62168542e4`, `supervisao@bondmann.com.br`, M365 Group). Nenhum se
+destaca como "o" grupo oficial — **(a confirmar pelo gestor)** qual usar em
+`resolve_groups_by_job_title` (F3). · fonte: Graph
+`GET /groups?$search="displayName:<termo>"` (GET), termos `geren`/`Geren`/`supervis`.
+
+**#7** — A API do Learning.rocks (Skore) **não devolve** lista de líderes no GET:
+`workspace/v1/users/{id}` e `workspace/v2/users/{id}` retornam só o booleano `is_leader` (se a
+própria pessoa lidera outros), nunca quem lidera essa pessoa. `workspace/v2/users/{id}`
+responde 404 (não existe — só a v1 tem "user details"). A coleção Postman do projeto
+(referenciada por `tests/parse_skore_postman_doc.py`) documenta `leaders` como **lista de IDs
+numéricos** (ex. `"leaders": [40]`), tanto em `POST /workspace/v1/users` (criação) quanto em
+`PATCH /workspace/v1/users/:id` (atualização de usuário existente) — **não** e-mails. Ou seja:
+dá para **escrever** líderes de um usuário já existente via `PATCH` (não executado, conforme a
+regra de só-leitura desta fase), mas não dá para **ler de volta** os líderes atuais pela API —
+a F5 precisa manter o próprio estado; o desenho de "espelho com proteção" da V4 já assume
+isso, não é um bloqueio novo. Testado com 3 pessoas reais da amostra da `regioes`
+(`neander.faria@bondmann.com.br`, representante sem liderança; `andre.mandelli@bondmann.com.br`
+e `marcelo.neves@bondmann.com.br`, ambos `is_leader: true`) — mesmo resultado nos três. ·
+fonte: `LearningRocksService.find_user_by_email` + GET `v1/users/{id}` e `v2/users/{id}`
+(GET), doc Postman local (sem `PATCH`).
 
 ---
 
