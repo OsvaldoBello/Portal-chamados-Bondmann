@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app.auth.dependencies import get_current_user
 from app.config import get_settings
-from app.domain import automacao as dom, formularios_acessos as ac
+from app.domain import automacao as dom, formularios_acessos as ac, gerencias_internas as gi
 from app.main import app
 from app.ratelimit import limiter
 from app.repositories import automacao as repo_admin
@@ -123,6 +123,15 @@ def test_payload_criacao_gerente_leva_vaga_de_gerencia():
     assert p["perfil"] == "GERENTE" and p["regiao"] is None
     assert p["vaga"] == {"tipo": "GERENCIA", "codigo": "RH2005", "nome": "GERENTE SP"}
     assert ("Vaga", "RH2005 — GERENTE SP") in dom.resumo_payload(p)
+
+
+def test_payload_interno_resolve_gestor_pela_gerencia():
+    dados = {**DADOS_CRIACAO, "perfil": ac.PERFIL_INTERNO, "regiao_wmw": "",
+             "gerencia_interna": "RH — Mariana Silva", "gestor_email": ""}
+    p = dom.montar_payload(dom.TIPO_CRIACAO, dados, CHAMADO)
+    assert p["gestor_email"] == "mariana.silva@bondmann.com.br"
+    outra = {**dados, "gerencia_interna": gi.OUTRA, "gestor_email": "Chefe.X@bondmann.com.br"}
+    assert dom.montar_payload(dom.TIPO_CRIACAO, outra, CHAMADO)["gestor_email"] == "chefe.x@bondmann.com.br"
 
 
 def test_payload_representante_nao_leva_vaga():

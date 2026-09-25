@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.domain import vagas_comerciais as vc
+from app.domain import gerencias_internas as gi, vagas_comerciais as vc
 from app.domain.campos_dinamicos import CampoDef
 
 # Nomes EXATOS das subcategorias no catálogo (migration 0026) — é por eles que
@@ -138,12 +138,18 @@ def campos_criacao(setores_portal: tuple[str, ...]) -> tuple[CampoDef, ...]:
             "data_inicio", "Data de início", "date",
             ajuda="Opcional. Os acessos são criados a partir dessa data; em branco = assim que aprovado.",
         ),
+        # --- Colaborador Interno ---
+        CampoDef(
+            "gerencia_interna", "Gerência responsável", "select", obrigatorio=True,
+            opcoes=gi.OPCOES, visivel_se=_SO_INTERNO,
+            ajuda="O gerente vira o líder do colaborador na UBD.",
+        ),
         CampoDef(
             "gestor_email", "E-mail do gestor direto", "email",
-            dominio_email=DOMINIO_CORPORATIVO,
-            ajuda="Opcional. Usado como líder no UBD Learning.rocks.",
+            dominio_email=DOMINIO_CORPORATIVO, visivel_se=_SO_INTERNO,
+            obrigatorio_se=("gerencia_interna", (gi.OUTRA,)),
+            ajuda='Obrigatório quando a gerência é "Outra". Usado como líder no UBD Learning.rocks.',
         ),
-        # --- Colaborador Interno ---
         CampoDef(
             "cargo", "Cargo / função", "text", obrigatorio=True, visivel_se=_SO_INTERNO,
             placeholder="Ex.: Assessor de Laboratório, Assistente Financeira",

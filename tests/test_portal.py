@@ -1921,6 +1921,7 @@ def test_criar_criacao_de_usuario_interno_com_licencas_sap():
     repo = _repo_acessos()
     dados_form = _abertura_criacao_representante(
         campo__perfil=_PERFIL_INT, campo__regiao_wmw="", campo__dispositivo_wmw="",
+        campo__gerencia_interna="Controladoria — Anderson Viana",
         campo__cargo="Assistente Financeira",
         campo__portal_papel="Funcionário (abre chamados)",
         campo__portal_setor="Financeiro",

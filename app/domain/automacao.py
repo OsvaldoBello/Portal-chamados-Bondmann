@@ -22,7 +22,7 @@ import re
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
-from app.domain import formularios_acessos as ac, vagas_comerciais as vc
+from app.domain import formularios_acessos as ac, gerencias_internas as gi, vagas_comerciais as vc
 from app.domain.campos_dinamicos import VALOR_CHECKBOX_MARCADO
 from app.domain.periodo import TZ_BR
 
@@ -144,7 +144,13 @@ def montar_payload(
                 "email": str(dados.get("email") or "").strip().lower(),
                 "perfil": perfil,
                 "telefone": str(dados.get("telefone") or "").strip(),
-                "gestor_email": (str(dados.get("gestor_email") or "").strip().lower() or None),
+                # Líder do interno na UBD: gerente da "Gerência responsável";
+                # "Outra" ⇒ o e-mail digitado (plano v2, F4).
+                "gestor_email": (
+                    gi.email_do_gerente(dados.get("gerencia_interna"))
+                    or str(dados.get("gestor_email") or "").strip().lower()
+                    or None
+                ),
                 "data_inicio": dados.get("data_inicio") or None,
                 "cargo": (str(dados.get("cargo") or "").strip() or None),
                 "portal_papel": _primeira_palavra_em(_PAPEL_ENUM, dados.get("portal_papel")),

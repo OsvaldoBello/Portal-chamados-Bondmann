@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain import formularios_acessos as ac, vagas_comerciais as vc
+from app.domain import formularios_acessos as ac, gerencias_internas as gi, vagas_comerciais as vc
 from app.domain.campos_dinamicos import (
     VALOR_CHECKBOX_MARCADO,
     CampoDef,
@@ -63,6 +63,7 @@ def _criacao_interno(**over):
         "email": ["maria.silva@bondmann.com.br"],
         "perfil": [ac.PERFIL_INTERNO],
         "telefone": ["51999998888"],
+        "gerencia_interna": [gi.OPCOES[0]],
         "cargo": ["Assistente Financeira"],
         "portal_papel": ["Funcionário (abre chamados)"],
         "portal_setor": ["Financeiro"],
@@ -179,6 +180,57 @@ def test_criacao_representante_exige_regiao_e_dispositivo_e_dispensa_cargo():
     assert not ok and "Região" in erro
     ok, erro, _ = validar_campos(campos, _criacao_representante(regiao_wmw=["999-NADA"]))
     assert not ok and "Opção inválida" in erro
+
+
+def test_obrigatorio_se_exige_o_campo_so_na_condicao():
+    campos = (
+        CampoDef("tipo", "Tipo", "select", obrigatorio=True, opcoes=("A", "B")),
+        CampoDef("detalhe", "Detalhe", "text", obrigatorio_se=("tipo", ("B",))),
+    )
+    assert validar_campos(campos, {"tipo": ["A"]})[0]
+    ok, erro, _ = validar_campos(campos, {"tipo": ["B"]})
+    assert not ok and "Detalhe" in erro
+
+
+def test_obrigatorio_se_ignora_controlador_invisivel():
+    # Controlador oculto (outro perfil) pode chegar no POST com valor antigo;
+    # não pode tornar obrigatório um campo de outro contexto.
+    campos = (
+        CampoDef("perfil", "Perfil", "select", obrigatorio=True, opcoes=("X", "Y")),
+        CampoDef("tipo", "Tipo", "select", opcoes=("A", "B"), visivel_se=("perfil", ("X",))),
+        CampoDef("detalhe", "Detalhe", "text", obrigatorio_se=("tipo", ("B",))),
+    )
+    assert validar_campos(campos, {"perfil": ["Y"], "tipo": ["B"]})[0]
+    assert not validar_campos(campos, {"perfil": ["X"], "tipo": ["B"]})[0]
+
+
+def test_gerencias_internas_mapeiam_para_o_email_do_gerente():
+    assert gi.email_do_gerente("PCP / Recebimento / Expedição — Elias Kirsten") == "elias@bondmann.com.br"
+    assert gi.email_do_gerente(gi.OUTRA) is None and len(gi.GERENCIAS) == 8
+
+
+def test_criacao_interno_exige_gerencia_e_email_so_com_outra():
+    base = {k: v for k, v in _criacao_interno().items() if k != "gerencia_interna"}
+    ok, erro, _ = validar_campos(ac.campos_criacao(SETORES), base)
+    assert not ok and "Gerência responsável" in erro
+    ok, erro, limpo = validar_campos(ac.campos_criacao(SETORES), {**base, "gerencia_interna": [gi.OPCOES[0]]})
+    assert ok, erro
+    ok, erro, _ = validar_campos(ac.campos_criacao(SETORES), {**base, "gerencia_interna": [gi.OUTRA]})
+    assert not ok and "gestor" in erro.lower()
+    ok, erro, limpo = validar_campos(
+        ac.campos_criacao(SETORES),
+        {**base, "gerencia_interna": [gi.OUTRA], "gestor_email": ["chefe.x@bondmann.com.br"]},
+    )
+    assert ok, erro
+    assert limpo["gestor_email"] == "chefe.x@bondmann.com.br"
+
+
+def test_gestor_email_nao_existe_para_representante():
+    ok, erro, limpo = validar_campos(
+        ac.campos_criacao(SETORES), _criacao_representante(gestor_email=["chefe.x@bondmann.com.br"])
+    )
+    assert ok, erro
+    assert "gestor_email" not in limpo and "gerencia_interna" not in limpo
 
 
 def test_catalogo_de_vagas_do_sap():
