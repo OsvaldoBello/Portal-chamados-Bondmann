@@ -13,8 +13,9 @@ Regras vindas do plano:
   (`autor_pode_usar_layout`). Fora disso a subcategoria continua com o
   formulário livre (Assunto/Descrição) e o `campo__*` é ignorado no POST.
 - **Campos condicionais** (`visivel_se`): o `perfil` escolhido decide quais
-  perguntas existem — Região/Dispositivo WMW só para Representante (e Região
-  para Supervisor), Cargo/Papel/Setor/Licenças SAP só para Colaborador Interno.
+  perguntas existem — Região/Dispositivo WMW só para Representante, Equipe
+  para Supervisor e Gerência para Gerente (plano v2, F3), Cargo/Papel/Setor/
+  Licenças SAP só para Colaborador Interno.
 - **O que NÃO vira campo:** grupos M365, times UBD, senha inicial, código de
   usuário SAP, ramal SIP — tudo derivado pela automação (Seção 4.4).
 - Assunto/Descrição são ocultados na tela e derivados aqui
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domain import vagas_comerciais as vc
 from app.domain.campos_dinamicos import CampoDef
 
 # Nomes EXATOS das subcategorias no catálogo (migration 0026) — é por eles que
@@ -58,7 +60,8 @@ DOMINIO_CORPORATIVO = "bondmann.com.br"
 PERFIL_REPRESENTANTE = "Representante Comercial (Externo)"
 PERFIL_INTERNO = "Colaborador Interno (Escritório/Fábrica)"
 PERFIL_SUPERVISOR = "Supervisor / Liderança de Equipe"
-_PERFIS = (PERFIL_REPRESENTANTE, PERFIL_INTERNO, PERFIL_SUPERVISOR)
+PERFIL_GERENTE = "Gerente de Vendas"
+_PERFIS = (PERFIL_REPRESENTANTE, PERFIL_INTERNO, PERFIL_SUPERVISOR, PERFIL_GERENTE)
 
 _DISPOSITIVOS_WMW = ("IOS (iPhone / iPad)", "ANDROID (Celular / Tablet)", "SIMULADOR (PC / Windows)")
 
@@ -111,7 +114,8 @@ REGIOES_WMW: tuple[str, ...] = (
     "170-PATOS DE MINAS", "173-RIO DO SUL",
 )
 
-_SO_COMERCIAIS = ("perfil", (PERFIL_REPRESENTANTE, PERFIL_SUPERVISOR))
+_SO_SUPERVISOR = ("perfil", (PERFIL_SUPERVISOR,))
+_SO_GERENTE = ("perfil", (PERFIL_GERENTE,))
 _SO_REPRESENTANTE = ("perfil", (PERFIL_REPRESENTANTE,))
 _SO_INTERNO = ("perfil", (PERFIL_INTERNO,))
 
@@ -159,10 +163,20 @@ def campos_criacao(setores_portal: tuple[str, ...]) -> tuple[CampoDef, ...]:
             ajuda="Deixe em branco se o colaborador não usa o SAP. A disponibilidade é "
             "conferida pela TI na execução.",
         ),
-        # --- Representante / Supervisor ---
+        # --- Representante / Supervisor / Gerente ---
         CampoDef(
             "regiao_wmw", "Região comercial (WMW / SAP)", "select", obrigatorio=True,
-            opcoes=REGIOES_WMW, visivel_se=_SO_COMERCIAIS,
+            opcoes=REGIOES_WMW, visivel_se=_SO_REPRESENTANTE,
+        ),
+        CampoDef(
+            "equipe", "Equipe correspondente", "select", obrigatorio=True,
+            opcoes=vc.ROTULOS_EQUIPES, visivel_se=_SO_SUPERVISOR,
+            ajuda="Equipe do SAP que o supervisor assume (o SAP troca o marcador da equipe "
+            "pelo cadastro dele em todas as regiões).",
+        ),
+        CampoDef(
+            "gerencia", "Gerência correspondente", "select", obrigatorio=True,
+            opcoes=vc.ROTULOS_GERENCIAS, visivel_se=_SO_GERENTE,
         ),
         CampoDef(
             "dispositivo_wmw", "Dispositivo do app WMW", "select", obrigatorio=True,
@@ -188,8 +202,18 @@ CAMPOS_DESLIGAMENTO: tuple[CampoDef, ...] = (
     ),
     CampoDef(
         "regiao", "Região comercial a desvincular", "select", obrigatorio=True,
-        opcoes=REGIOES_WMW, visivel_se=_SO_COMERCIAIS,
+        opcoes=REGIOES_WMW, visivel_se=_SO_REPRESENTANTE,
         ajuda="A região é transferida para RH2020 no SAP.",
+    ),
+    CampoDef(
+        "equipe", "Equipe correspondente", "select", obrigatorio=True,
+        opcoes=vc.ROTULOS_EQUIPES, visivel_se=_SO_SUPERVISOR,
+        ajuda="O marcador da equipe volta para as regiões do supervisor desligado.",
+    ),
+    CampoDef(
+        "gerencia", "Gerência correspondente", "select", obrigatorio=True,
+        opcoes=vc.ROTULOS_GERENCIAS, visivel_se=_SO_GERENTE,
+        ajuda="O marcador da gerência volta para as regiões do gerente desligado.",
     ),
     CampoDef(
         "motivo", "Motivo do desligamento", "text", placeholder=MOTIVO_DESLIGAMENTO_PADRAO,
@@ -234,13 +258,15 @@ def eh_subcategoria_acessos(
 
 
 def perfil_curto(valor: str | None) -> str:
-    """Rótulo curto do perfil para o Assunto ("Representante", "Interno", "Supervisor")."""
+    """Rótulo curto do perfil para o Assunto ("Representante", "Interno", "Supervisor", "Gerente")."""
     if valor == PERFIL_REPRESENTANTE:
         return "Representante"
     if valor == PERFIL_INTERNO:
         return "Colaborador Interno"
     if valor == PERFIL_SUPERVISOR:
         return "Supervisor"
+    if valor == PERFIL_GERENTE:
+        return "Gerente"
     return ""
 
 
@@ -252,6 +278,8 @@ def titulo_e_descricao_automaticos(
     validação. Subcategoria fora deste módulo ⇒ ``("", "")``."""
     nome = str(dados.get("nome_completo") or "").strip()
     perfil = perfil_curto(str(dados.get("perfil") or ""))
+    vaga_rotulo = str(dados.get("equipe") or dados.get("gerencia") or "").strip()
+    vaga = vc.vaga_do_rotulo(vaga_rotulo)
     if subcategoria == SUB_CRIACAO_USUARIO:
         titulo = "Criação de usuário"
         partes = [
@@ -259,6 +287,8 @@ def titulo_e_descricao_automaticos(
             f"Perfil: {perfil or '—'}",
             f"E-mail: {dados.get('email') or '—'}",
         ]
+        if vaga_rotulo:
+            partes.insert(2, f"Vaga: {vaga_rotulo}")
         if dados.get("data_inicio"):
             partes.append(f"Início: {dados['data_inicio']}")
     elif subcategoria == SUB_DESLIGAMENTO:
@@ -269,6 +299,8 @@ def titulo_e_descricao_automaticos(
             f"E-mail: {dados.get('email') or '—'}",
             f"Data do desligamento: {dados.get('data_desligamento') or '—'}",
         ]
+        if vaga_rotulo:
+            partes.insert(2, f"Vaga: {vaga_rotulo}")
         if dados.get("urgente"):
             partes.append("Urgência: SIM — executar assim que a TI aprovar (ignora a data)")
     else:
@@ -276,7 +308,7 @@ def titulo_e_descricao_automaticos(
     if nome:
         titulo = f"{titulo} — {nome}"
     if perfil:
-        titulo = f"{titulo} ({perfil})"
+        titulo = f"{titulo} ({perfil} · {vaga['nome']})" if vaga else f"{titulo} ({perfil})"
     obs = str(dados.get("observacoes") or "").strip()
     if obs:
         partes += ["", f"Observações: {obs}"]

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain import formularios_acessos as ac
+from app.domain import formularios_acessos as ac, vagas_comerciais as vc
 from app.domain.campos_dinamicos import (
     VALOR_CHECKBOX_MARCADO,
     CampoDef,
@@ -181,13 +181,57 @@ def test_criacao_representante_exige_regiao_e_dispositivo_e_dispensa_cargo():
     assert not ok and "Opção inválida" in erro
 
 
-def test_criacao_supervisor_pede_regiao_mas_nao_dispositivo():
-    campos = ac.campos_criacao(SETORES)
-    dados = _criacao_representante(perfil=[ac.PERFIL_SUPERVISOR], dispositivo_wmw=[""])
-    ok, erro, limpo = validar_campos(campos, dados)
+def test_catalogo_de_vagas_do_sap():
+    codigos = [c for c, _ in vc.EQUIPES]
+    assert "RH2018" in codigos and "RH2090" in codigos and "RH2040" not in codigos  # RH2040 inativo
+    assert len(codigos) == len(set(codigos)) == 21
+    assert vc.GERENCIAS == (("RH2005", "GERENTE SP"), ("RH2033", "GERENTE MG/RJ"))
+    assert vc.vaga_do_rotulo("RH2018 — EQUIPE SP 1") == {"tipo": "EQUIPE", "codigo": "RH2018", "nome": "EQUIPE SP 1"}
+    assert vc.vaga_do_rotulo("RH2005 — GERENTE SP")["tipo"] == "GERENCIA"
+    assert vc.vaga_do_rotulo("qualquer coisa") is None
+
+
+def test_criacao_supervisor_pede_equipe_e_nao_regiao():
+    dados = _criacao_representante(perfil=[ac.PERFIL_SUPERVISOR], regiao_wmw=[""], dispositivo_wmw=[""],
+                                   equipe=["RH2018 — EQUIPE SP 1"])
+    ok, erro, limpo = validar_campos(ac.campos_criacao(SETORES), dados)
     assert ok, erro
-    assert limpo["regiao_wmw"] == "082-ARARAQUARA"
-    assert "dispositivo_wmw" not in limpo
+    assert limpo["equipe"] == "RH2018 — EQUIPE SP 1" and "regiao_wmw" not in limpo
+    ok, erro, _ = validar_campos(ac.campos_criacao(SETORES), {**dados, "equipe": [""]})
+    assert not ok and "Equipe correspondente" in erro
+
+
+def test_criacao_supervisor_com_equipe_fora_do_catalogo_e_recusada():
+    dados = _criacao_representante(perfil=[ac.PERFIL_SUPERVISOR], regiao_wmw=[""], dispositivo_wmw=[""],
+                                   equipe=["RH2040 — EQUIPE RJ 1"])
+    ok, erro, _ = validar_campos(ac.campos_criacao(SETORES), dados)
+    assert not ok and "Opção inválida" in erro
+
+
+def test_criacao_gerente_pede_gerencia():
+    dados = _criacao_representante(perfil=[ac.PERFIL_GERENTE], regiao_wmw=[""], dispositivo_wmw=[""],
+                                   gerencia=["RH2033 — GERENTE MG/RJ"])
+    ok, erro, limpo = validar_campos(ac.campos_criacao(SETORES), dados)
+    assert ok, erro
+    assert limpo["gerencia"] == "RH2033 — GERENTE MG/RJ" and "equipe" not in limpo
+
+
+def test_desligamento_supervisor_pede_equipe():
+    ok, erro, limpo = validar_campos(
+        ac.CAMPOS_DESLIGAMENTO,
+        _desligamento(perfil=[ac.PERFIL_SUPERVISOR], regiao=[""], equipe=["RH2021 — EQUIPE MG 2"]),
+    )
+    assert ok, erro
+    assert limpo["equipe"] == "RH2021 — EQUIPE MG 2" and "regiao" not in limpo
+
+
+def test_titulo_e_descricao_citam_a_vaga():
+    titulo, descricao = ac.titulo_e_descricao_automaticos(
+        ac.SUB_CRIACAO_USUARIO,
+        {"nome_completo": "Carla Prado", "perfil": ac.PERFIL_SUPERVISOR, "equipe": "RH2018 — EQUIPE SP 1"},
+    )
+    assert titulo == "Criação de usuário — Carla Prado (Supervisor · EQUIPE SP 1)"
+    assert "Vaga: RH2018 — EQUIPE SP 1" in descricao
 
 
 def test_criacao_email_fora_do_dominio_e_recusado():

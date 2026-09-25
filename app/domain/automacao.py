@@ -22,7 +22,7 @@ import re
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
-from app.domain import formularios_acessos as ac
+from app.domain import formularios_acessos as ac, vagas_comerciais as vc
 from app.domain.campos_dinamicos import VALOR_CHECKBOX_MARCADO
 from app.domain.periodo import TZ_BR
 
@@ -65,6 +65,7 @@ _PERFIL_ENUM = {
     ac.PERFIL_REPRESENTANTE: "REPRESENTANTE",
     ac.PERFIL_INTERNO: "INTERNO",
     ac.PERFIL_SUPERVISOR: "SUPERVISOR",
+    ac.PERFIL_GERENTE: "GERENTE",
 }
 _DISPOSITIVO_ENUM = {"IOS": "IOS", "ANDROID": "ANDROID", "SIMULADOR": "SIMULADOR"}
 _PAPEL_ENUM = {"Funcionário": "CLIENTE", "Operador": "OPERADOR", "Admin": "ADMIN"}
@@ -134,6 +135,8 @@ def montar_payload(
         "pular_etapas": list(pular_etapas),
     }
     perfil = _PERFIL_ENUM.get(str(dados.get("perfil") or ""))
+    # Supervisor/gerente: marcador da equipe/gerência no SAP (plano v2, F3).
+    vaga = vc.vaga_do_rotulo(dados.get("equipe") or dados.get("gerencia"))
     if tipo == TIPO_CRIACAO:
         base.update(
             {
@@ -148,6 +151,7 @@ def montar_payload(
                 "portal_setor": (str(dados.get("portal_setor") or "").strip() or None),
                 "licencas_sap": list(dados.get("licencas_sap") or []),
                 "regiao": _regiao(dados.get("regiao_wmw")),
+                "vaga": vaga,
                 "dispositivo_wmw": _primeira_palavra_em(_DISPOSITIVO_ENUM, dados.get("dispositivo_wmw")),
                 "observacoes": (str(dados.get("observacoes") or "").strip() or None),
             }
@@ -160,6 +164,7 @@ def montar_payload(
                 "perfil": perfil,
                 "data_desligamento": dados.get("data_desligamento") or None,
                 "regiao": _regiao(dados.get("regiao")),
+                "vaga": vaga,
                 "motivo": str(dados.get("motivo") or "").strip() or ac.MOTIVO_DESLIGAMENTO_PADRAO,
                 "encaminhar_para": str(dados.get("encaminhar_para") or "").strip().lower(),
                 "urgente": str(dados.get("urgente") or "") == VALOR_CHECKBOX_MARCADO,
@@ -503,6 +508,8 @@ def resumo_payload(payload: dict[str, Any]) -> list[tuple[str, str]]:
     _add("Setor no portal", payload.get("portal_setor"))
     _add("Licenças SAP", payload.get("licencas_sap"))
     _add("Região", payload.get("regiao"))
+    vaga = payload.get("vaga")
+    _add("Vaga", vc.rotulo(vaga["codigo"], vaga["nome"]) if isinstance(vaga, dict) else None)
     _add("Dispositivo WMW", payload.get("dispositivo_wmw"))
     _add("Motivo", payload.get("motivo"))
     _add("Encaminhar e-mails para", payload.get("encaminhar_para"))
