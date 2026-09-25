@@ -201,6 +201,11 @@ CAMPOS_DESLIGAMENTO: tuple[CampoDef, ...] = (
         ajuda="Caixa que passa a receber as mensagens do colaborador desligado.",
     ),
     CampoDef(
+        "urgente", "Urgência — executar assim que a TI aprovar", "checkbox",
+        ajuda="Ignora a data e o horário do desligamento: os acessos são bloqueados "
+        "no momento em que a TI aprovar a automação.",
+    ),
+    CampoDef(
         "observacoes", "Observações para a TI", "textarea",
         ajuda="Opcional. Qualquer detalhe que não se encaixe nos campos acima.",
     ),

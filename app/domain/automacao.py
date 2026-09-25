@@ -9,8 +9,7 @@ agendamento e os textos das mensagens gravadas no chamado.
 Decisões do gestor (2026-09-14) aplicadas aqui:
 - **Criação** roda às 07h (Brasília) do **dia útil anterior** à data de início;
   sem data, ou data já passada, roda assim que aprovada.
-- **Desligamento** roda às 18h (Brasília) da data informada; data passada =
-  imediato.
+- **Desligamento** roda às 17h (Brasília) da data informada (gestor, 2026-09-25); data passada ou **urgência** marcada pelo RH = imediato (no clique da TI).
 - **Credenciais** vão na mensagem pública de encerramento ao RH (D4) — nunca
   em `resultado`/`payload` (mascaradas aqui antes de persistir).
 - O chamado só é RESOLVIDO quando TODAS as etapas deram `SUCCESS` (e não em
@@ -24,6 +23,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from app.domain import formularios_acessos as ac
+from app.domain.campos_dinamicos import VALOR_CHECKBOX_MARCADO
 from app.domain.periodo import TZ_BR
 
 VERSAO_CONTRATO = "1"
@@ -162,6 +162,7 @@ def montar_payload(
                 "regiao": _regiao(dados.get("regiao")),
                 "motivo": str(dados.get("motivo") or "").strip() or ac.MOTIVO_DESLIGAMENTO_PADRAO,
                 "encaminhar_para": str(dados.get("encaminhar_para") or "").strip().lower(),
+                "urgente": str(dados.get("urgente") or "") == VALOR_CHECKBOX_MARCADO,
                 "observacoes": (str(dados.get("observacoes") or "").strip() or None),
             }
         )
@@ -210,7 +211,7 @@ def calcular_executar_apos(
     agora: datetime,
     feriados: set[date],
     hora_criacao: int = 7,
-    hora_desligamento: int = 18,
+    hora_desligamento: int = 17,
     licenca_dias: int = 15,
 ) -> datetime:
     """Quando o worker pode pegar o job (UTC, aware). Nunca no passado: data
@@ -226,7 +227,7 @@ def calcular_executar_apos(
             )
     elif tipo == TIPO_DESLIGAMENTO:
         dia = _para_date(payload.get("data_desligamento"))
-        if dia:
+        if dia and payload.get("urgente") is not True:
             alvo = datetime.combine(dia, time(hour=hora_desligamento), tzinfo=TZ_BR)
     elif tipo == TIPO_REVOGAR_LICENCA:
         dia = _para_date(payload.get("offboard_date")) or agora.astimezone(TZ_BR).date()
@@ -505,6 +506,7 @@ def resumo_payload(payload: dict[str, Any]) -> list[tuple[str, str]]:
     _add("Dispositivo WMW", payload.get("dispositivo_wmw"))
     _add("Motivo", payload.get("motivo"))
     _add("Encaminhar e-mails para", payload.get("encaminhar_para"))
+    _add("Urgência", "Sim — executa ao aprovar" if payload.get("urgente") else None)
     _add("Data do desligamento (licença)", payload.get("offboard_date"))
     _add("Etapas a pular (já concluídas)", payload.get("pular_etapas"))
     return pares

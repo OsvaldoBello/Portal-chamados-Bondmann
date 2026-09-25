@@ -217,6 +217,15 @@ def test_desligamento_motivo_e_opcional():
     assert "motivo" not in limpo
 
 
+def test_desligamento_urgencia_e_opcional_e_grava_sim():
+    ok, erro, limpo = validar_campos(ac.CAMPOS_DESLIGAMENTO, _desligamento(urgente=["Sim"]))
+    assert ok, erro
+    assert limpo["urgente"] == VALOR_CHECKBOX_MARCADO
+    ok, erro, limpo = validar_campos(ac.CAMPOS_DESLIGAMENTO, _desligamento())
+    assert ok, erro
+    assert "urgente" not in limpo
+
+
 def test_titulo_e_descricao_automaticos_criacao_e_desligamento():
     titulo, descricao = ac.titulo_e_descricao_automaticos(
         ac.SUB_CRIACAO_USUARIO,

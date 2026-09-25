@@ -140,11 +140,11 @@ def test_executar_apos_sem_data_ou_passada_e_imediato():
         dom.calcular_executar_apos(dom.TIPO_CRIACAO, p, agora=datetime(2026, 1, 1), feriados=set())  # noqa: DTZ001 — naive de propósito
 
 
-def test_executar_apos_desligamento_18h_e_licenca_15_dias():
+def test_executar_apos_desligamento_17h_e_licenca_15_dias():
     agora = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
     p = dom.montar_payload(dom.TIPO_DESLIGAMENTO, DADOS_DESLIG, CHAMADO)
     assert dom.calcular_executar_apos(dom.TIPO_DESLIGAMENTO, p, agora=agora, feriados=set()) == datetime(
-        2026, 9, 30, 21, 0, tzinfo=UTC
+        2026, 9, 30, 20, 0, tzinfo=UTC
     )
     lic = dom.montar_payload_revogar_licenca(
         {"email": "x@bondmann.com.br", "ms_user_id": "guid", "offboard_date": "2026-09-30"}, CHAMADO
@@ -153,6 +153,30 @@ def test_executar_apos_desligamento_18h_e_licenca_15_dias():
     assert dom.calcular_executar_apos(dom.TIPO_REVOGAR_LICENCA, lic, agora=agora, feriados=set()) == datetime(
         2026, 10, 15, 10, 0, tzinfo=UTC
     )
+
+
+def test_payload_desligamento_urgente_vira_booleano():
+    assert dom.montar_payload(dom.TIPO_DESLIGAMENTO, DADOS_DESLIG, CHAMADO)["urgente"] is False
+    p = dom.montar_payload(dom.TIPO_DESLIGAMENTO, {**DADOS_DESLIG, "urgente": "Sim"}, CHAMADO)
+    assert p["urgente"] is True
+
+
+def test_executar_apos_desligamento_urgente_ignora_a_data():
+    agora = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
+    p = dom.montar_payload(dom.TIPO_DESLIGAMENTO, {**DADOS_DESLIG, "urgente": "Sim"}, CHAMADO)
+    assert dom.calcular_executar_apos(dom.TIPO_DESLIGAMENTO, p, agora=agora, feriados=set()) == agora
+
+
+def test_resumo_mostra_urgencia_so_quando_marcada():
+    p = dom.montar_payload(dom.TIPO_DESLIGAMENTO, {**DADOS_DESLIG, "urgente": "Sim"}, CHAMADO)
+    assert ("Urgência", "Sim — executa ao aprovar") in dom.resumo_payload(p)
+    p = dom.montar_payload(dom.TIPO_DESLIGAMENTO, DADOS_DESLIG, CHAMADO)
+    assert all(r != "Urgência" for r, _ in dom.resumo_payload(p))
+
+
+def test_padrao_de_horario_do_desligamento_e_17h():
+    from app.config import Settings
+    assert Settings.model_fields["automacao_hora_desligamento"].default == 17
 
 
 def test_normalizar_etapas_mascara_segredos_e_tolera_lixo():

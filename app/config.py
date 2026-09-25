@@ -177,7 +177,7 @@ class Settings(BaseSettings):
     # Horários (Brasília) usados para agendar: criação roda às HH do dia útil
     # anterior ao início; desligamento às HH da data informada.
     automacao_hora_criacao: int = Field(default=7)
-    automacao_hora_desligamento: int = Field(default=18)
+    automacao_hora_desligamento: int = Field(default=17)
 
     # --- Monitor de sessão do wuzapi (Fase 1 da migração, 2026-09-02) ---
     # E-mail que recebe o alerta quando a sessão cai (e o aviso de
