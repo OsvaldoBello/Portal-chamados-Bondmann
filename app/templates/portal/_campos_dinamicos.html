@@ -3,7 +3,7 @@
    (namespacing lido no POST). `layout` = formularios_dinamicos.Layout (ou None:
    escolha sem campos dinâmicos → fragmento vazio); `dados_form` = valores já
    preenchidos (prefill no re-render de erro) — string para a maioria dos
-   tipos, lista para `checkbox_multi`.
+   tipos, lista para `checkbox_multi`, `"Sim"`/ausente para `checkbox`.
 
    Atributos data-* do wrapper são lidos por novo_chamado.js:
    - data-oculta-assunto / data-oculta-prioridade: esconder Assunto+Descrição /
@@ -41,6 +41,16 @@
     </div>
     {% if campo.ajuda %}<span class="block text-xs text-muted mt-1">{{ campo.ajuda }}</span>{% endif %}
   </fieldset>
+  {% elif campo.tipo == 'checkbox' %}
+  {% set marcado = dados_form.get(campo.name) if dados_form else '' %}
+  <label class="flex items-start gap-2 text-sm text-ink">
+    <input type="checkbox" name="campo__{{ campo.name }}" value="Sim" {% if marcado %}checked{% endif %}
+      class="mt-0.5 rounded ring-1 ring-line text-navy-700 focus:ring-navy-500">
+    <span>
+      <span class="block text-[13px] font-semibold text-navy">{{ campo.label }}{% if campo.obrigatorio %} <span class="text-pr_urgente">*</span>{% endif %}</span>
+      {% if campo.ajuda %}<span class="block text-xs text-muted mt-0.5">{{ campo.ajuda }}</span>{% endif %}
+    </span>
+  </label>
   {% else %}
   {% set valor = dados_form.get(campo.name, '') if dados_form else '' %}
   <label class="block">

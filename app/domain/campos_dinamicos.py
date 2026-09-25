@@ -26,7 +26,10 @@ from typing import Any
 
 # Tipos de campo suportados pelo partial `_campos_dinamicos.html` e pela validação.
 # ``checkbox_multi``: 0..N opções marcadas — valor gravado é ``list[str]``.
-TIPOS_VALIDOS = {"text", "textarea", "select", "date", "number", "email", "tel", "checkbox_multi"}
+# ``checkbox``: caixa única (sim/não) — marcada grava ``VALOR_CHECKBOX_MARCADO``,
+# desmarcada não grava a chave (ex.: "Urgência" do desligamento, plano v2 F2).
+TIPOS_VALIDOS = {"text", "textarea", "select", "date", "number", "email", "tel", "checkbox_multi", "checkbox"}
+VALOR_CHECKBOX_MARCADO = "Sim"
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -106,6 +109,13 @@ def validar_campos(
                 return False, f'Selecione ao menos uma opção em "{campo.label}".', {}
             if marcados:
                 limpo[campo.name] = marcados
+            continue
+
+        if campo.tipo == "checkbox":
+            if any(v.strip() for v in brutos):
+                limpo[campo.name] = VALOR_CHECKBOX_MARCADO
+            elif campo.obrigatorio:
+                return False, f'Marque o campo "{campo.label}".', {}
             continue
 
         valor = (brutos[0] if brutos else "").strip()

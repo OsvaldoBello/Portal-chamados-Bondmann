@@ -19,11 +19,38 @@ from app.domain.campos_dinamicos import (
     rotular_campos,
     validar_campos,
     valores_para_template,
+    VALOR_CHECKBOX_MARCADO,
 )
-from app.domain.formularios_dinamicos import layout_para, rotular_chamado
+from app.domain.formularios_dinamicos import layout_para, rotular_chamado, Layout
 from app.domain.formularios_quimico import CAT_OCORRENCIA
+from app.templating import templates
 
 SETORES = ("TI", "RH", "Financeiro")
+
+# TEST DATA: Checkbox field
+_CHECK = (CampoDef("urgente", "Urgência", "checkbox"),)
+
+
+def test_checkbox_marcado_grava_sim_e_desmarcado_nao_grava():
+    ok, erro, limpo = validar_campos(_CHECK, {"urgente": ["Sim"]})
+    assert ok, erro
+    assert limpo == {"urgente": VALOR_CHECKBOX_MARCADO}
+    ok, erro, limpo = validar_campos(_CHECK, {})
+    assert ok and limpo == {}
+
+
+def test_checkbox_obrigatorio_desmarcado_e_recusado():
+    ok, erro, _ = validar_campos((CampoDef("aceite", "Aceite", "checkbox", obrigatorio=True),), {})
+    assert not ok and 'Marque o campo "Aceite"' in erro
+
+
+def test_partial_renderiza_checkbox_marcado_e_desmarcado():
+    tpl = templates.env.get_template("portal/_campos_dinamicos.html")
+    layout = Layout(origem="acessos", chave="teste", campos=_CHECK)
+    html = tpl.render(layout=layout, dados_form={"urgente": "Sim"})
+    assert 'type="checkbox" name="campo__urgente" value="Sim"' in html and "checked" in html
+    html = tpl.render(layout=layout, dados_form={})
+    assert 'name="campo__urgente"' in html and "checked" not in html
 
 
 def _perfil(departamento="RH", role="CLIENTE"):
