@@ -10,7 +10,7 @@
 > alertas; o worker (`Automação/`: `worker.py` + `flow.py`) continua executando nos sistemas
 > (M365, UBD, SAP, WMW, SIP). A v2 acrescenta funções, campos e um tipo de job.
 >
-> **Status:** 🔵 `Projetado` · **Criado em:** 2026-09-25 · **Atualizado em:** 2026-09-25 ·
+> **Status:** 🟡 `Em processo` (F1–F4 em código; F5 aguarda o spike F5.0) · **Criado em:** 2026-09-25 · **Atualizado em:** 2026-09-25 ·
 > **Origem:** brainstorming com o gestor (Osvaldo) após o desligamento parcial de Paola Kemel
 > (2026-09-24, etapa SAP ❌).
 
@@ -42,8 +42,8 @@ homologado conforme o DoD).
 | **F0** | Levantamento: schema da `regioes`, `IB_CO_REGIAO`, lista de equipes, usuário `PAOLAK`, e-mails dos gerentes, grupos de Gerência, API de líderes da UBD | — | — | 🟢 Pronto | 2026-09-25 | Só leitura (Seção 1); #2 resolvido na F0b: gerente = `U_IB_CodCom4` (V3 revisada) |
 | **F1** | Correção SAP: busca por `$filter`, bloqueio por `InternalKey`, código `PAOLAK`, colisão na criação | worker | — | 🟡 Em processo | 2026-09-25 | Resolve o caso Paola |
 | **F2** | Checkbox "Urgência" no desligamento + horário padrão 17h | portal | — | 🟡 Em processo | 2026-09-25 | Independente; pode ir junto com F1 |
-| **F3** | Perfil GERENTE; campos Equipe/Gerência correspondente; ocupar/devolver vaga na `IB_CO_REGIAO`; grupos de Gerência; contrato v2 | portal + worker | F0 | 🔵 Projetado | 2026-09-25 | Corrige o `RH2020` gravado em supervisor |
-| **F4** | Liderança na UBD na criação (representante, supervisor, interno); campo "Gerência responsável" | portal + worker | F0, F3 | 🔵 Projetado | 2026-09-25 | Corrige o `gestor_email` ignorado |
+| **F3** | Perfil GERENTE; campos Equipe/Gerência correspondente; ocupar/devolver vaga na `IB_CO_REGIAO`; grupos de Gerência; contrato v1 aditivo | portal + worker | F0 | 🟡 Em processo | 2026-09-25 | Código + testes; aguarda deploy (worker primeiro) e homologação |
+| **F4** | Liderança na UBD na criação (representante, supervisor, interno); campo "Gerência responsável" | portal + worker | F0, F3 | 🟡 Em processo | 2026-09-25 | Código + testes; envs `REGIOES_*` e política de SELECT na `regioes` pendentes |
 | **F5** | Job `SINCRONIZAR_LIDERANCA` diário e por evento; espelho com proteção | portal + worker | F4 | 🔵 Projetado | 2026-09-25 | Estreia em modo relatório |
 
 ### Detalhamento por item
@@ -65,14 +65,14 @@ homologado conforme o DoD).
 | F2 | Campo `urgente` + agendamento imediato | 🟡 Em processo |
 | F2 | Padrão 17h | 🟡 Em processo |
 | F2 | Selo "Urgente" no card | 🟡 Em processo |
-| F3 | Catálogo estático de equipes e gerências | 🔵 Projetado |
-| F3 | Formulário: perfil Gerente, campos `equipe` / `gerencia` | 🔵 Projetado |
-| F3 | Worker: `GERENTE`, grupos, `occupy_vacancy` / `release_vacancy` | 🔵 Projetado |
-| F3 | Contrato v2 (worker aceita 1 e 2 → portal emite 2) | 🔵 Projetado |
-| F4 | Leitura somente-SELECT da `regioes` no portal | 🔵 Projetado |
-| F4 | Campo "Gerência responsável" + mapa de gerentes | 🔵 Projetado |
-| F4 | `lideres_ubd` resolvido no clique do TI e exibido no card | 🔵 Projetado |
-| F4 | Worker envia `leaders` (novo e existente) | 🔵 Projetado |
+| F3 | Catálogo estático de equipes e gerências | 🟡 Em processo |
+| F3 | Formulário: perfil Gerente, campos `equipe` / `gerencia` | 🟡 Em processo |
+| F3 | Worker: `GERENTE`, grupos, `occupy_vacancy` / `release_vacancy` | 🟡 Em processo |
+| F3 | Contrato v1 aditivo (desvio da Seção 7: sem bump para `2`) | 🟡 Em processo |
+| F4 | Leitura somente-GET da `regioes` — **no worker**, só para confirmar (desvio da Seção 5) | 🟡 Em processo |
+| F4 | Campo "Gerência responsável" + mapa de gerentes | 🟡 Em processo |
+| F4 | Líderes resolvidos pelo worker (SAP) e exibidos na nota (`leaders_aplicados`/`avisos`) | 🟡 Em processo |
+| F4 | Worker envia `leaders` — só usuário novo (existente fica para a F5, após o spike) | 🟡 Em processo |
 | F5 | Migration `0092` (tipo novo, `chamado_id` nulo, RLS) | 🔵 Projetado |
 | F5 | Gatilho diário 06h + gatilho por evento com atraso | 🔵 Projetado |
 | F5 | `run_leadership_sync_flow` no worker | 🔵 Projetado |
@@ -450,6 +450,18 @@ enviado à UBD (`flow.py::_ubd` não passa `leaders`), nem quando o usuário já
 - **Card:** "Líderes na UBD: fulano@, beltrano@" ou "líderes não resolvidos — a sincronização
   diária aplica".
 
+### Desvio aplicado (2026-09-25, plano de implementação)
+
+Decisão do gestor na F0b: **a fonte dos líderes é o SAP** e a `regioes` só confirma. Por isso a
+resolução saiu do portal e foi para o **worker** (`flow.py::_resolver_lideres`), que já fala com
+o SAP: representante = e-mails dos PNs em `U_IB_CodCom3`/`U_IB_CodCom4` da região, confirmados
+por GET na `regioes` (`services/regioes.py`, envs `REGIOES_API_URL`/`REGIOES_API_KEY`); concorda
+⇒ aplica; sem leitura ⇒ aplica o do SAP com aviso; **diverge ⇒ não aplica** e avisa. Supervisor
+= gerentes das regiões da equipe. Portal não lê a `regioes` e o card não mostra os líderes antes
+da aprovação — a nota interna do **dry-run** mostra `leaders_previstos`. Líder só em usuário
+**novo** na UBD (o `PATCH` de líderes pode substituir a lista — F5.0). Falha de leitura ou líder
+inexistente/de outro e-mail na UBD ⇒ aviso, nunca aborta.
+
 ### Worker
 
 - Factory: `lideres_ubd` → `UserCreationData.ubd_leaders`; payload v1 com só `gestor_email`
@@ -526,6 +538,13 @@ Atualizar `docs/automacao_api.md` na F3 (mudanças da F2 são aditivas e não ex
 
 **Troca de versão sem janela quebrada:** (1) o worker passa a aceitar `versao_contrato` `1` e
 `2`; (2) o portal passa a emitir `2` e `/saude` devolve `"2"`.
+
+**Desvio aplicado na F3/F4 (2026-09-25, plano de implementação):** o contrato **continua
+`"1"`**, só com campos aditivos (`perfil: GERENTE`, `vaga`, etapas de vaga, `leaders_aplicados`/
+`avisos` nos `details` da UBD). A proteção vem da ordem de deploy — **worker primeiro** —: um
+worker antigo recebendo `GERENTE` ou supervisor sem `regiao` levanta `PayloadInvalido` e o job
+falha sem tocar em sistema. `lideres_ubd`/`lideres_nao_resolvidos` no payload **não** foram
+criados: a F4 resolve a liderança no worker (abaixo).
 
 ---
 
