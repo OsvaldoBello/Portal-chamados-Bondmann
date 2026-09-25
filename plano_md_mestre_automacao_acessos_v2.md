@@ -276,6 +276,23 @@ Ambíguo ⇒ FAILED.
 
 Sem mudança de contrato.
 
+### Ajustes da revisão final (2026-09-25)
+
+- **W1** — Reaproveitar usuário existente (`action == "atualizado"`) só faz `PATCH` de
+  `UserName/eMail/Superuser/Locked`; a senha antiga continua valendo. O worker não manda mais
+  `senha_sap` ao RH nesse caso — a etapa traz a nota "senha SAP existente mantida — redefinir
+  manualmente".
+- **W2** — `tolower(eMail)` nunca tinha sido validado contra o SAP real; a sondagem confirmou
+  400 ("Query string error - Not supported function"). `find_internal_user` agora, só nesse
+  caso, tenta de novo com `eMail eq '<minúsculo>'` sem cast.
+- **W3** — Parte dos códigos SAP antigos segue outra convenção (F0 #4): só o primeiro nome
+  (`JULIANA`, `THAIS`), sem a inicial do sobrenome. A busca por código agora também tenta o
+  primeiro nome sozinho, validado pelo `UserName` como os demais; "quase-acertos" (código bateu,
+  nome não) são citados na mensagem quando o desligamento não acha ninguém.
+- **Pendência:** o gestor ainda não decidiu se um "quase-acerto" (código de outra pessoa) deve
+  fazer a etapa de desligamento **FAILAR** em vez de manter "nada a bloquear" — por ora a regra
+  de 2026-09-15 continua valendo sem mudança.
+
 ---
 
 ## Seção 3 — F2: Urgência e desligamento às 17h
@@ -295,6 +312,17 @@ Sem mudança de contrato.
 - **Card:** selo **"Urgente — roda ao aprovar"** no resumo e no confirm do botão; sem
   urgência, mostra o horário agendado (17h).
 - **Detalhe do chamado:** "Urgência: Sim" pela rotulagem existente.
+
+### Desvios da revisão final (2026-09-25)
+
+- O motor de formulários grava o `checkbox` marcado como a string `VALOR_CHECKBOX_MARCADO`
+  ("Sim"), não `true`; a conversão para `bool` acontece ao montar o payload do job
+  (`app/domain/automacao.py`, `"urgente": str(dados.get("urgente") or "") == VALOR_CHECKBOX_MARCADO`).
+  O contrato do job (`payload["urgente"]`) continua `bool`, como documentado.
+- **Item em aberto:** o card só mostra "Execução liberada a partir de …" depois que a TI aprova
+  e o job nasce `NA_FILA` (`app/templates/workspace/atendimento.html`, `{% if job.status ==
+  'NA_FILA' %}`). Antes da aprovação não há job — o horário padrão de 17h (sem urgência) não é
+  exibido de antemão no card, só depois de aprovado.
 
 ---
 

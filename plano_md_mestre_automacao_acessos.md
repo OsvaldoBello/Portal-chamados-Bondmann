@@ -285,7 +285,8 @@ Regras:
 
 ### 4.4 O que **não** vira campo
 
-Grupos M365, times UBD, senha inicial, código de usuário SAP (`primeiro nome`), ramal SIP
+Grupos M365, times UBD, senha inicial, código de usuário SAP (`PRIMEIRONOME + inicial do
+último sobrenome`; primeiro nome sozinho aceito na busca de existentes), ramal SIP
 (sequencial) — tudo derivado pela automação. Menos campo = menos erro do RH.
 
 ---
