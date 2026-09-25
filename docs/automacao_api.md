@@ -138,7 +138,8 @@ pelo **portal** ao processar uma `CRIACAO` concluída (não vem do worker).
 | Campo | Tipo | Notas |
 |---|---|---|
 | `nome_completo`, `email`, `perfil` | | como acima |
-| `data_desligamento` | `YYYY-MM-DD` | informativo (o portal agendou às 18h desse dia) |
+| `data_desligamento` | `YYYY-MM-DD` | informativo (o portal agendou às 17h desse dia, ou imediato se `urgente`) |
+| `urgente` | bool | aditivo (sem bump de versão): o RH marcou "Urgência"; o portal já liberou o job no clique da TI — o worker não precisa fazer nada |
 | `regiao` | `{codigo, nome, completo}` \| null | região a transferir para RH2020 |
 | `motivo` | str | opcional no formulário; em branco o portal envia `"Encerramento de Contrato de Trabalho"` |
 | `encaminhar_para` | str | caixa que recebe os e-mails (regra de inbox) |

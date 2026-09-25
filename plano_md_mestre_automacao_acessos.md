@@ -281,6 +281,7 @@ Regras:
 | `motivo` | text | **não** (gestor, 2026-09-15) | — | em branco ⇒ "Encerramento de Contrato de Trabalho" (preenchido pelo portal no payload) |
 | `encaminhar_para` | email | sim | — | default `pedidos@bondmann.com.br`; SDR adiciona o 2º destinatário na automação |
 | `observacoes` | textarea | não | — | só TI |
+| `urgente` | checkbox | não | — | "Sim" ⇒ executa no clique da TI, ignorando a data (gestor, 2026-09-25) |
 
 ### 4.4 O que **não** vira campo
 
@@ -349,8 +350,9 @@ SUCCESS)`. `CANCELADO` pelo TI enquanto `NA_FILA`. Job `REVOGAR_LICENCA` nasce d
 vigente). Reexecução = job novo com `reexecucao_de` e `pular_etapas`.
 
 **Agendamento (decisões do gestor, 2026-09-14):** criação às 07h (Brasília) do dia útil
-anterior à `data_inicio` (feriados da tabela `feriados`); desligamento às 18h da
-`data_desligamento`; sem data ou data passada = imediato; simulação (dry-run) = imediato.
+anterior à `data_inicio` (feriados da tabela `feriados`); desligamento às **17h** da
+`data_desligamento` (gestor, 2026-09-25; antes 18h); com **urgência**, imediato; sem data ou
+data passada = imediato; simulação (dry-run) = imediato.
 
 **Conta no Portal de Chamados:** criada pelo próprio portal ao concluir uma CRIACAO
 (GoTrue Admin + `perfis` sob a RLS do aprovador) — a etapa sai do worker
