@@ -695,6 +695,23 @@ def test_card_com_pendencias_oferece_reexecucao(settings_automacao):
     assert 'value="reexecutar"' in html and "Executar do zero" in html
 
 
+def test_card_desligamento_urgente_mostra_selo_e_botao(settings_automacao):
+    repo = _RepoAcessos(subcategoria=ac.SUB_DESLIGAMENTO, dados={**DADOS_DESLIG, "urgente": "Sim"},
+                        status="EM_ATENDIMENTO", operador_id=OP)
+    with ws(repo, FakeAutomacaoRepo()) as c:
+        html = c.get("/workspace/chamados/c1").text
+    assert "Urgente — roda ao aprovar" in html
+    assert "Executar agora (urgente)" in html
+    assert "Sim — executa ao aprovar" in html
+
+
+def test_card_desligamento_sem_urgencia_nao_mostra_selo(settings_automacao):
+    repo = _RepoAcessos(subcategoria=ac.SUB_DESLIGAMENTO, dados=DADOS_DESLIG, status="EM_ATENDIMENTO", operador_id=OP)
+    with ws(repo, FakeAutomacaoRepo()) as c:
+        html = c.get("/workspace/chamados/c1").text
+    assert "Urgente — roda ao aprovar" not in html and "Executar automação" in html
+
+
 def test_executar_cria_job_na_fila_com_agendamento(settings_automacao):
     repo = _RepoAcessos(status="EM_ATENDIMENTO", operador_id=OP)
     arepo = FakeAutomacaoRepo()
@@ -719,6 +736,20 @@ def test_executar_simulacao_roda_ja(settings_automacao):
                headers={"X-CSRF-Token": t}, follow_redirects=False)
     job = arepo.criados[0]
     assert job["dry_run"] is True
+    assert job["executar_apos"] <= datetime.now(UTC) + timedelta(seconds=5)
+
+
+def test_executar_desligamento_urgente_roda_ja(settings_automacao):
+    repo = _RepoAcessos(subcategoria=ac.SUB_DESLIGAMENTO, dados={**DADOS_DESLIG, "urgente": "Sim"},
+                        status="EM_ATENDIMENTO", operador_id=OP)
+    arepo = FakeAutomacaoRepo()
+    with ws(repo, arepo) as c:
+        t = _csrf(c)
+        r = c.post("/workspace/chamados/c1/automacao/executar", data={"modo": "real"},
+                   headers={"X-CSRF-Token": t}, follow_redirects=False)
+    assert r.status_code == 303
+    job = arepo.criados[0]
+    assert job["tipo"] == "DESLIGAMENTO" and job["dry_run"] is False and job["payload"]["urgente"] is True
     assert job["executar_apos"] <= datetime.now(UTC) + timedelta(seconds=5)
 
 

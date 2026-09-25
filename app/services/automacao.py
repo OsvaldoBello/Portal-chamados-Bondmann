@@ -84,6 +84,7 @@ class CardAutomacao:
     pode_cancelar: bool
     pode_reexecutar: bool
     aviso: str
+    urgente: bool = False  # desligamento marcado como urgente pelo RH (roda ao aprovar)
 
 
 def montar_card(
@@ -104,9 +105,8 @@ def montar_card(
     ativo = bool(ultimo and ultimo["status"] in dom.STATUS_ATIVOS)
     tipo_ok = tipo in tipos_liberados(settings)
     resolvido = chamado.get("status") == "RESOLVIDO"
-    resumo = dom.resumo_payload(
-        ultimo["payload"] if ultimo else dom.montar_payload(tipo, dados, chamado)
-    )
+    payload_card = ultimo["payload"] if ultimo else dom.montar_payload(tipo, dados, chamado)
+    resumo = dom.resumo_payload(payload_card)
     aviso = ""
     if not settings.automacao_ativa:
         aviso = "Automação pausada (AUTOMACAO_ATIVA desligada) — jobs na fila esperam."
@@ -131,6 +131,7 @@ def montar_card(
         pode_cancelar=pode_cancelar,
         pode_reexecutar=pode_reexecutar,
         aviso=aviso,
+        urgente=bool(payload_card.get("urgente")),
     )
 
 
