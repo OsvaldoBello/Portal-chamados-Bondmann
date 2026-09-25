@@ -347,10 +347,16 @@ async def processar_resultado(
     except Exception:  # noqa: BLE001
         log.exception("[AUTOMACAO] nota interna não gravada (job %s)", job.get("id"))
 
-    # 3) Mensagem ao RH — não em FALHOU (a TI assume manualmente) nem em REVOGAR_LICENCA.
-    publica = status_final in (dom.STATUS_CONCLUIDO, dom.STATUS_COM_PENDENCIAS) and tipo != dom.TIPO_REVOGAR_LICENCA
+    # 3) Mensagem ao RH — não em FALHOU (a TI assume manualmente), nem em
+    # REVOGAR_LICENCA, nem em simulação (gestor, 2026-09-25: o dry-run é da TI;
+    # a mensagem pública ainda levava o chamado para "Resposta do cliente").
+    publica = (
+        status_final in (dom.STATUS_CONCLUIDO, dom.STATUS_COM_PENDENCIAS)
+        and tipo != dom.TIPO_REVOGAR_LICENCA
+        and not dry_run
+    )
     if publica:
-        credenciais = dom.filtrar_credenciais(credenciais_brutas) if not dry_run else []
+        credenciais = dom.filtrar_credenciais(credenciais_brutas)
         if portal_msg and status_final == dom.STATUS_CONCLUIDO:
             credenciais.append(("Portal de Chamados", "conta criada — primeiro acesso por \"Esqueci minha senha\""))
         texto = dom.texto_mensagem_publica(job, etapas, credenciais, status_final)

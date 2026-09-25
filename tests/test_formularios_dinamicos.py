@@ -242,6 +242,14 @@ def test_titulo_e_descricao_automaticos_criacao_e_desligamento():
     )
     assert titulo == "Desligamento de acessos — João Pedro Souza (Representante)"
     assert "2026-09-30" in descricao
+    assert "Urgência" not in descricao
+
+    _, descricao = ac.titulo_e_descricao_automaticos(
+        ac.SUB_DESLIGAMENTO,
+        {"nome_completo": "João Pedro Souza", "perfil": ac.PERFIL_REPRESENTANTE,
+         "email": "joao.souza@bondmann.com.br", "data_desligamento": "2026-09-30", "urgente": "Sim"},
+    )
+    assert "Urgência: SIM — executar assim que a TI aprovar (ignora a data)" in descricao
     assert ac.titulo_e_descricao_automaticos("Outra", {}) == ("", "")
 
 

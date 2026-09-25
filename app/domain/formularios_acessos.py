@@ -269,6 +269,8 @@ def titulo_e_descricao_automaticos(
             f"E-mail: {dados.get('email') or '—'}",
             f"Data do desligamento: {dados.get('data_desligamento') or '—'}",
         ]
+        if dados.get("urgente"):
+            partes.append("Urgência: SIM — executar assim que a TI aprovar (ignora a data)")
     else:
         return "", ""
     if nome:

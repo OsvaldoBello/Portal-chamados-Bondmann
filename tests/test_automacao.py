@@ -532,8 +532,11 @@ def test_processar_dry_run_nao_resolve_nem_cria_conta(settings_automacao, monkey
     adm = _Admin(monkeypatch)
     etapas = [{"nome": "M365", "status": "SUCCESS", "erro": None, "detalhes": {}}]
     _run(svc.processar_resultado(_job(dry_run=True), etapas, {"senha_temporaria_m365": "x"}, None, settings=settings_automacao))
-    publicas = [m for m in adm.mensagens if not m[3]]
-    assert publicas and "Simulação" in publicas[0][2] and "x" not in publicas[0][2].split("Simulação")[0]
+    # Simulação (gestor, 2026-09-25): só a nota interna para a TI — nada para o
+    # RH (mensagem pública mudava o status para "Resposta do cliente").
+    assert [m for m in adm.mensagens if not m[3]] == []
+    internas = [m for m in adm.mensagens if m[3]]
+    assert len(internas) == 1 and "SIMULAÇÃO" in internas[0][2].upper()
     assert adm.resolvidos == []
     assert not any("Portal de Chamados Bondmann" in m[2] for m in adm.mensagens if m[3])
 
