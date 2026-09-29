@@ -63,7 +63,10 @@ def _job_publico(job: dict[str, Any]) -> dict[str, Any]:
         "tipo": job["tipo"],
         "dry_run": bool(job.get("dry_run")),
         "tentativa": int(job.get("tentativas") or 0),
-        "chamado": {"id": str(job["chamado_id"]), "codigo": job.get("chamado_codigo") or ""},
+        "chamado": (
+            {"id": str(job["chamado_id"]), "codigo": job.get("chamado_codigo") or ""}
+            if job.get("chamado_id") else None
+        ),
         "payload": job["payload"],
     }
 

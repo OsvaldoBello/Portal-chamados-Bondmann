@@ -404,6 +404,18 @@ def test_api_proximo_entrega_job(settings_automacao, monkeypatch):
     }
 
 
+def test_api_entrega_sync_sem_chamado(settings_automacao, monkeypatch):
+    async def _claim(worker_id, tipos):
+        return {"id": "s1", "tipo": "SINCRONIZAR_LIDERANCA", "dry_run": False, "tentativas": 1,
+                "chamado_id": None, "chamado_codigo": None, "payload": {"modo": "relatorio"}}
+
+    monkeypatch.setattr(settings_automacao, "automacao_tipos", "SINCRONIZAR_LIDERANCA")
+    monkeypatch.setattr(repo_admin, "admin_claim_proximo", _claim)
+    with api_client() as c:
+        r = c.post("/api/automacao/jobs/proximo", headers=_h())
+    assert r.status_code == 200 and r.json()["chamado"] is None
+
+
 def test_api_heartbeat_409_quando_job_nao_e_do_worker(settings_automacao, monkeypatch):
     async def _hb(job_id, worker_id, etapa):
         return worker_id == "dono"

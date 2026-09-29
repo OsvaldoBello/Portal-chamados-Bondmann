@@ -81,3 +81,47 @@ async def test_gerenciados_so_pela_conexao_administrativa(conn: asyncpg.Connecti
         async with savepoint(c):
             with pytest.raises(asyncpg.InsufficientPrivilegeError):
                 await c.fetch("SELECT email FROM automacao_lideranca_gerenciada")
+
+
+from app.repositories import automacao as repo_admin  # noqa: E402
+
+
+@pytest.fixture
+def admin_na_transacao(conn, monkeypatch):
+    """`admin_*` rodando na conexão do teste (mesma transação, rollback no fim)."""
+
+    @asynccontextmanager
+    async def _fixa():
+        yield conn
+
+    monkeypatch.setattr(repo_admin, "admin_connection", _fixa)
+    return conn
+
+
+async def test_fila_entrega_finaliza_e_trava_sync_sem_chamado(admin_na_transacao, seed: Seed):
+    conn = admin_na_transacao
+    if not await _aplicada(conn):
+        pytest.skip("0093 não aplicada neste banco")
+    await conn.execute("UPDATE automacao_jobs SET status = 'CANCELADO' WHERE status IN ('NA_FILA', 'EXECUTANDO')")
+    novo = await repo_admin.admin_agendar_job(
+        chamado_id=None, tipo="SINCRONIZAR_LIDERANCA", payload={"modo": "relatorio"},
+        executar_apos=repo_admin.agora_utc(), aprovado_por=None,
+    )
+    assert novo is not None and novo["chamado_id"] is None
+    job = await repo_admin.admin_claim_proximo("w-e2e", ["SINCRONIZAR_LIDERANCA"])
+    assert job["id"] == novo["id"] and job["chamado_codigo"] is None
+    await conn.execute("UPDATE automacao_jobs SET heartbeat_at = now() - interval '2 hours' WHERE id = $1", job["id"])
+    assert [j["id"] for j in await repo_admin.admin_jobs_travados(60)] == [job["id"]]
+    fim = await repo_admin.admin_finalizar(str(job["id"]), "w-e2e", status="CONCLUIDO", resultado=[], erro=None)
+    assert fim["status"] == "CONCLUIDO" and fim["chamado_codigo"] is None
+    assert await repo_admin.admin_ultima_sync_criada_em() is not None
+
+
+async def test_lideres_gerenciados_acumulam(admin_na_transacao, seed: Seed):
+    conn = admin_na_transacao
+    if not await _aplicada(conn):
+        pytest.skip("0093 não aplicada neste banco")
+    await repo_admin.admin_registrar_lideres_comerciais(["Sup.Um@bondmann.com.br", "ger@bondmann.com.br"])
+    await repo_admin.admin_registrar_lideres_comerciais(["ger@bondmann.com.br"])
+    emails = await repo_admin.admin_lideres_gerenciados()
+    assert {"sup.um@bondmann.com.br", "ger@bondmann.com.br"} <= set(emails)
