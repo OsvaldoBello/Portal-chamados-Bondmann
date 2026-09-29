@@ -301,6 +301,84 @@ async def _email_alerta_ti(settings: Settings, assunto: str, corpo: str) -> None
             log.warning("[AUTOMACAO] alerta por e-mail para %s falhou: %s", para, type(exc).__name__)
 
 
+async def agendar_sincronizacao(
+    settings: Settings,
+    *,
+    executar_apos: datetime,
+    origem_job: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Enfileira uma sincronização de liderança (v2, F5). ``None`` se o tipo
+    não está liberado em AUTOMACAO_TIPOS (senão a fila vencida dispararia o
+    alerta de worker mudo) ou se já há uma ativa (índice da 0093)."""
+    if dom.TIPO_SINCRONIZAR_LIDERANCA not in tipos_liberados(settings):
+        log.info("[AUTOMACAO] sincronização de liderança não enfileirada: tipo não liberado")
+        return None
+    gerenciados = await repo_admin.admin_lideres_gerenciados()
+    origem = (
+        {"id": str(origem_job["chamado_id"]), "codigo": origem_job.get("chamado_codigo") or ""}
+        if origem_job and origem_job.get("chamado_id") else None
+    )
+    payload = dom.montar_payload_sync(settings.automacao_sync_modo, gerenciados, origem)
+    job = await repo_admin.admin_agendar_job(
+        chamado_id=None,
+        tipo=dom.TIPO_SINCRONIZAR_LIDERANCA,
+        payload=payload,
+        executar_apos=executar_apos,
+        aprovado_por=(str(origem_job["aprovado_por"]) if origem_job and origem_job.get("aprovado_por") else None),
+    )
+    if job is None:
+        # Índice único da 0093: já há uma sync NA_FILA/EXECUTANDO. Se ela ainda
+        # está na fila, lê o SAP de agora e cobre a mudança; se já executa, a
+        # mudança só entra na próxima diária — por isso o log.
+        if origem:
+            log.warning(
+                "[AUTOMACAO] sincronização de liderança do chamado %s NÃO enfileirada: já há uma ativa "
+                "(se ela já estiver executando, a mudança entra na próxima diária)",
+                origem["codigo"] or origem["id"],
+            )
+        else:
+            log.info("[AUTOMACAO] sincronização de liderança não enfileirada: já há uma ativa")
+    return job
+
+
+async def processar_resultado_sync(
+    job: dict[str, Any], etapas: list[dict[str, Any]], *, settings: Settings
+) -> None:
+    """Resultado da sincronização: histórico de comerciais, nota no chamado de
+    origem (evento) e e-mail do relatório (sempre no modo relatório). Cada
+    efeito é isolado: falha num não impede os demais."""
+    detalhes = dom.detalhes_sync(etapas)
+    if not isinstance(detalhes, dict):
+        detalhes = {}
+    status_final = str(job["status"])
+    status_label = dom.STATUS_LABEL.get(status_final, status_final)
+    comerciais = detalhes.get("lideres_comerciais")
+    if isinstance(comerciais, list) and comerciais:
+        try:
+            await repo_admin.admin_registrar_lideres_comerciais([str(e) for e in comerciais])
+        except Exception:  # noqa: BLE001
+            log.exception("[AUTOMACAO] líderes comerciais não registrados (job %s)", job.get("id"))
+    try:
+        texto = dom.texto_relatorio_sync(job, etapas, status_final, erro_geral=job.get("erro"))
+    except Exception:  # noqa: BLE001
+        log.exception("[AUTOMACAO] relatório da sync não montado (job %s)", job.get("id"))
+        texto = (
+            f"Sincronização de liderança na UBD — Status: {status_label}. O relatório não pôde ser "
+            f"montado (job {job.get('id')}); confira os logs do portal."
+        )
+    origem = (job.get("payload") or {}).get("chamado") or {}
+    if isinstance(origem, dict) and origem.get("id") and job.get("aprovado_por"):
+        try:
+            await repo_admin.admin_gravar_mensagem(str(origem["id"]), str(job["aprovado_por"]), texto, interna=True)
+        except Exception:  # noqa: BLE001
+            log.exception("[AUTOMACAO] relatório da sync não anotado no chamado %s", origem.get("codigo"))
+    try:
+        if dom.sync_precisa_alerta(status_final, detalhes):
+            await _email_alerta_ti(settings, f"[Automação de acessos] Sincronização de liderança — {status_label}", texto)
+    except Exception:  # noqa: BLE001
+        log.exception("[AUTOMACAO] alerta da sync não enviado (job %s)", job.get("id"))
+
+
 async def processar_resultado(
     job: dict[str, Any],
     etapas: list[dict[str, Any]],
@@ -312,6 +390,9 @@ async def processar_resultado(
     """Efeitos do resultado já persistido em `automacao_jobs` (ver docstring
     do módulo). Cada efeito é isolado: falha num não impede os demais."""
     settings = settings or get_settings()
+    if str(job.get("tipo")) == dom.TIPO_SINCRONIZAR_LIDERANCA:
+        await processar_resultado_sync(job, etapas, settings=settings)
+        return
     chamado_id = str(job["chamado_id"])
     codigo = job.get("chamado_codigo") or ""
     remetente = str(job["aprovado_por"])
@@ -418,6 +499,18 @@ async def processar_resultado(
             ),
         )
 
+    # 7) Troca de supervisor/gerente mexe na liderança de muitos usuários:
+    #    sincronização por evento (v2, F5), depois de a `regioes` se atualizar.
+    if dom.dispara_sync_por_evento(job, etapas):
+        try:
+            await agendar_sincronizacao(
+                settings,
+                executar_apos=datetime.now(UTC) + timedelta(minutes=settings.automacao_sync_atraso_min),
+                origem_job=job,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("[AUTOMACAO] sincronização por evento não agendada (job %s)", job.get("id"))
+
 
 # --------------------------------------------------------------------------
 # Vigilância (lifespan)
@@ -437,22 +530,40 @@ async def vigiar_uma_vez(settings: Settings) -> None:
         if not atualizado:
             continue
         log.warning("[AUTOMACAO] job %s travado → %s", job["id"], "NA_FILA" if requeue else "FALHOU")
-        try:
-            await repo_admin.admin_gravar_mensagem(
-                str(job["chamado_id"]), str(job["aprovado_por"]),
-                f"Automação: {motivo}. "
-                + ("O job voltou para a fila e será tentado de novo." if requeue
-                   else "Marcado como FALHOU — desligamento pela metade exige conferência manual antes de repetir."),
-                interna=True,
-            )
-        except Exception:  # noqa: BLE001
-            log.exception("[AUTOMACAO] nota de job travado não gravada")
+        if job.get("chamado_id"):
+            try:
+                await repo_admin.admin_gravar_mensagem(
+                    str(job["chamado_id"]), str(job["aprovado_por"]),
+                    f"Automação: {motivo}. "
+                    + ("O job voltou para a fila e será tentado de novo." if requeue
+                       else "Marcado como FALHOU — desligamento pela metade exige conferência manual antes de repetir."),
+                    interna=True,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("[AUTOMACAO] nota de job travado não gravada")
+        link = f"{site}/workspace/chamados/{job['chamado_id']}" if job.get("chamado_id") else (
+            "(sincronização de liderança — sem chamado)"
+        )
+        assunto = (
+            f"[Automação de acessos] Execução travada no chamado {job.get('chamado_codigo') or ''}"
+            if job.get("chamado_id") else "[Automação de acessos] Sincronização de liderança travada"
+        )
         await _email_alerta_ti(
             settings,
-            f"[Automação de acessos] Execução travada no chamado {job.get('chamado_codigo') or ''}",
+            assunto,
             f"{motivo}.\n\n{'Voltou para a fila automaticamente.' if requeue else 'Precisa de conferência manual.'}\n\n"
-            f"{site}/workspace/chamados/{job['chamado_id']}\n",
+            f"{link}\n",
         )
+    # (c) sincronização diária de liderança (v2, F5)
+    try:
+        agora_sync = datetime.now(UTC)
+        if dom.TIPO_SINCRONIZAR_LIDERANCA in tipos_liberados(settings) and dom.sync_diaria_devida(
+            agora_sync, settings.automacao_sync_hora, await repo_admin.admin_ultima_sync_criada_em()
+        ):
+            if await agendar_sincronizacao(settings, executar_apos=agora_sync):
+                log.info("[AUTOMACAO] sincronização diária de liderança enfileirada")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[AUTOMACAO] sincronização diária não enfileirada: %s", exc)
     # (b) worker mudo com fila vencida
     vencida_desde = await repo_admin.admin_fila_vencida_desde()
     if vencida_desde is None:

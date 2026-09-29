@@ -62,6 +62,11 @@ Valor acordado com o gestor: `osvaldo.bello@bondmann.com.br,giordano.burtet@bond
 4. **Pré-requisito on-prem (F3a)** — ver Seção 3.1. O entrypoint faz um
    self-check no boot e loga `SAP alcançável via túnel: … respondeu HTTP 4xx`
    (qualquer código HTTP prova alcance) ou `SAP INALCANÇÁVEL via túnel`.
+5. **F5 (sincronização de liderança na UBD)** — ordem obrigatória: deploy do
+   **worker** primeiro (o tipo `SINCRONIZAR_LIDERANCA` não existe até o merge
+   dele) → aplicar as migrations **`0092`** e depois **`0093`** em produção
+   (Supabase, SQL Editor) → deploy do **portal** → só então incluir
+   `SINCRONIZAR_LIDERANCA` em `AUTOMACAO_TIPOS` do portal (ver Seção 4.1).
 
 ### 3.1 Túnel Tailscale até o SAP (passo a passo)
 
@@ -122,6 +127,78 @@ O mesmo `Dockerfile` roda numa VM on-prem (plano B): `docker run --env-file .env
   vigilância do portal avisa a TI por e-mail após 30 min sem contato em horário
   comercial.
 
+### 4.1 Sincronização de liderança na UBD (v2, F5)
+
+Mantém a liderança de representantes e supervisores na UBD igual à do SAP.
+Job sem chamado dono (`chamado_id` nulo — CHECK da migration `0093`); não
+aparece no card de nenhum chamado, só nota interna (quando por evento) e
+e-mail.
+
+- **Gatilhos**: diário, a partir das **06h Brasília** (`AUTOMACAO_SYNC_HORA`,
+  env do portal, default 6) se nenhuma sync foi criada no dia; **por
+  evento**, `AUTOMACAO_SYNC_ATRASO_MIN` (env do portal, default 60) depois de
+  um job **real** de CRIACAO/DESLIGAMENTO de SUPERVISOR/GERENTE concluir a
+  etapa de vaga com `SUCCESS` (tempo para a `regioes` se atualizar em lote).
+- **Modo**: `AUTOMACAO_SYNC_MODO` (env do portal, default `relatorio`) —
+  `relatorio` só lê a UBD (`PATCH {}`), nunca grava; `aplicar` grava de
+  verdade (`PATCH {"leaders": [...]}`).
+- **Gate**: só entra em ação com `SINCRONIZAR_LIDERANCA` incluído em
+  `AUTOMACAO_TIPOS` (portal) — sem isso a vigilância nem enfileira (evita o
+  alerta de "worker mudo" por fila vencida). `WORKER_TIPOS` do worker (Seção
+  2) vazio já aceita o tipo assim que o portal liberar; não precisa mexer
+  nele para ligar a sync.
+- **Relatório**: sempre por e-mail a `AUTOMACAO_ALERTA_EMAIL` no modo
+  `relatorio` (o gestor revisa); no modo `aplicar` só com falha, não
+  encontrados, divergências ou erros. Quando é por evento, o mesmo texto
+  também vira nota interna no chamado que disparou.
+- **Desligar rápido**: tirar `SINCRONIZAR_LIDERANCA` de `AUTOMACAO_TIPOS`, ou
+  voltar `AUTOMACAO_SYNC_MODO` para `relatorio` (mantém a leitura/relatório,
+  para de gravar na UBD).
+- **Evento com sync já ativa**: só existe **uma** sync `NA_FILA`/`EXECUTANDO`
+  por vez (índice da `0093`). O evento que chega nessa hora não enfileira
+  outra — o portal registra `sincronização de liderança do chamado BD-… NÃO
+  enfileirada: já há uma ativa` (warning) no log. Se a ativa ainda está na
+  fila, ela lê o SAP de agora e cobre a mudança; se já está executando, a
+  mudança entra na próxima diária.
+- **Como o worker calcula (duas fases)**: primeiro **lê e calcula todos** os
+  alvos (líderes atuais por `PATCH {}`, esperados, lista nova); só depois,
+  com `aplicar`, grava os que mudaram. Se a leitura quebrar no meio
+  (`LeituraLiderancaIndisponivel`), a etapa falha **antes de qualquer
+  gravação**. Falha ao gravar um alvo vira `erros` ("gravação falhou: …") e
+  ele **não** aparece em `corrigidos`; os demais seguem.
+- **Líder desligado**: o desligamento inativa a conta na UBD. Para **remover**
+  um líder gerenciado a sync aceita a conta inativa (id + e-mail idêntico);
+  para **pôr** alguém como líder, ou para mexer na liderança de um alvo, a
+  conta precisa estar ativa (inativo ⇒ aviso "não encontrado" / lista
+  `nao_encontrados`).
+- **Histórico de líderes gerenciados** (`automacao_lideranca_gerenciada`, só
+  `admin_connection`): a tabela **só cresce**. Quem aparecer uma vez em
+  `U_IB_CodCom3`/`U_IB_CodCom4` de qualquer região passa a ser removível
+  por ela para sempre — inclusive onde tiver sido posto **à mão** como líder
+  fora da sua região (ex.: um supervisor que também lidera à mão alguém de
+  outra equipe perde essa liderança na próxima sync `aplicar`). Para tirar
+  alguém do histórico: `DELETE FROM automacao_lideranca_gerenciada WHERE
+  email = '…'` pela conexão administrativa (SQL Editor do Supabase), **com
+  cuidado** — confira antes que a pessoa não é mais supervisor/gerente no
+  SAP, senão ela volta na próxima sync.
+- **Antes de trocar para `AUTOMACAO_SYNC_MODO=aplicar`** — conferências de
+  homologação (uma vez, com um usuário de teste na UBD; registrar o
+  resultado no plano mestre do worker):
+  1. `PATCH {}` num usuário **sem** líderes devolve `leader_ids: []` (e não
+     omite o campo — senão toda sync para com `LeituraLiderancaIndisponivel`);
+  2. a busca v2 (`/workspace/v2/users?email__eq=`) devolve usuários
+     **inativos**, e com qual valor de `active` — se não devolver, líder
+     desligado nunca é removido (remover à mão; follow-up: guardar o id da
+     UBD no histórico);
+  3. o `PATCH {"leaders": [...]}` aceita a lista **sem** o id inativo e
+     aceita **manter** ids inativos postos à mão;
+  4. `PATCH {}` não altera `updated_at`/auditoria nem dispara notificação ao
+     usuário.
+
+Contrato completo: [`docs/automacao_api.md`](automacao_api.md), seção
+`SINCRONIZAR_LIDERANCA (v2, F5)`. Desenho: `plano_md_mestre_automacao_acessos_v2.md`,
+Seção 6.
+
 ## 5. Diagnóstico
 
 | Sintoma (log/card) | Causa provável | Ação |
@@ -137,6 +214,11 @@ O mesmo `Dockerfile` roda numa VM on-prem (plano B): `docker run --env-file .env
 | Job `FALHOU` com "worker parou no meio" | worker reiniciado/derrubado durante o job | criação: o portal reenfileira uma vez; desligamento: **não** reenfileira — conferir nos sistemas o que foi feito antes de reexecutar |
 | `Job abortado: … heartbeat 409` | vigilância do portal deu o job como morto (worker travou > 15 min) ou job cancelado | nada a fazer no worker; ver o card |
 | Handshake ok mas nada roda | `AUTOMACAO_ATIVA=false`, ou `AUTOMACAO_TIPOS`/`WORKER_TIPOS` sem interseção, ou `executar_apos` no futuro | ver `/saude` (`ativa`, `tipos`, `fila`) e a data agendada no card |
+| Sincronização de liderança travada / relatório parou de chegar | o índice `ux_automacao_jobs_sync_ativo` (0093) permite só **uma** sync ativa (`NA_FILA`/`EXECUTANDO`) por vez; se travou, a vigilância a marca como job travado (heartbeat vencido) e alerta por e-mail **sem link de chamado** (ela não tem um) | ler o alerta; se precisar parar até investigar, tirar `SINCRONIZAR_LIDERANCA` de `AUTOMACAO_TIPOS` (Seção 4.1) |
+| Etapa "UBD Learning.rocks - Sincronização de Liderança" `FAILED` com "a UBD não devolveu leader_ids" | comportamento do `PATCH {}` de leitura mudou (`LeituraLiderancaIndisponivel`) — a etapa **inteira** falha e **nada é gravado** nesta execução: a leitura de todos os alvos vem antes de qualquer gravação (nunca é tratado como lista vazia) | não é pendência parcial: investigar a API da UBD antes de qualquer coisa; o próximo gatilho (diário ou por evento) tenta de novo sozinho |
+| Um e-mail aparece em `erros` mas outro em `avisos` no relatório da sync | `erros` = falha ao consultar, ler ou gravar **um alvo** (usuário sendo verificado; "gravação falhou: …" = leu e calculou, mas o `PATCH` não confirmou — ele não está em `corrigidos`) — os demais alvos continuam normalmente. `avisos` tem **duas** origens: (1) "falha ao consultar X na UBD — não removido nesta execução" = a busca de **um líder gerenciado** (supervisor/gerente) falhou — esse líder não é removido de ninguém nesta execução; (2) "líder X não encontrado na UBD" = **um líder esperado** não existe na UBD, está inativo ou o e-mail não bate — ele não é posto como líder de ninguém (o outro líder esperado, se houver, é aplicado) | normal quando isolado; só investigar se repetir sempre para o mesmo e-mail (no caso 2, conferir o e-mail do PN no SAP × a conta na UBD) |
+| Representante/supervisor não aparece em `corrigidos` nem em `nao_encontrados` | **normal**: a liderança dele na UBD já está certa (só aparece quem precisou mudar ou não foi achado) | procurar o e-mail na lista `divergentes` — só se estiver lá é que ficou **fora do cálculo** (a região dele diverge entre o SAP e a `regioes`): conferir `IB_CO_REGIAO` no SAP × a `regioes`; a sincronização volta a incluir a pessoa quando as duas baterem |
+| Supervisor/gerente desligado continua líder de alguém na UBD depois de uma sync `aplicar` | a busca v2 da UBD não devolveu a conta inativa (conferência 2 da Seção 4.1), ou o e-mail dele não bate, ou ele nunca entrou no histórico de gerenciados | remover à mão na UBD; registrar no plano mestre (follow-up: guardar o id da UBD no histórico) |
 
 Logs: Railway → serviço → *Logs*. Cada linha JSON tem `job_id`, `chamado`,
 `tipo`, `worker`. Senhas nunca aparecem (redação no logger + mascaramento antes
@@ -157,11 +239,12 @@ do envio); se aparecer alguma, é bug — abrir chamado para a TI.
 
 ## 7. Limitações conhecidas (2026-09-15)
 
-- **Subnet router provisório**: hoje é o notebook do gestor (`sap-subnet-router`,
-  Windows). Se ele desligar/sair da rede, só as etapas SAP falham (`FAILED`),
-  o resto segue. Antes do rollout ao RH (F5), repetir a Seção 3.1-A num
-  servidor sempre ligado, aprovar a rota nele e remover a máquina antiga do
-  console (a ACL e a auth key não mudam).
+- **Subnet router**: `sap-router-vm` (VM Windows, `10.151.4.10`, mesma rede
+  do SAP `10.151.4.40`), tag `tag:sap-router`, *key expiry* desligada —
+  anuncia a rota `10.151.4.40/32` primária. O notebook do gestor
+  (`sap-subnet-router`) não anuncia mais a rota. **Plano de volta**: se a VM
+  cair, remarcar a rota `10.151.4.40/32` no notebook pelo console admin do
+  Tailscale (a ACL e a auth key do worker não mudam).
 
 - **Estoque de licenças SAP** (`sap_licenses.json`) é um arquivo local — num
   container é efêmero e reseta a cada deploy. A checagem "sem estoque = etapa

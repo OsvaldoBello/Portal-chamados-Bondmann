@@ -150,7 +150,8 @@ def get_automacao_repo() -> AutomacaoRepo:
 # --------------------------------------------------------------------------
 async def admin_claim_proximo(worker_id: str, tipos: list[str]) -> dict[str, Any] | None:
     """Pega UM job vencido da fila, atomicamente (``FOR UPDATE SKIP LOCKED``):
-    dois workers nunca levam o mesmo job."""
+    dois workers nunca levam o mesmo job. Job sem chamado (sincronização de
+    liderança, v2 F5) sai com ``chamado_codigo = None``."""
     if not tipos:
         return None
     async with admin_connection() as conn:
@@ -163,13 +164,16 @@ async def admin_claim_proximo(worker_id: str, tipos: list[str]) -> dict[str, Any
                      ORDER BY executar_apos, created_at
                      FOR UPDATE SKIP LOCKED
                      LIMIT 1
+                ), pego AS (
+                    UPDATE automacao_jobs a
+                       SET status = 'EXECUTANDO', worker_id = $1, claimed_at = now(),
+                           heartbeat_at = now(), tentativas = tentativas + 1, etapa_atual = NULL
+                      FROM proximo
+                     WHERE a.id = proximo.id
+                 RETURNING a.*
                 )
-                UPDATE automacao_jobs j
-                   SET status = 'EXECUTANDO', worker_id = $1, claimed_at = now(),
-                       heartbeat_at = now(), tentativas = tentativas + 1, etapa_atual = NULL
-                  FROM proximo, chamados c
-                 WHERE j.id = proximo.id AND c.id = j.chamado_id
-             RETURNING {_COLUNAS}, c.codigo AS chamado_codigo""",
+                SELECT {_COLUNAS}, c.codigo AS chamado_codigo
+                  FROM pego j LEFT JOIN chamados c ON c.id = j.chamado_id""",
             worker_id,
             tipos,
         )
@@ -205,15 +209,17 @@ async def admin_finalizar(
     faz nada e devolve ``None``)."""
     async with admin_connection() as conn:
         row = await conn.fetchrow(
-            f"""UPDATE automacao_jobs j
-                   SET status = $3::automacao_status, resultado = $4::jsonb, erro = $5,
-                       finalizado_em = now(), heartbeat_at = now(), etapa_atual = NULL
-                  FROM chamados c
-                 WHERE j.id = $1::uuid AND j.worker_id = $2 AND j.status = 'EXECUTANDO'
-                   AND c.id = j.chamado_id
-             RETURNING {_COLUNAS}, c.codigo AS chamado_codigo, c.titulo AS chamado_titulo,
+            f"""WITH fim AS (
+                    UPDATE automacao_jobs
+                       SET status = $3::automacao_status, resultado = $4::jsonb, erro = $5,
+                           finalizado_em = now(), heartbeat_at = now(), etapa_atual = NULL
+                     WHERE id = $1::uuid AND worker_id = $2 AND status = 'EXECUTANDO'
+                 RETURNING *
+                )
+                SELECT {_COLUNAS}, c.codigo AS chamado_codigo, c.titulo AS chamado_titulo,
                        c.cliente_id AS chamado_cliente_id, c.operador_id AS chamado_operador_id,
-                       c.status::text AS chamado_status, c.departamento_id AS chamado_departamento_id""",
+                       c.status::text AS chamado_status, c.departamento_id AS chamado_departamento_id
+                  FROM fim j LEFT JOIN chamados c ON c.id = j.chamado_id""",
             job_id,
             worker_id,
             status,
@@ -276,15 +282,17 @@ async def admin_registrar_historico(
 
 async def admin_agendar_job(
     *,
-    chamado_id: str,
+    chamado_id: str | None,
     tipo: str,
     payload: dict[str, Any],
     executar_apos: datetime,
-    aprovado_por: str,
+    aprovado_por: str | None,
     reexecucao_de: str | None = None,
 ) -> dict[str, Any] | None:
     """Job criado pelo próprio portal (ex.: REVOGAR_LICENCA ao concluir um
-    desligamento). ``None`` se já existe um ativo do mesmo tipo."""
+    desligamento). ``None`` se já existe um ativo do mesmo tipo.
+    ``chamado_id``/``aprovado_por`` só ficam vazios na sincronização de
+    liderança (CHECK da 0093)."""
     async with admin_connection() as conn:
         try:
             row = await conn.fetchrow(
@@ -315,7 +323,7 @@ async def admin_jobs_travados(timeout_s: float) -> list[dict[str, Any]]:
     async with admin_connection() as conn:
         rows = await conn.fetch(
             f"""SELECT {_COLUNAS}, c.codigo AS chamado_codigo
-                  FROM automacao_jobs j JOIN chamados c ON c.id = j.chamado_id
+                  FROM automacao_jobs j LEFT JOIN chamados c ON c.id = j.chamado_id
                  WHERE j.status = 'EXECUTANDO'
                    AND COALESCE(j.heartbeat_at, j.claimed_at) < now() - ($1::float * interval '1 second')""",
             timeout_s,
@@ -326,28 +334,22 @@ async def admin_jobs_travados(timeout_s: float) -> list[dict[str, Any]]:
 async def admin_marcar_travado(job_id: str, motivo: str, *, requeue: bool) -> dict[str, Any] | None:
     """Vigilância: job morto vira FALHOU — ou volta pra fila (``requeue``)
     mantendo ``tentativas`` (o claim incrementa de novo)."""
+    if requeue:
+        mudanca = "status = 'NA_FILA', worker_id = NULL, claimed_at = NULL, heartbeat_at = NULL, etapa_atual = NULL, erro = $2"
+    else:
+        mudanca = "status = 'FALHOU', erro = $2, finalizado_em = now(), etapa_atual = NULL"
     async with admin_connection() as conn:
-        if requeue:
-            row = await conn.fetchrow(
-                f"""UPDATE automacao_jobs j
-                       SET status = 'NA_FILA', worker_id = NULL, claimed_at = NULL,
-                           heartbeat_at = NULL, etapa_atual = NULL, erro = $2
-                      FROM chamados c
-                     WHERE j.id = $1::uuid AND j.status = 'EXECUTANDO' AND c.id = j.chamado_id
-                 RETURNING {_COLUNAS}, c.codigo AS chamado_codigo""",
-                job_id,
-                motivo,
-            )
-        else:
-            row = await conn.fetchrow(
-                f"""UPDATE automacao_jobs j
-                       SET status = 'FALHOU', erro = $2, finalizado_em = now(), etapa_atual = NULL
-                      FROM chamados c
-                     WHERE j.id = $1::uuid AND j.status = 'EXECUTANDO' AND c.id = j.chamado_id
-                 RETURNING {_COLUNAS}, c.codigo AS chamado_codigo""",
-                job_id,
-                motivo,
-            )
+        row = await conn.fetchrow(
+            f"""WITH marcado AS (
+                    UPDATE automacao_jobs SET {mudanca}
+                     WHERE id = $1::uuid AND status = 'EXECUTANDO'
+                 RETURNING *
+                )
+                SELECT {_COLUNAS}, c.codigo AS chamado_codigo
+                  FROM marcado j LEFT JOIN chamados c ON c.id = j.chamado_id""",
+            job_id,
+            motivo,
+        )
     return _row(row)
 
 
@@ -367,6 +369,35 @@ async def admin_contagem_fila() -> dict[str, int]:
             "WHERE status IN ('NA_FILA', 'EXECUTANDO') GROUP BY status"
         )
     return {r["status"]: int(r["n"]) for r in rows}
+
+
+async def admin_ultima_sync_criada_em() -> datetime | None:
+    """Quando a última sincronização de liderança foi enfileirada (gatilho diário)."""
+    async with admin_connection() as conn:
+        return await conn.fetchval(
+            "SELECT max(created_at) FROM automacao_jobs WHERE tipo = 'SINCRONIZAR_LIDERANCA'"
+        )
+
+
+async def admin_lideres_gerenciados() -> list[str]:
+    async with admin_connection() as conn:
+        rows = await conn.fetch("SELECT email FROM automacao_lideranca_gerenciada ORDER BY email")
+    return [r["email"] for r in rows]
+
+
+async def admin_registrar_lideres_comerciais(emails: list[str]) -> None:
+    """Supervisores/gerentes vistos no SAP pela sync: entram (ou renovam
+    ``ultimo_visto``) na lista que a sync pode remover da UBD (V4)."""
+    limpos = sorted({e.strip().lower() for e in emails if e and e.strip()})
+    if not limpos:
+        return
+    async with admin_connection() as conn:
+        await conn.execute(
+            """INSERT INTO automacao_lideranca_gerenciada (email)
+               SELECT unnest($1::text[])
+               ON CONFLICT (email) DO UPDATE SET ultimo_visto = now()""",
+            limpos,
+        )
 
 
 def agora_utc() -> datetime:

@@ -404,6 +404,18 @@ def test_api_proximo_entrega_job(settings_automacao, monkeypatch):
     }
 
 
+def test_api_entrega_sync_sem_chamado(settings_automacao, monkeypatch):
+    async def _claim(worker_id, tipos):
+        return {"id": "s1", "tipo": "SINCRONIZAR_LIDERANCA", "dry_run": False, "tentativas": 1,
+                "chamado_id": None, "chamado_codigo": None, "payload": {"modo": "relatorio"}}
+
+    monkeypatch.setattr(settings_automacao, "automacao_tipos", "SINCRONIZAR_LIDERANCA")
+    monkeypatch.setattr(repo_admin, "admin_claim_proximo", _claim)
+    with api_client() as c:
+        r = c.post("/api/automacao/jobs/proximo", headers=_h())
+    assert r.status_code == 200 and r.json()["chamado"] is None
+
+
 def test_api_heartbeat_409_quando_job_nao_e_do_worker(settings_automacao, monkeypatch):
     async def _hb(job_id, worker_id, etapa):
         return worker_id == "dono"
@@ -600,6 +612,172 @@ def test_vigilancia_marca_travado_e_requeue_so_fora_do_desligamento(settings_aut
     _run(svc.vigiar_uma_vez(settings_automacao))
     assert marcados == [("j1", True), ("j2", False)]
     assert len([m for m in adm.mensagens if m[3]]) == 2
+
+
+# --------------------------------------------------------------------------
+# Sincronização de liderança na UBD (v2, F5) — gatilhos e resultado
+# --------------------------------------------------------------------------
+class _AdminSync(_Admin):
+    """_Admin + o que a sync usa (gerenciados, última sync, e-mails de alerta)."""
+
+    def __init__(self, monkeypatch, *, gerenciados=(), ultima=None):
+        super().__init__(monkeypatch)
+        self.registrados: list[list[str]] = []
+        self.alertas: list[tuple[str, str]] = []
+
+        async def lideres():
+            return list(gerenciados)
+
+        async def registrar(emails):
+            self.registrados.append(list(emails))
+
+        async def ultima_sync():
+            return ultima
+
+        async def alerta(settings, assunto, corpo):
+            self.alertas.append((assunto, corpo))
+
+        monkeypatch.setattr(repo_admin, "admin_lideres_gerenciados", lideres)
+        monkeypatch.setattr(repo_admin, "admin_registrar_lideres_comerciais", registrar)
+        monkeypatch.setattr(repo_admin, "admin_ultima_sync_criada_em", ultima_sync)
+        monkeypatch.setattr(svc, "_email_alerta_ti", alerta)
+
+
+def _etapa_sync(**detalhes):
+    base = {"modo": "relatorio", "verificados": 1, "corrigidos": [], "nao_encontrados": [], "divergentes": [],
+            "erros": [], "avisos": [], "regioes_nao_confirmadas": 0, "lideres_comerciais": ["sup@bondmann.com.br"]}
+    base.update(detalhes)
+    return [{"nome": dom.ETAPA_SYNC, "status": "SUCCESS", "erro": None, "detalhes": base}]
+
+
+def _job_sync(**over):
+    base = {"id": "s1", "chamado_id": None, "tipo": "SINCRONIZAR_LIDERANCA", "status": "CONCLUIDO",
+            "dry_run": False, "aprovado_por": None, "worker_id": "w1", "erro": None,
+            "payload": dom.montar_payload_sync("relatorio", [])}
+    base.update(over)
+    return base
+
+
+def test_resultado_da_sync_registra_comerciais_e_manda_relatorio(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch)
+    _run(svc.processar_resultado(_job_sync(), _etapa_sync(), None, None, settings=settings_automacao))
+    assert adm.registrados == [["sup@bondmann.com.br"]]
+    assert len(adm.alertas) == 1 and "MODO RELATÓRIO" in adm.alertas[0][1]
+    assert adm.mensagens == [] and adm.resolvidos == []  # sem chamado de origem: nada no portal
+
+
+def test_sync_aplicada_limpa_nao_manda_email_mas_anota_no_chamado_de_origem(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch)
+    job = _job_sync(aprovado_por=OP, payload=dom.montar_payload_sync("aplicar", [], {"id": "c9", "codigo": "BD-9"}))
+    _run(svc.processar_resultado(job, _etapa_sync(modo="aplicar"), None, None, settings=settings_automacao))
+    assert adm.alertas == []
+    assert [(m[0], m[3]) for m in adm.mensagens] == [("c9", True)]
+
+
+def test_vaga_real_de_supervisor_agenda_sync_com_atraso(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch, gerenciados=["velho@bondmann.com.br"])
+    monkeypatch.setattr(settings_automacao, "automacao_tipos", "CRIACAO,SINCRONIZAR_LIDERANCA")
+    monkeypatch.setattr(settings_automacao, "automacao_sync_modo", "aplicar")
+    etapas = [{"nome": dom.ETAPAS_VAGA[0], "status": "SUCCESS", "erro": None, "detalhes": {}}]
+    job = _job(status="CONCLUIDO_COM_PENDENCIAS", payload={"perfil": "SUPERVISOR", "email": "s@bondmann.com.br"})
+    antes = datetime.now(UTC)
+    _run(svc.processar_resultado(job, etapas, None, None, settings=settings_automacao))
+    sync = [a for a in adm.agendados if a["tipo"] == "SINCRONIZAR_LIDERANCA"]
+    assert len(sync) == 1 and sync[0]["chamado_id"] is None and sync[0]["aprovado_por"] == OP
+    assert sync[0]["payload"]["modo"] == "aplicar" and sync[0]["payload"]["chamado"]["codigo"] == "BD-1"
+    assert sync[0]["payload"]["lideres_gerenciados"] == ["velho@bondmann.com.br"]
+    assert sync[0]["executar_apos"] >= antes + timedelta(minutes=59)
+
+
+def test_sync_nao_e_agendada_sem_o_tipo_liberado(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch)
+    etapas = [{"nome": dom.ETAPAS_VAGA[1], "status": "SUCCESS", "erro": None, "detalhes": {}}]
+    job = _job(tipo="DESLIGAMENTO", payload={"perfil": "GERENTE", "email": "g@bondmann.com.br"})
+    _run(svc.processar_resultado(job, etapas, None, None, settings=settings_automacao))
+    assert not [a for a in adm.agendados if a["tipo"] == "SINCRONIZAR_LIDERANCA"]
+
+
+def test_vigilancia_agenda_a_sync_diaria(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch, ultima=None)
+    monkeypatch.setattr(settings_automacao, "automacao_tipos", "SINCRONIZAR_LIDERANCA")
+    monkeypatch.setattr(settings_automacao, "automacao_sync_hora", 0)
+
+    async def nada(*a, **k):
+        return []
+
+    async def vencida():
+        return None
+
+    monkeypatch.setattr(repo_admin, "admin_jobs_travados", nada)
+    monkeypatch.setattr(repo_admin, "admin_fila_vencida_desde", vencida)
+    _run(svc.vigiar_uma_vez(settings_automacao))
+    assert [a["tipo"] for a in adm.agendados] == ["SINCRONIZAR_LIDERANCA"]
+    assert adm.agendados[0]["payload"]["modo"] == "relatorio"
+
+
+def test_sync_travada_nao_tenta_anotar_em_chamado(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch)
+    marcados = []
+
+    async def travados(timeout):
+        return [{"id": "s1", "tipo": "SINCRONIZAR_LIDERANCA", "tentativas": 1, "worker_id": "w1",
+                 "etapa_atual": dom.ETAPA_SYNC, "chamado_id": None, "aprovado_por": None, "chamado_codigo": None}]
+
+    async def marcar(job_id, motivo, *, requeue):
+        marcados.append((job_id, requeue))
+        return {"id": job_id}
+
+    async def vencida():
+        return None
+
+    monkeypatch.setattr(repo_admin, "admin_jobs_travados", travados)
+    monkeypatch.setattr(repo_admin, "admin_marcar_travado", marcar)
+    monkeypatch.setattr(repo_admin, "admin_fila_vencida_desde", vencida)
+    _run(svc.vigiar_uma_vez(settings_automacao))
+    assert marcados == [("s1", True)] and adm.mensagens == []
+    assert len(adm.alertas) == 1
+    assunto, corpo = adm.alertas[0]
+    assert assunto == "[Automação de acessos] Sincronização de liderança travada"
+    assert "(sincronização de liderança — sem chamado)" in corpo
+
+
+def test_sync_do_evento_descartada_por_ja_haver_ativa_fica_no_log(settings_automacao, monkeypatch, caplog):
+    _AdminSync(monkeypatch)
+    monkeypatch.setattr(settings_automacao, "automacao_tipos", "SINCRONIZAR_LIDERANCA")
+
+    async def ja_ativa(**kw):
+        return None  # UniqueViolation no índice da 0093
+
+    monkeypatch.setattr(repo_admin, "admin_agendar_job", ja_ativa)
+    origem = {"chamado_id": "c9", "chamado_codigo": "BD-9", "aprovado_por": OP}
+    with caplog.at_level("INFO", logger=svc.log.name):
+        r = _run(svc.agendar_sincronizacao(settings_automacao, executar_apos=datetime.now(UTC), origem_job=origem))
+    assert r is None
+    assert any(rec.levelname == "WARNING" and "BD-9" in rec.getMessage() and "já há uma ativa" in rec.getMessage()
+               for rec in caplog.records)
+
+
+def test_resultado_da_sync_isola_cada_efeito(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch)
+
+    def texto_quebrado(*a, **k):
+        raise KeyError("detalhes inesperados")
+
+    async def gravar_quebrado(*a, **k):
+        raise RuntimeError("banco fora")
+
+    monkeypatch.setattr(dom, "texto_relatorio_sync", texto_quebrado)
+    monkeypatch.setattr(repo_admin, "admin_gravar_mensagem", gravar_quebrado)
+    job = _job_sync(aprovado_por=OP, payload=dom.montar_payload_sync("relatorio", [], {"id": "c9", "codigo": "BD-9"}))
+    _run(svc.processar_resultado(job, _etapa_sync(), None, None, settings=settings_automacao))
+    assert adm.registrados == [["sup@bondmann.com.br"]]
+    assert len(adm.alertas) == 1 and "relatório não pôde ser montado" in adm.alertas[0][1]
+
+    async def alerta_quebrado(*a, **k):
+        raise RuntimeError("SMTP fora")
+
+    monkeypatch.setattr(svc, "_email_alerta_ti", alerta_quebrado)
+    _run(svc.processar_resultado(job, _etapa_sync(), None, None, settings=settings_automacao))  # não levanta
 
 
 # --------------------------------------------------------------------------
@@ -836,3 +1014,56 @@ def test_cancelar_job_na_fila(settings_automacao):
         r2 = c.post("/workspace/chamados/c1/automacao/j-outro/cancelar", headers={"X-CSRF-Token": t})
     assert r.status_code == 303 and arepo.cancelados[0] == ("c1", "j-fila")
     assert r2.status_code == 200 and "não está mais na fila" in r2.text
+
+
+# --------------------------------------------------------------------------
+# Sincronização de liderança (v2, F5)
+# --------------------------------------------------------------------------
+ETAPA_OCUPAR = "SAP Business One (Service Layer) - Ocupar Vaga (Equipe/Gerência)"
+
+
+def test_payload_sync_normaliza_modo_e_emails():
+    p = dom.montar_payload_sync("APLICAR", [" B@bondmann.com.br", "a@bondmann.com.br", ""], {"id": "c1", "codigo": "BD-1"})
+    assert p["tipo"] == "SINCRONIZAR_LIDERANCA" and p["modo"] == "aplicar"
+    assert p["lideres_gerenciados"] == ["a@bondmann.com.br", "b@bondmann.com.br"]
+    assert p["chamado"] == {"id": "c1", "codigo": "BD-1"} and p["pular_etapas"] == []
+    assert dom.montar_payload_sync("qualquer coisa", [])["modo"] == "relatorio"
+    assert dom.montar_payload_sync("aplicar", [])["chamado"] is None
+
+
+def test_sync_por_evento_so_para_vaga_real_de_supervisor_ou_gerente():
+    etapas = [{"nome": ETAPA_OCUPAR, "status": "SUCCESS"}]
+    job = {"tipo": "CRIACAO", "dry_run": False, "payload": {"perfil": "SUPERVISOR"}}
+    assert dom.dispara_sync_por_evento(job, etapas)
+    assert not dom.dispara_sync_por_evento({**job, "dry_run": True}, etapas)
+    assert not dom.dispara_sync_por_evento({**job, "payload": {"perfil": "REPRESENTANTE"}}, etapas)
+    assert not dom.dispara_sync_por_evento(job, [{"nome": ETAPA_OCUPAR, "status": "FAILED"}])
+    assert not dom.dispara_sync_por_evento({**job, "tipo": "REVOGAR_LICENCA"}, etapas)
+
+
+def test_sync_diaria_a_partir_das_6h_uma_vez_por_dia():
+    # 2026-09-30 09:00 UTC = 06:00 em Brasília
+    seis = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
+    assert not dom.sync_diaria_devida(seis - timedelta(minutes=1), 6, None)
+    assert dom.sync_diaria_devida(seis, 6, None)
+    assert dom.sync_diaria_devida(seis, 6, datetime(2026, 9, 29, 9, 30, tzinfo=UTC))
+    assert not dom.sync_diaria_devida(seis, 6, datetime(2026, 9, 30, 3, 5, tzinfo=UTC))  # 00:05 BR do mesmo dia
+
+
+def test_alerta_da_sync_sempre_no_relatorio_e_so_com_problema_no_aplicar():
+    limpo = {"modo": "aplicar", "nao_encontrados": [], "divergentes": [], "erros": []}
+    assert dom.sync_precisa_alerta("CONCLUIDO", {"modo": "relatorio"})
+    assert not dom.sync_precisa_alerta("CONCLUIDO", limpo)
+    assert dom.sync_precisa_alerta("CONCLUIDO", {**limpo, "erros": [{"email": "x", "erro": "y"}]})
+    assert dom.sync_precisa_alerta("FALHOU", limpo)
+
+
+def test_texto_do_relatorio_da_sync():
+    etapas = [{"nome": dom.ETAPA_SYNC, "status": "SUCCESS", "erro": None, "detalhes": {
+        "modo": "relatorio", "verificados": 3, "regioes_nao_confirmadas": 1,
+        "corrigidos": [{"email": "rep@bondmann.com.br", "adicionados": ["sup@bondmann.com.br"], "removidos": ["velho@bondmann.com.br"]}],
+        "nao_encontrados": ["fulano@bondmann.com.br"], "divergentes": [], "erros": [], "avisos": []}}]
+    txt = dom.texto_relatorio_sync({"worker_id": "w1", "payload": {"chamado": {"id": "c1", "codigo": "BD-9"}}}, etapas, "CONCLUIDO")
+    assert "MODO RELATÓRIO" in txt and "BD-9" in txt and "Usuários verificados: 3" in txt
+    assert "rep@bondmann.com.br: + sup@bondmann.com.br; − velho@bondmann.com.br" in txt
+    assert "fulano@bondmann.com.br" in txt

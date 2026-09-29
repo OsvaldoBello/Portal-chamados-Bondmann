@@ -10,7 +10,7 @@
 > alertas; o worker (`Automação/`: `worker.py` + `flow.py`) continua executando nos sistemas
 > (M365, UBD, SAP, WMW, SIP). A v2 acrescenta funções, campos e um tipo de job.
 >
-> **Status:** 🟡 `Em processo` (F1–F4 em código; F5 aguarda o spike F5.0) · **Criado em:** 2026-09-25 · **Atualizado em:** 2026-09-25 ·
+> **Status:** 🟡 `Em processo` (F1–F5 em código, aguardando deploy e homologação) · **Criado em:** 2026-09-25 · **Atualizado em:** 2026-09-29 ·
 > **Origem:** brainstorming com o gestor (Osvaldo) após o desligamento parcial de Paola Kemel
 > (2026-09-24, etapa SAP ❌).
 
@@ -44,7 +44,7 @@ homologado conforme o DoD).
 | **F2** | Checkbox "Urgência" no desligamento + horário padrão 17h | portal | — | 🟡 Em processo | 2026-09-25 | Independente; pode ir junto com F1 |
 | **F3** | Perfil GERENTE; campos Equipe/Gerência correspondente; ocupar/devolver vaga na `IB_CO_REGIAO`; grupos de Gerência; contrato v1 aditivo | portal + worker | F0 | 🟡 Em processo | 2026-09-25 | Código + testes; aguarda deploy (worker primeiro) e homologação |
 | **F4** | Liderança na UBD na criação (representante, supervisor, interno); campo "Gerência responsável" | portal + worker | F0, F3 | 🟡 Em processo | 2026-09-25 | Código + testes; envs `REGIOES_*` e política de SELECT na `regioes` pendentes |
-| **F5** | Job `SINCRONIZAR_LIDERANCA` diário e por evento; espelho com proteção | portal + worker | F4 | 🔵 Projetado | 2026-09-25 | Estreia em modo relatório |
+| **F5** | Job `SINCRONIZAR_LIDERANCA` diário e por evento; espelho com proteção | portal + worker | F4 | 🟡 Em processo | 2026-09-29 | Código + testes nos dois repos (Task 9); aguarda deploy (worker primeiro, migrations `0092`/`0093`) e homologação (Seção 8) — estreia em modo relatório |
 
 ### Detalhamento por item
 
@@ -73,10 +73,10 @@ homologado conforme o DoD).
 | F4 | Campo "Gerência responsável" + mapa de gerentes | 🟡 Em processo |
 | F4 | Líderes resolvidos pelo worker (SAP) e exibidos na nota (`leaders_aplicados`/`avisos`) | 🟡 Em processo |
 | F4 | Worker envia `leaders` — só usuário novo (existente fica para a F5, após o spike) | 🟡 Em processo |
-| F5 | Migration `0092` (tipo novo, `chamado_id` nulo, RLS) | 🔵 Projetado |
-| F5 | Gatilho diário 06h + gatilho por evento com atraso | 🔵 Projetado |
-| F5 | `run_leadership_sync_flow` no worker | 🔵 Projetado |
-| F5 | Modo relatório revisado pelo gestor → modo aplicar | 🔵 Projetado |
+| F5 | Migration `0092` (tipo novo, `chamado_id` nulo, RLS) | 🟡 Em processo — falta aplicar em produção |
+| F5 | Gatilho diário 06h + gatilho por evento com atraso | 🟡 Em processo |
+| F5 | `run_leadership_sync_flow` no worker | 🟡 Em processo |
+| F5 | Modo relatório revisado pelo gestor → modo aplicar | 🔵 Projetado — homologação (Seção 8) ainda não rodou |
 
 ---
 
@@ -476,51 +476,83 @@ inexistente/de outro e-mail na UBD ⇒ aviso, nunca aborta.
 
 ## Seção 6 — F5: Sincronização de liderança (24 h)
 
-**Repositórios:** portal + worker. **Depende de:** F4 e F0 #7.
+**Repositórios:** portal + worker. **Depende de:** F4 e F5.0 (spike, abaixo).
+**Plano de implementação:** [`docs/superpowers/plans/2026-09-29-automacao-acessos-v2-f5.md`](docs/superpowers/plans/2026-09-29-automacao-acessos-v2-f5.md).
 
-Mantém a liderança de **representantes e supervisores** na UBD igual à `regioes`. Para cada
-usuário: adiciona os líderes esperados que faltam e remove **só** os que estão em
-`lideres_gerenciados` e não são os esperados (V4).
+Mantém a liderança de **representantes e supervisores** na UBD igual à do SAP. Para cada
+usuário: adiciona os líderes esperados que faltam e remove **só** os líderes "comerciais" que
+não são mais os esperados; líderes postos à mão ficam (V4).
 
-### Dados — migration `0092_automacao_sync_lideranca.sql`
+### F5.0 — Resultado do spike (2026-09-29, usuário de teste `teste.ubd2026@`, gestor conferindo a tela)
 
-```sql
-ALTER TYPE automacao_tipo ADD VALUE IF NOT EXISTS 'SINCRONIZAR_LIDERANCA';
--- ADD VALUE em migration/transação própria, como exige o Postgres
-ALTER TABLE automacao_jobs ALTER COLUMN chamado_id DROP NOT NULL;
-ALTER TABLE automacao_jobs ADD CONSTRAINT ck_automacao_jobs_chamado
-  CHECK (tipo = 'SINCRONIZAR_LIDERANCA' OR chamado_id IS NOT NULL);
-CREATE UNIQUE INDEX ux_automacao_jobs_sync_ativo ON automacao_jobs (tipo)
-  WHERE tipo = 'SINCRONIZAR_LIDERANCA' AND status IN ('NA_FILA','EXECUTANDO');
-```
+| Pergunta | Resposta | Prova |
+|---|---|---|
+| `PATCH /workspace/v1/users/{id}` com `leaders` acumula ou substitui? | **Substitui** a lista inteira | `[Osvaldo]` → `[Giordano]`: a tela mostrou só o Giordano |
+| Dá para LER os líderes atuais? | **Sim — `PATCH {}` (corpo vazio) devolve `leader_ids` sem alterar nada** | devolveu `[Giordano]`; a tela continuou igual |
+| GET traz os líderes? | Não: v1/v2 só trazem `is_leader`; `/users/{id}/leaders` = 403 | — |
+| `PATCH {"leaders": []}` | Limpa | tela vazia |
 
-RLS: jobs sem chamado são visíveis só para ADMIN (a política atual filtra pelo setor do
-chamado; revisar para `chamado_id IS NULL`). Escrita continua só via `admin_connection()`.
-Seção 5 do plano v1 atualizada **antes** do código.
+Consequência: **desenho original (espelho com proteção, V4)**. Como a leitura depende de um
+comportamento não documentado, o worker **interrompe a sincronização inteira** se o `PATCH {}`
+parar de devolver `leader_ids` (nunca trata como "lista vazia").
+
+### Desenho (ajustado às decisões posteriores à redação original)
+
+- **Fonte = SAP, `regioes` só confirma** (gestor, 2026-09-25; V14). O **worker** calcula tudo:
+  lê a `IB_CO_REGIAO` (`U_IB_CodCom1` representante, `CodCom3` supervisor, `CodCom4` gerente) e
+  o e-mail de cada PN; confirma cada região na função `lideranca_da_regiao`. Região
+  **divergente** ⇒ os usuários dela ficam de fora e são relatados; região não confirmada
+  (sem linha/indisponível) ⇒ segue com o SAP e conta como "não confirmada". O portal não lê a
+  `regioes` (substitui V7 para a F5).
+- **Esperados:** representante = supervisor + gerente das regiões em que é o `CodCom1`;
+  supervisor = gerentes das regiões em que é o `CodCom3`. Marcadores de vaga (sem e-mail) não
+  viram líder. A própria pessoa nunca é líder de si mesma.
+- **"Comerciais gerenciados"** (o que a sincronização pode remover) = supervisores e gerentes
+  **de hoje** no SAP **∪ os de antes** (tabela `automacao_lideranca_gerenciada`, alimentada
+  por cada execução). Sem o histórico, um supervisor desligado sairia do SAP e nunca seria
+  removido dos representantes.
+- `novo = (atuais − (gerenciados − esperados)) ∪ esperados`; se mudou e `modo = aplicar` ⇒
+  `PATCH {"leaders": novo}` (lista completa, porque o PATCH substitui) e confere a resposta.
+- **Modo relatório** nunca manda `leaders` (só a leitura `PATCH {}`).
+
+### Dados — migrations `0092` e `0093`
+
+- `0092_automacao_tipo_sincronizar_lideranca.sql`: `ALTER TYPE automacao_tipo ADD VALUE
+  'SINCRONIZAR_LIDERANCA'` (sozinha — o valor novo não pode ser usado na mesma transação).
+- `0093_automacao_sync_lideranca.sql`: `chamado_id` e `aprovado_por` passam a aceitar NULL só
+  para a sincronização (CHECK); índice único de uma sincronização ativa por vez; tabela
+  `automacao_lideranca_gerenciada (email PK, primeiro_visto, ultimo_visto)` com RLS ligada e
+  sem grants (só `admin_connection()`).
+- **RLS:** jobs de sincronização não têm chamado ⇒ as policies atuais (que exigem chamado do
+  setor) já os escondem do staff e impedem INSERT pela tela; ninguém os vê pela UI (o
+  relatório vai por e-mail/nota). Sem policy nova.
 
 ### Portal
 
-- **Gatilho diário:** o `_loop_vigilancia` enfileira um job às **06h** (Brasília) se não
-  houver um ativo nem um concluído no dia.
-- **Gatilho por evento:** ao processar o resultado de CRIACAO/DESLIGAMENTO de SUPERVISOR ou
-  GERENTE com a etapa de vaga em SUCCESS ⇒ sync com
-  `executar_apos = now() + AUTOMACAO_SYNC_ATRASO_MIN` (atraso medido na F0 #1) e
-  `origem_chamado_id`.
-- **Controles:** `AUTOMACAO_TIPOS` precisa conter `SINCRONIZAR_LIDERANCA`;
-  `AUTOMACAO_SYNC_MODO = relatorio | aplicar` (default **relatorio**).
-- **Resultado:** grava em `resultado`; com `origem_chamado_id`, posta nota interna com o
-  relatório; `nao_encontrados` ou `erros` ⇒ e-mail a `AUTOMACAO_ALERTA_EMAIL`. `regioes`
-  indisponível ⇒ job não é criado; alerta na 2ª falha consecutiva.
+- **Gatilho diário:** a vigilância enfileira uma sincronização a partir das **06h** (Brasília,
+  `AUTOMACAO_SYNC_HORA`) se nenhuma foi criada no dia.
+- **Gatilho por evento:** resultado real de CRIACAO/DESLIGAMENTO de SUPERVISOR/GERENTE com a
+  etapa de vaga em SUCCESS ⇒ sincronização com `executar_apos = agora +
+  AUTOMACAO_SYNC_ATRASO_MIN` (default 60 — a `regioes` se atualiza em lote) e o chamado de
+  origem no payload.
+- **Controles:** só enfileira se `AUTOMACAO_TIPOS` contém `SINCRONIZAR_LIDERANCA` (senão a
+  fila vencida dispararia o alerta de "worker mudo"); `AUTOMACAO_SYNC_MODO = relatorio |
+  aplicar` (default **relatorio**).
+- **Resultado:** grava os comerciais de hoje na tabela de gerenciados; com chamado de origem,
+  nota interna com o relatório; **modo relatório ⇒ e-mail do relatório sempre** (o gestor
+  revisa); modo aplicar ⇒ e-mail só com falha, não encontrados, divergências ou erros.
 
 ### Worker
 
-- `LearningRocksService.get_leaders(user_id)` / `set_leaders(user_id, emails)` (F0 #7).
-- `run_leadership_sync_flow`: etapa única `"UBD Learning.rocks - Sincronização de Liderança"`.
-  Para cada usuário: acha na UBD por e-mail (inexistente/inativo ⇒ `nao_encontrados`); calcula
-  `novo = (atuais − (lideres_gerenciados − esperados)) ∪ esperados`; se mudou e
-  `modo == aplicar` ⇒ `set_leaders`. Erro num usuário não para os demais; heartbeat a cada N
-  usuários.
-- Resultado: `{verificados, corrigidos: [{email, adicionados, removidos}], nao_encontrados, erros}`.
+- `LearningRocksService.get_leader_ids(user_id)` (`PATCH {}`) e `set_leader_ids(user_id, ids)`
+  (confere a resposta).
+- `SAPService.mapa_lideranca()` (regiões + e-mail por PN, só GET).
+- `services/lideranca.py` (funções puras): `montar_alvos`, `nova_lista`.
+- `run_leadership_sync_flow(modo, lideres_gerenciados)`: etapa única
+  `"UBD Learning.rocks - Sincronização de Liderança"`. Erro num usuário não para os demais;
+  leitura da UBD quebrada ou SAP fora ⇒ etapa FAILED.
+- Resultado (`details`): `{modo, verificados, corrigidos: [{email, adicionados, removidos}],
+  nao_encontrados, divergentes, regioes_nao_confirmadas, erros, avisos, lideres_comerciais}`.
 
 ---
 
@@ -535,7 +567,7 @@ Atualizar `docs/automacao_api.md` na F3 (mudanças da F2 são aditivas e não ex
 | `vaga: {tipo: EQUIPE\|GERENCIA, codigo, nome}` para supervisor e gerente; `regiao` nula para eles | F3 | v2 |
 | Etapas novas: Ocupar Vaga, Devolver Vaga | F3 | v2 |
 | `lideres_ubd: [email]`, `lideres_nao_resolvidos` na CRIACAO | F4 | v2 |
-| Tipo `SINCRONIZAR_LIDERANCA` (`modo`, `origem_chamado_id`, `usuarios`, `lideres_gerenciados`) + etapa de sync | F5 | v2 |
+| Tipo `SINCRONIZAR_LIDERANCA` (`chamado` nulo ou de origem, `modo`, `lideres_gerenciados`) + etapa única de sync | F5 | v1 (aditivo) |
 
 **Troca de versão sem janela quebrada:** (1) o worker passa a aceitar `versao_contrato` `1` e
 `2`; (2) o portal passa a emitir `2` e `/saude` devolve `"2"`.
@@ -546,6 +578,13 @@ Atualizar `docs/automacao_api.md` na F3 (mudanças da F2 são aditivas e não ex
 worker antigo recebendo `GERENTE` ou supervisor sem `regiao` levanta `PayloadInvalido` e o job
 falha sem tocar em sistema. `lideres_ubd`/`lideres_nao_resolvidos` no payload **não** foram
 criados: a F4 resolve a liderança no worker (abaixo).
+
+**Desvio aplicado na F5 (2026-09-29, implementação):** o contrato **continua `"1"`** — sem
+`origem_chamado_id`/`usuarios` (esboçados aqui antes do código); o payload real é
+`{versao, tipo, chamado: {id, codigo} | null, pular_etapas: [], modo, lideres_gerenciados}` (ver
+`docs/automacao_api.md`). `chamado` reaproveita o campo comum em vez de um campo novo — `null`
+na sincronização diária, o chamado de origem (só informativo) na por evento. Sem `usuarios`: o
+worker recalcula os alvos sozinho a partir do SAP a cada execução, não recebe uma lista pronta.
 
 ---
 

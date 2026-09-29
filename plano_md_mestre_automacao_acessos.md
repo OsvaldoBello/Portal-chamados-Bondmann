@@ -389,6 +389,14 @@ Contrato versionado em `docs/automacao_api.md` — é o único acoplamento entre
 - Nenhum `proximo` recebido há > 30 min em horário comercial (`app/domain/periodo.py`) com
   jobs `NA_FILA` → e-mail "worker de automação sem contato" (uma vez por hora, não em loop).
 
+**v2 F5 — migrations 0092/0093 (sincronização de liderança).** `automacao_tipo` ganha
+`SINCRONIZAR_LIDERANCA` (0092, sozinha). Na 0093, `chamado_id` e `aprovado_por` passam a
+aceitar NULL **só** para esse tipo (`ck_automacao_jobs_origem`), há no máximo uma
+sincronização ativa (`ux_automacao_jobs_sync_ativo`) e nasce `automacao_lideranca_gerenciada`
+(e-mails de supervisores/gerentes já vistos no SAP; RLS ligada, sem grants — só
+`admin_connection()`). As policies da 0091 não mudam: como exigem um chamado do setor, a
+sincronização fica invisível para o staff e não pode ser criada pela tela.
+
 ---
 
 ## Seção 6 — Mudanças no projeto de automação
