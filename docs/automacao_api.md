@@ -141,8 +141,13 @@ falha no worker novo: reabrir o formulário e escolher a equipe.
 **Mudanças da v2 (F5, 2026-09-29) — aditivas, o contrato continua `"1"`:**
 tipo novo `SINCRONIZAR_LIDERANCA`, sem chamado dono (ver seção própria
 abaixo). Não muda nada nos demais tipos; só entra em ação quando
-`AUTOMACAO_TIPOS` o lista (worker antigo que nunca receba esse tipo não
-precisa saber que ele existe).
+`AUTOMACAO_TIPOS` o lista. Atenção: com `WORKER_TIPOS` vazio o worker **não**
+manda `tipos` no `POST /jobs/proximo` e o portal usa todos os tipos que
+conhece (`dom.TIPOS`) ∩ `AUTOMACAO_TIPOS` — então um worker **antigo** (sem a
+F5) pegaria a sync e ela terminaria `FALHOU` com "tipo de job desconhecido"
+(inofensivo: nada é tocado, e a próxima diária tenta de novo). **Ordem de
+deploy: worker → migrations `0092`/`0093` em produção → portal → incluir
+`SINCRONIZAR_LIDERANCA` em `AUTOMACAO_TIPOS`.**
 
 ### `CRIACAO`
 | Campo | Tipo | Notas |
@@ -241,13 +246,27 @@ Regras (worker: `services/lideranca.py` + `_sincronizar_lideranca` em
   `leader_ids`. Se a resposta parar de trazer essa chave
   (`LeituraLiderancaIndisponivel`), a **etapa inteira falha** — nunca é
   tratado como lista vazia, porque isso apagaria líderes de todo mundo.
-- Falha ao consultar **um alvo** (usuário sendo verificado) que não seja a
-  ausência de `leader_ids` acima ⇒ vai para `details.erros`, os demais
-  alvos continuam normalmente.
+- **Duas fases:** o worker primeiro **lê e calcula todos** os alvos; só
+  depois, com `modo = aplicar`, grava os que mudaram. Assim a falha da
+  leitura acima, mesmo no meio, derruba a etapa **antes de qualquer
+  gravação**.
+- Falha ao consultar ou ler **um alvo** (usuário sendo verificado) que não
+  seja a ausência de `leader_ids` acima ⇒ vai para `details.erros`, os
+  demais alvos continuam normalmente. Falha ao **gravar** um alvo ⇒ também
+  `details.erros` (`erro` começa com `"gravação falhou: "`) e ele **não**
+  entra em `corrigidos` — `corrigidos` só lista o que a UBD confirmou (no
+  modo `relatorio`, o que seria corrigido).
+- **Conta inativa na UBD:** o desligamento inativa a conta. Líder
+  **gerenciado** é resolvido aceitando conta inativa (id + e-mail idêntico),
+  para que o supervisor/gerente desligado seja **removido** de quem o tinha;
+  alvo e líder **esperado** exigem conta ativa (alvo inativo ⇒
+  `nao_encontrados`; esperado inativo ⇒ aviso "líder X não encontrado na
+  UBD", não é adicionado).
 - Falha ao consultar **um líder gerenciado** (ao montar `lideres_gerenciados
   ∪ comerciais de hoje no SAP`) ⇒ vira `details.avisos`, e esse líder
   **não é removido de ninguém nesta execução** (fica de fora do cálculo,
-  como se não fosse gerenciado agora).
+  como se não fosse gerenciado agora). A outra origem de `avisos` é o líder
+  esperado não encontrado na UBD (acima).
 - `details` do resultado: `{modo, verificados, corrigidos: [{email,
   adicionados, removidos}], nao_encontrados, divergentes: [{email,
   regioes}], regioes_nao_confirmadas, erros: [{email, erro}], avisos,
