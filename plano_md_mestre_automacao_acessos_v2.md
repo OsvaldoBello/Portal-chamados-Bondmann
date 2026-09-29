@@ -99,6 +99,7 @@ Texto fixo (2026-09-25).
 | **V11** | Usuário SAP no desligamento de interno (gestor, 2026-09-25): código confere e o nome no SAP é **parecido** ⇒ bloqueia; código confere com nome **não parecido** (e nada por e-mail/nome) ⇒ etapa FAILED "verificar manualmente" com os candidatos; nenhum usuário ⇒ "nada a bloquear". Entregue no worker v1.2.1. |
 | **V12** | Leitura da `regioes` pelo portal: **chave anon/publishable via PostgREST (GET)** fornecida pelo gestor. Hoje ela autentica mas devolve 0 linhas (RLS sem política de SELECT para `anon`) — **pré-requisito do gestor**: o dono do projeto cria a política de leitura. O portal nunca escreve (V1). |
 | **V13** | Simulação (dry-run) gera só a nota interna — sem mensagem pública ao RH nem mudança de status; a descrição automática do desligamento cita a urgência (gestor, 2026-09-25; entregue). |
+| **V14** | Leitura da `regioes` (2026-09-29, gestor + controlador): **nem tabela nem view expostas à chave anon** — a chave anon é pública e permitiria colher os e-mails de supervisores/gerentes (phishing). O dono do projeto criou `public.lideranca_da_regiao(p_regiao)` (SECURITY DEFINER, `search_path=''`, uma região por chamada) que exige o cabeçalho `x-automacao-token`; o banco guarda só o SHA-256 do token em `privado.chaves_leitura` (schema fora da API, RLS ligada, sem grants). EXECUTE só para `anon`; a tabela `regioes` e as políticas dela não foram alteradas. Token em `REGIOES_API_TOKEN` no Railway. Conferido: sem token/token errado ⇒ 401 `42501`; com token ⇒ a linha; SAP × `regioes` = 140/140 confirmadas. Rotação: novo registro em `privado.chaves_leitura`; revogação: apagar o registro. |
 
 ### Gerências de internos (V6)
 
@@ -455,7 +456,7 @@ enviado à UBD (`flow.py::_ubd` não passa `leaders`), nem quando o usuário já
 Decisão do gestor na F0b: **a fonte dos líderes é o SAP** e a `regioes` só confirma. Por isso a
 resolução saiu do portal e foi para o **worker** (`flow.py::_resolver_lideres`), que já fala com
 o SAP: representante = e-mails dos PNs em `U_IB_CodCom3`/`U_IB_CodCom4` da região, confirmados
-por GET na `regioes` (`services/regioes.py`, envs `REGIOES_API_URL`/`REGIOES_API_KEY`); concorda
+pela função `lideranca_da_regiao` (ver V14; `services/regioes.py`, envs `REGIOES_API_URL`/`REGIOES_API_KEY`/`REGIOES_API_TOKEN`); concorda
 ⇒ aplica; sem leitura ⇒ aplica o do SAP com aviso; **diverge ⇒ não aplica** e avisa. Supervisor
 = gerentes das regiões da equipe. Portal não lê a `regioes` e o card não mostra os líderes antes
 da aprovação — a nota interna do **dry-run** mostra `leaders_previstos`. Líder só em usuário

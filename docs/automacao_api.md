@@ -178,14 +178,14 @@ liderança alterada — aviso na etapa). Resolvida pelo **worker**:
 
 | Perfil | Líderes | Fonte |
 |---|---|---|
-| REPRESENTANTE | supervisor (`U_IB_CodCom3`) + gerente (`U_IB_CodCom4`) da região | SAP; confirmado por GET na tabela `regioes` (somente leitura) — diverge ⇒ não aplica e avisa; sem leitura ⇒ aplica o do SAP e avisa |
+| REPRESENTANTE | supervisor (`U_IB_CodCom3`) + gerente (`U_IB_CodCom4`) da região | SAP; confirmado pela função `lideranca_da_regiao` do projeto da `regioes` (GET com token, somente leitura) — diverge ⇒ não aplica e avisa; sem leitura ⇒ aplica o do SAP e avisa |
 | SUPERVISOR | gerente(s) das regiões da equipe | SAP |
 | GERENTE | nenhum | — |
 | INTERNO | `gestor_email` | payload |
 
 Líder inexistente na UBD ou falha de leitura ⇒ etapa **SUCCESS** com aviso em
 `details.avisos`; nunca aborta o fluxo. Envs do worker: `REGIOES_API_URL`,
-`REGIOES_API_KEY` (vazias ⇒ confirmação desligada).
+`REGIOES_API_KEY` (chave anon) e `REGIOES_API_TOKEN` (qualquer uma vazia ⇒ confirmação desligada).
 
 ## Comportamento esperado do worker
 
