@@ -291,6 +291,18 @@ def test_textos_publico_com_credenciais_so_quando_concluido():
     assert "senha" not in dom.texto_email_neutro("BD-1", dom.STATUS_CONCLUIDO).lower()
 
 
+def test_credencial_senha_ubd_aparece_na_mensagem_logo_apos_o_email():
+    """Pedido do gestor (2026-09-29): senha da UBD evidenciada ao RH."""
+    cred = dom.filtrar_credenciais({"email": "a@bondmann.com.br", "senha_temporaria_m365": "S3nh@",
+                                    "senha_ubd": "Bondmann@2026!", "senha_wmw": "001#colombo"})
+    assert [r for r, _ in cred][:3] == ["E-mail corporativo",
+                                        "Senha temporária do e-mail (troca obrigatória no 1º acesso)",
+                                        "Senha da UBD Learning.rocks"]
+    job = {"tipo": "CRIACAO", "dry_run": False, "worker_id": "w1"}
+    txt = dom.texto_mensagem_publica(job, [], cred, dom.STATUS_CONCLUIDO)
+    assert "Senha da UBD Learning.rocks: Bondmann@2026!" in txt
+
+
 # --------------------------------------------------------------------------
 # API do worker
 # --------------------------------------------------------------------------
