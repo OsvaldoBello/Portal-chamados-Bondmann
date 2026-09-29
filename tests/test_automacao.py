@@ -615,6 +615,129 @@ def test_vigilancia_marca_travado_e_requeue_so_fora_do_desligamento(settings_aut
 
 
 # --------------------------------------------------------------------------
+# Sincronização de liderança na UBD (v2, F5) — gatilhos e resultado
+# --------------------------------------------------------------------------
+class _AdminSync(_Admin):
+    """_Admin + o que a sync usa (gerenciados, última sync, e-mails de alerta)."""
+
+    def __init__(self, monkeypatch, *, gerenciados=(), ultima=None):
+        super().__init__(monkeypatch)
+        self.registrados: list[list[str]] = []
+        self.alertas: list[tuple[str, str]] = []
+
+        async def lideres():
+            return list(gerenciados)
+
+        async def registrar(emails):
+            self.registrados.append(list(emails))
+
+        async def ultima_sync():
+            return ultima
+
+        async def alerta(settings, assunto, corpo):
+            self.alertas.append((assunto, corpo))
+
+        monkeypatch.setattr(repo_admin, "admin_lideres_gerenciados", lideres)
+        monkeypatch.setattr(repo_admin, "admin_registrar_lideres_comerciais", registrar)
+        monkeypatch.setattr(repo_admin, "admin_ultima_sync_criada_em", ultima_sync)
+        monkeypatch.setattr(svc, "_email_alerta_ti", alerta)
+
+
+def _etapa_sync(**detalhes):
+    base = {"modo": "relatorio", "verificados": 1, "corrigidos": [], "nao_encontrados": [], "divergentes": [],
+            "erros": [], "avisos": [], "regioes_nao_confirmadas": 0, "lideres_comerciais": ["sup@bondmann.com.br"]}
+    base.update(detalhes)
+    return [{"nome": dom.ETAPA_SYNC, "status": "SUCCESS", "erro": None, "detalhes": base}]
+
+
+def _job_sync(**over):
+    base = {"id": "s1", "chamado_id": None, "tipo": "SINCRONIZAR_LIDERANCA", "status": "CONCLUIDO",
+            "dry_run": False, "aprovado_por": None, "worker_id": "w1", "erro": None,
+            "payload": dom.montar_payload_sync("relatorio", [])}
+    base.update(over)
+    return base
+
+
+def test_resultado_da_sync_registra_comerciais_e_manda_relatorio(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch)
+    _run(svc.processar_resultado(_job_sync(), _etapa_sync(), None, None, settings=settings_automacao))
+    assert adm.registrados == [["sup@bondmann.com.br"]]
+    assert len(adm.alertas) == 1 and "MODO RELATÓRIO" in adm.alertas[0][1]
+    assert adm.mensagens == [] and adm.resolvidos == []  # sem chamado de origem: nada no portal
+
+
+def test_sync_aplicada_limpa_nao_manda_email_mas_anota_no_chamado_de_origem(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch)
+    job = _job_sync(aprovado_por=OP, payload=dom.montar_payload_sync("aplicar", [], {"id": "c9", "codigo": "BD-9"}))
+    _run(svc.processar_resultado(job, _etapa_sync(modo="aplicar"), None, None, settings=settings_automacao))
+    assert adm.alertas == []
+    assert [(m[0], m[3]) for m in adm.mensagens] == [("c9", True)]
+
+
+def test_vaga_real_de_supervisor_agenda_sync_com_atraso(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch, gerenciados=["velho@bondmann.com.br"])
+    monkeypatch.setattr(settings_automacao, "automacao_tipos", "CRIACAO,SINCRONIZAR_LIDERANCA")
+    monkeypatch.setattr(settings_automacao, "automacao_sync_modo", "aplicar")
+    etapas = [{"nome": dom.ETAPAS_VAGA[0], "status": "SUCCESS", "erro": None, "detalhes": {}}]
+    job = _job(status="CONCLUIDO_COM_PENDENCIAS", payload={"perfil": "SUPERVISOR", "email": "s@bondmann.com.br"})
+    antes = datetime.now(UTC)
+    _run(svc.processar_resultado(job, etapas, None, None, settings=settings_automacao))
+    sync = [a for a in adm.agendados if a["tipo"] == "SINCRONIZAR_LIDERANCA"]
+    assert len(sync) == 1 and sync[0]["chamado_id"] is None and sync[0]["aprovado_por"] == OP
+    assert sync[0]["payload"]["modo"] == "aplicar" and sync[0]["payload"]["chamado"]["codigo"] == "BD-1"
+    assert sync[0]["payload"]["lideres_gerenciados"] == ["velho@bondmann.com.br"]
+    assert sync[0]["executar_apos"] >= antes + timedelta(minutes=59)
+
+
+def test_sync_nao_e_agendada_sem_o_tipo_liberado(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch)
+    etapas = [{"nome": dom.ETAPAS_VAGA[1], "status": "SUCCESS", "erro": None, "detalhes": {}}]
+    job = _job(tipo="DESLIGAMENTO", payload={"perfil": "GERENTE", "email": "g@bondmann.com.br"})
+    _run(svc.processar_resultado(job, etapas, None, None, settings=settings_automacao))
+    assert not [a for a in adm.agendados if a["tipo"] == "SINCRONIZAR_LIDERANCA"]
+
+
+def test_vigilancia_agenda_a_sync_diaria(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch, ultima=None)
+    monkeypatch.setattr(settings_automacao, "automacao_tipos", "SINCRONIZAR_LIDERANCA")
+    monkeypatch.setattr(settings_automacao, "automacao_sync_hora", 0)
+
+    async def nada(*a, **k):
+        return []
+
+    async def vencida():
+        return None
+
+    monkeypatch.setattr(repo_admin, "admin_jobs_travados", nada)
+    monkeypatch.setattr(repo_admin, "admin_fila_vencida_desde", vencida)
+    _run(svc.vigiar_uma_vez(settings_automacao))
+    assert [a["tipo"] for a in adm.agendados] == ["SINCRONIZAR_LIDERANCA"]
+    assert adm.agendados[0]["payload"]["modo"] == "relatorio"
+
+
+def test_sync_travada_nao_tenta_anotar_em_chamado(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch)
+    marcados = []
+
+    async def travados(timeout):
+        return [{"id": "s1", "tipo": "SINCRONIZAR_LIDERANCA", "tentativas": 1, "worker_id": "w1",
+                 "etapa_atual": dom.ETAPA_SYNC, "chamado_id": None, "aprovado_por": None, "chamado_codigo": None}]
+
+    async def marcar(job_id, motivo, *, requeue):
+        marcados.append((job_id, requeue))
+        return {"id": job_id}
+
+    async def vencida():
+        return None
+
+    monkeypatch.setattr(repo_admin, "admin_jobs_travados", travados)
+    monkeypatch.setattr(repo_admin, "admin_marcar_travado", marcar)
+    monkeypatch.setattr(repo_admin, "admin_fila_vencida_desde", vencida)
+    _run(svc.vigiar_uma_vez(settings_automacao))
+    assert marcados == [("s1", True)] and adm.mensagens == []
+
+
+# --------------------------------------------------------------------------
 # Card e ações do TI na tela de atendimento
 # --------------------------------------------------------------------------
 class _RepoAcessos(FakeRepo):
