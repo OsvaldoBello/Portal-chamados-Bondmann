@@ -46,6 +46,9 @@ class CampoDef:
     mesmo layout, declarado ANTES dele) está com um desses valores.
     ``dominio_email``: em campos ``email``, exige que o endereço termine nesse
     domínio (ex.: ``"bondmann.com.br"``).
+    ``obrigatorio_se``: mesmo formato de ``visivel_se`` — obrigatório só quando o
+    controlador (visível) tem um desses valores (ex.: e-mail do gestor quando a
+    gerência é "Outra").
     """
 
     name: str
@@ -56,6 +59,7 @@ class CampoDef:
     ajuda: str = ""
     min_chars: int = 0
     visivel_se: tuple[str, tuple[str, ...]] | None = None
+    obrigatorio_se: tuple[str, tuple[str, ...]] | None = None
     dominio_email: str = ""
     placeholder: str = ""
 
@@ -78,6 +82,20 @@ def campo_visivel(campo: CampoDef, dados: dict[str, Any]) -> bool:
 
 def campos_visiveis(campos: tuple[CampoDef, ...], dados: dict[str, Any]) -> tuple[CampoDef, ...]:
     return tuple(c for c in campos if campo_visivel(c, dados))
+
+
+def _exigido(campo: CampoDef, campos: tuple[CampoDef, ...], dados: dict[str, Any]) -> bool:
+    """``obrigatorio`` ou ``obrigatorio_se`` satisfeito. Controlador invisível
+    (valor velho de outro perfil ainda no POST) não obriga nada."""
+    if campo.obrigatorio:
+        return True
+    if campo.obrigatorio_se is None:
+        return False
+    nome, valores = campo.obrigatorio_se
+    controlador = next((c for c in campos if c.name == nome), None)
+    if controlador is not None and not campo_visivel(controlador, dados):
+        return False
+    return _valor_controlador(dados, nome) in valores
 
 
 def validar_campos(
@@ -120,7 +138,7 @@ def validar_campos(
 
         valor = (brutos[0] if brutos else "").strip()
         if not valor:
-            if campo.obrigatorio:
+            if _exigido(campo, campos, dados):
                 return False, f'Preencha o campo "{campo.label}".', {}
             continue  # opcional vazio: não grava chave
         if campo.tipo == "select" and valor not in campo.opcoes:

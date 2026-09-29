@@ -113,27 +113,39 @@ Nomes de etapa (`step_name`) que o worker devolve — são constantes em
 
 | Tipo | Etapas (na ordem) |
 |---|---|
-| `CRIACAO` | `Microsoft 365 (MS Graph) - Criação de Conta e Grupos` · `UBD Learning.rocks - Cadastro e Atribuição de Times` · `WMW Vendas Web - Cadastro e Gerador de Link` (só REPRESENTANTE) · `CompanySIP PABX - Criação de Ramal Interno` (só INTERNO) · `SAP Business One (Service Layer) - Criação de Usuário Interno` (INTERNO) ou `SAP Business One (Service Layer) - Vínculo Comercial (Consultor PJ)` (REPRESENTANTE com região) |
-| `DESLIGAMENTO` | `Microsoft 365 (MS Graph) - Bloqueio e Encaminhamento` · `UBD Learning.rocks - Inativação da Conta` · `WMW Vendas Web - Bloqueio de Acesso` (só REPRESENTANTE) · `SAP Business One (Service Layer) - Bloqueio e Liberação de Licenças` (INTERNO) ou `SAP Business One (Service Layer) - Transferência para RH2020` (demais) |
+| `CRIACAO` | `Microsoft 365 (MS Graph) - Criação de Conta e Grupos` · `UBD Learning.rocks - Cadastro e Atribuição de Times` · `WMW Vendas Web - Cadastro e Gerador de Link` (só REPRESENTANTE) · `CompanySIP PABX - Criação de Ramal Interno` (só INTERNO) · `SAP Business One (Service Layer) - Criação de Usuário Interno` (INTERNO), `SAP Business One (Service Layer) - Vínculo Comercial (Consultor PJ)` (REPRESENTANTE com região) ou `SAP Business One (Service Layer) - Ocupar Vaga (Equipe/Gerência)` (SUPERVISOR/GERENTE) |
+| `DESLIGAMENTO` | `Microsoft 365 (MS Graph) - Bloqueio e Encaminhamento` · `UBD Learning.rocks - Inativação da Conta` · `WMW Vendas Web - Bloqueio de Acesso` (só REPRESENTANTE) · `SAP Business One (Service Layer) - Bloqueio e Liberação de Licenças` (INTERNO), `SAP Business One (Service Layer) - Devolver Vaga (Equipe/Gerência)` (SUPERVISOR/GERENTE com `vaga`) ou `SAP Business One (Service Layer) - Transferência para RH2020` (demais) |
 | `REVOGAR_LICENCA` | `Microsoft 365 (MS Graph) - Revogação da Licença` |
 
 A etapa "Portal de Chamados Bondmann - Conta e Permissões" é acrescentada
 pelo **portal** ao processar uma `CRIACAO` concluída (não vem do worker).
+
+**Mudanças da v2 (F3/F4, 2026-09-25) — aditivas, o contrato continua `"1"`:**
+`perfil` aceita `GERENTE`; campo novo `vaga` para SUPERVISOR/GERENTE (e `regiao`
+nula para eles); etapas novas de vaga; `gestor_email` passa a vir da "Gerência
+responsável" do interno; os `details` da etapa UBD da criação ganham
+`leaders_aplicados` (ou `leaders_previstos` na simulação) e `avisos`.
+**Ordem de deploy: worker primeiro, portal depois** — um worker antigo que
+receba `GERENTE` ou supervisor sem `regiao` levanta `PayloadInvalido` e o job
+FALHA sem tocar em sistema nenhum (fail-safe). Pelo mesmo motivo, um chamado de
+supervisor aberto **antes** do deploy do portal (só com `regiao`, sem `vaga`)
+falha no worker novo: reabrir o formulário e escolher a equipe.
 
 ### `CRIACAO`
 | Campo | Tipo | Notas |
 |---|---|---|
 | `nome_completo` | str | |
 | `email` | str | sempre `@bondmann.com.br`, minúsculo |
-| `perfil` | `REPRESENTANTE` \| `INTERNO` \| `SUPERVISOR` | → `UserProfileType` |
+| `perfil` | `REPRESENTANTE` \| `INTERNO` \| `SUPERVISOR` \| `GERENTE` | → `UserProfileType` |
 | `telefone` | str | DDD + número |
-| `gestor_email` | str \| null | → `manager_email` / `leaders` do UBD |
+| `gestor_email` | str \| null | só INTERNO: e-mail do gerente da "Gerência responsável" (ou o digitado, com "Outra") → líder na UBD |
 | `data_inicio` | `YYYY-MM-DD` \| null | só informativo (o portal já agendou o job) |
 | `cargo` | str \| null | só INTERNO → `job_title` |
 | `portal_papel` | `CLIENTE` \| `OPERADOR` \| `ADMIN` \| null | só INTERNO; **a conta do Portal é criada pelo próprio portal** — o worker NÃO executa a etapa "Portal de Chamados" |
 | `portal_setor` | str \| null | idem |
 | `licencas_sap` | list[str] | subconjunto de `PROFESSIONAL, CRM, FINANCEIRA, LOGISTICA`; vazia = nenhuma |
-| `regiao` | `{codigo, nome, completo}` \| null | REPRESENTANTE/SUPERVISOR; `completo` = `"082-ARARAQUARA"` |
+| `regiao` | `{codigo, nome, completo}` \| null | só REPRESENTANTE; `completo` = `"082-ARARAQUARA"` |
+| `vaga` | `{tipo, codigo, nome}` \| null | obrigatória para SUPERVISOR (`tipo: "EQUIPE"`) e GERENTE (`tipo: "GERENCIA"`); `codigo` = marcador `RH20xx` na `IB_CO_REGIAO` (ex.: `{"tipo": "EQUIPE", "codigo": "RH2018", "nome": "EQUIPE SP 1"}`) |
 | `dispositivo_wmw` | `IOS` \| `ANDROID` \| `SIMULADOR` \| null | só REPRESENTANTE |
 | `observacoes` | str \| null | texto livre do RH; não executar nada com base nele |
 
@@ -143,7 +155,8 @@ pelo **portal** ao processar uma `CRIACAO` concluída (não vem do worker).
 | `nome_completo`, `email`, `perfil` | | como acima |
 | `data_desligamento` | `YYYY-MM-DD` | informativo (o portal agendou às 17h desse dia, ou imediato se `urgente`) |
 | `urgente` | bool | aditivo (sem bump de versão): o RH marcou "Urgência"; o portal já liberou o job no clique da TI — o worker não precisa fazer nada |
-| `regiao` | `{codigo, nome, completo}` \| null | região a transferir para RH2020 |
+| `regiao` | `{codigo, nome, completo}` \| null | só REPRESENTANTE: região a transferir para RH2020 |
+| `vaga` | `{tipo, codigo, nome}` \| null | SUPERVISOR/GERENTE: marcador que volta às regiões da pessoa |
 | `motivo` | str | opcional no formulário; em branco o portal envia `"Encerramento de Contrato de Trabalho"` |
 | `encaminhar_para` | str | caixa que recebe os e-mails (regra de inbox) |
 | `observacoes` | str \| null | |
@@ -157,6 +170,22 @@ pelo **portal** ao processar uma `CRIACAO` concluída (não vem do worker).
 
 Equivale ao comando `limpar-licencas` da CLI para **um** usuário: remover a
 licença M365 (`assignLicenses`). Devolver uma etapa única.
+
+### Liderança na UBD (v2, F4)
+
+Só na **criação de usuário novo** na UBD (usuário que já existia não tem a
+liderança alterada — aviso na etapa). Resolvida pelo **worker**:
+
+| Perfil | Líderes | Fonte |
+|---|---|---|
+| REPRESENTANTE | supervisor (`U_IB_CodCom3`) + gerente (`U_IB_CodCom4`) da região | SAP; confirmado pela função `lideranca_da_regiao` do projeto da `regioes` (GET com token, somente leitura) — diverge ⇒ não aplica e avisa; sem leitura ⇒ aplica o do SAP e avisa |
+| SUPERVISOR | gerente(s) das regiões da equipe | SAP |
+| GERENTE | nenhum | — |
+| INTERNO | `gestor_email` | payload |
+
+Líder inexistente na UBD ou falha de leitura ⇒ etapa **SUCCESS** com aviso em
+`details.avisos`; nunca aborta o fluxo. Envs do worker: `REGIOES_API_URL`,
+`REGIOES_API_KEY` (chave anon) e `REGIOES_API_TOKEN` (qualquer uma vazia ⇒ confirmação desligada).
 
 ## Comportamento esperado do worker
 

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from app.auth.dependencies import get_current_user
 from app.config import get_settings
-from app.domain import automacao as dom, formularios_acessos as ac
+from app.domain import automacao as dom, formularios_acessos as ac, gerencias_internas as gi
 from app.main import app
 from app.ratelimit import limiter
 from app.repositories import automacao as repo_admin
@@ -54,7 +54,7 @@ DADOS_DESLIG = {
     "nome_completo": "João Pedro Souza",
     "perfil": ac.PERFIL_SUPERVISOR,
     "data_desligamento": "2026-09-30",
-    "regiao": "127-BETIM",
+    "equipe": "RH2021 — EQUIPE MG 2",
     "motivo": "Encerramento de Contrato",
     "encaminhar_para": "pedidos@bondmann.com.br",
 }
@@ -110,10 +110,32 @@ def test_payload_desligamento_sem_motivo_usa_padrao():
 
 def test_payload_desligamento():
     p = dom.montar_payload(dom.TIPO_DESLIGAMENTO, DADOS_DESLIG, CHAMADO)
-    assert p["perfil"] == "SUPERVISOR" and p["regiao"]["codigo"] == "127"
+    assert p["perfil"] == "SUPERVISOR" and p["regiao"] is None
+    assert p["vaga"] == {"tipo": "EQUIPE", "codigo": "RH2021", "nome": "EQUIPE MG 2"}
     assert p["data_desligamento"] == "2026-09-30" and p["encaminhar_para"] == "pedidos@bondmann.com.br"
     with pytest.raises(ValueError):
         dom.montar_payload(dom.TIPO_REVOGAR_LICENCA, {}, CHAMADO)
+
+
+def test_payload_criacao_gerente_leva_vaga_de_gerencia():
+    dados = {**DADOS_CRIACAO, "perfil": ac.PERFIL_GERENTE, "regiao_wmw": "", "gerencia": "RH2005 — GERENTE SP"}
+    p = dom.montar_payload(dom.TIPO_CRIACAO, dados, CHAMADO)
+    assert p["perfil"] == "GERENTE" and p["regiao"] is None
+    assert p["vaga"] == {"tipo": "GERENCIA", "codigo": "RH2005", "nome": "GERENTE SP"}
+    assert ("Vaga", "RH2005 — GERENTE SP") in dom.resumo_payload(p)
+
+
+def test_payload_interno_resolve_gestor_pela_gerencia():
+    dados = {**DADOS_CRIACAO, "perfil": ac.PERFIL_INTERNO, "regiao_wmw": "",
+             "gerencia_interna": "RH — Mariana Silva", "gestor_email": ""}
+    p = dom.montar_payload(dom.TIPO_CRIACAO, dados, CHAMADO)
+    assert p["gestor_email"] == "mariana.silva@bondmann.com.br"
+    outra = {**dados, "gerencia_interna": gi.OUTRA, "gestor_email": "Chefe.X@bondmann.com.br"}
+    assert dom.montar_payload(dom.TIPO_CRIACAO, outra, CHAMADO)["gestor_email"] == "chefe.x@bondmann.com.br"
+
+
+def test_payload_representante_nao_leva_vaga():
+    assert dom.montar_payload(dom.TIPO_CRIACAO, DADOS_CRIACAO, CHAMADO)["vaga"] is None
 
 
 def test_dia_util_anterior_pula_fim_de_semana_e_feriado():
