@@ -319,41 +319,64 @@ async def agendar_sincronizacao(
         if origem_job and origem_job.get("chamado_id") else None
     )
     payload = dom.montar_payload_sync(settings.automacao_sync_modo, gerenciados, origem)
-    return await repo_admin.admin_agendar_job(
+    job = await repo_admin.admin_agendar_job(
         chamado_id=None,
         tipo=dom.TIPO_SINCRONIZAR_LIDERANCA,
         payload=payload,
         executar_apos=executar_apos,
         aprovado_por=(str(origem_job["aprovado_por"]) if origem_job and origem_job.get("aprovado_por") else None),
     )
+    if job is None:
+        # Índice único da 0093: já há uma sync NA_FILA/EXECUTANDO. Se ela ainda
+        # está na fila, lê o SAP de agora e cobre a mudança; se já executa, a
+        # mudança só entra na próxima diária — por isso o log.
+        if origem:
+            log.warning(
+                "[AUTOMACAO] sincronização de liderança do chamado %s NÃO enfileirada: já há uma ativa "
+                "(se ela já estiver executando, a mudança entra na próxima diária)",
+                origem["codigo"] or origem["id"],
+            )
+        else:
+            log.info("[AUTOMACAO] sincronização de liderança não enfileirada: já há uma ativa")
+    return job
 
 
 async def processar_resultado_sync(
     job: dict[str, Any], etapas: list[dict[str, Any]], *, settings: Settings
 ) -> None:
     """Resultado da sincronização: histórico de comerciais, nota no chamado de
-    origem (evento) e e-mail do relatório (sempre no modo relatório)."""
+    origem (evento) e e-mail do relatório (sempre no modo relatório). Cada
+    efeito é isolado: falha num não impede os demais."""
     detalhes = dom.detalhes_sync(etapas)
+    if not isinstance(detalhes, dict):
+        detalhes = {}
     status_final = str(job["status"])
+    status_label = dom.STATUS_LABEL.get(status_final, status_final)
     comerciais = detalhes.get("lideres_comerciais")
     if isinstance(comerciais, list) and comerciais:
         try:
             await repo_admin.admin_registrar_lideres_comerciais([str(e) for e in comerciais])
         except Exception:  # noqa: BLE001
             log.exception("[AUTOMACAO] líderes comerciais não registrados (job %s)", job.get("id"))
-    texto = dom.texto_relatorio_sync(job, etapas, status_final, erro_geral=job.get("erro"))
+    try:
+        texto = dom.texto_relatorio_sync(job, etapas, status_final, erro_geral=job.get("erro"))
+    except Exception:  # noqa: BLE001
+        log.exception("[AUTOMACAO] relatório da sync não montado (job %s)", job.get("id"))
+        texto = (
+            f"Sincronização de liderança na UBD — Status: {status_label}. O relatório não pôde ser "
+            f"montado (job {job.get('id')}); confira os logs do portal."
+        )
     origem = (job.get("payload") or {}).get("chamado") or {}
-    if origem.get("id") and job.get("aprovado_por"):
+    if isinstance(origem, dict) and origem.get("id") and job.get("aprovado_por"):
         try:
             await repo_admin.admin_gravar_mensagem(str(origem["id"]), str(job["aprovado_por"]), texto, interna=True)
         except Exception:  # noqa: BLE001
             log.exception("[AUTOMACAO] relatório da sync não anotado no chamado %s", origem.get("codigo"))
-    if dom.sync_precisa_alerta(status_final, detalhes):
-        await _email_alerta_ti(
-            settings,
-            f"[Automação de acessos] Sincronização de liderança — {dom.STATUS_LABEL.get(status_final, status_final)}",
-            texto,
-        )
+    try:
+        if dom.sync_precisa_alerta(status_final, detalhes):
+            await _email_alerta_ti(settings, f"[Automação de acessos] Sincronização de liderança — {status_label}", texto)
+    except Exception:  # noqa: BLE001
+        log.exception("[AUTOMACAO] alerta da sync não enviado (job %s)", job.get("id"))
 
 
 async def processar_resultado(
@@ -521,9 +544,13 @@ async def vigiar_uma_vez(settings: Settings) -> None:
         link = f"{site}/workspace/chamados/{job['chamado_id']}" if job.get("chamado_id") else (
             "(sincronização de liderança — sem chamado)"
         )
+        assunto = (
+            f"[Automação de acessos] Execução travada no chamado {job.get('chamado_codigo') or ''}"
+            if job.get("chamado_id") else "[Automação de acessos] Sincronização de liderança travada"
+        )
         await _email_alerta_ti(
             settings,
-            f"[Automação de acessos] Execução travada no chamado {job.get('chamado_codigo') or ''}",
+            assunto,
             f"{motivo}.\n\n{'Voltou para a fila automaticamente.' if requeue else 'Precisa de conferência manual.'}\n\n"
             f"{link}\n",
         )

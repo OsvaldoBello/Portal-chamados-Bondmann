@@ -735,6 +735,49 @@ def test_sync_travada_nao_tenta_anotar_em_chamado(settings_automacao, monkeypatc
     monkeypatch.setattr(repo_admin, "admin_fila_vencida_desde", vencida)
     _run(svc.vigiar_uma_vez(settings_automacao))
     assert marcados == [("s1", True)] and adm.mensagens == []
+    assert len(adm.alertas) == 1
+    assunto, corpo = adm.alertas[0]
+    assert assunto == "[Automação de acessos] Sincronização de liderança travada"
+    assert "(sincronização de liderança — sem chamado)" in corpo
+
+
+def test_sync_do_evento_descartada_por_ja_haver_ativa_fica_no_log(settings_automacao, monkeypatch, caplog):
+    _AdminSync(monkeypatch)
+    monkeypatch.setattr(settings_automacao, "automacao_tipos", "SINCRONIZAR_LIDERANCA")
+
+    async def ja_ativa(**kw):
+        return None  # UniqueViolation no índice da 0093
+
+    monkeypatch.setattr(repo_admin, "admin_agendar_job", ja_ativa)
+    origem = {"chamado_id": "c9", "chamado_codigo": "BD-9", "aprovado_por": OP}
+    with caplog.at_level("INFO", logger=svc.log.name):
+        r = _run(svc.agendar_sincronizacao(settings_automacao, executar_apos=datetime.now(UTC), origem_job=origem))
+    assert r is None
+    assert any(rec.levelname == "WARNING" and "BD-9" in rec.getMessage() and "já há uma ativa" in rec.getMessage()
+               for rec in caplog.records)
+
+
+def test_resultado_da_sync_isola_cada_efeito(settings_automacao, monkeypatch):
+    adm = _AdminSync(monkeypatch)
+
+    def texto_quebrado(*a, **k):
+        raise KeyError("detalhes inesperados")
+
+    async def gravar_quebrado(*a, **k):
+        raise RuntimeError("banco fora")
+
+    monkeypatch.setattr(dom, "texto_relatorio_sync", texto_quebrado)
+    monkeypatch.setattr(repo_admin, "admin_gravar_mensagem", gravar_quebrado)
+    job = _job_sync(aprovado_por=OP, payload=dom.montar_payload_sync("relatorio", [], {"id": "c9", "codigo": "BD-9"}))
+    _run(svc.processar_resultado(job, _etapa_sync(), None, None, settings=settings_automacao))
+    assert adm.registrados == [["sup@bondmann.com.br"]]
+    assert len(adm.alertas) == 1 and "relatório não pôde ser montado" in adm.alertas[0][1]
+
+    async def alerta_quebrado(*a, **k):
+        raise RuntimeError("SMTP fora")
+
+    monkeypatch.setattr(svc, "_email_alerta_ti", alerta_quebrado)
+    _run(svc.processar_resultado(job, _etapa_sync(), None, None, settings=settings_automacao))  # não levanta
 
 
 # --------------------------------------------------------------------------
