@@ -68,6 +68,7 @@ Transição final. Enviar **uma vez**; segundo envio → `409`.
   "credenciais": {
     "email": "joao.souza@bondmann.com.br",
     "senha_temporaria_m365": "…",
+    "senha_ubd": "…",
     "link_wmw": "https://…", "senha_wmw": "082#araraquara",
     "ramal_sip": "5104", "senha_ramal_sip": "…",
     "usuario_sap": "joao", "senha_sap": "…"
@@ -86,6 +87,8 @@ Transição final. Enviar **uma vez**; segundo envio → `409`.
   em dry-run. Ignorado em `DESLIGAMENTO`/`REVOGAR_LICENCA`. `senha_sap`
   (2026-09-15, aditivo): senha inicial do usuário SAP gerada pelo worker
   (4–10 chars, política do B1) — antes a CLI usava um valor fixo.
+  `senha_ubd` (2026-09-29, aditivo): senha inicial da UBD Learning.rocks — só
+  quando a etapa UBD criou o usuário agora (quem já existia mantém a senha).
 - `licenca` — só em `DESLIGAMENTO`, quando a etapa M365 concluiu: o portal
   agenda o job `REVOGAR_LICENCA` para `offboard_date + AUTOMACAO_LICENCA_DIAS`
   (default 15) às 07h de Brasília.

@@ -78,6 +78,7 @@ MASCARA = "***"
 _CREDENCIAIS_LABEL = (
     ("email", "E-mail corporativo"),
     ("senha_temporaria_m365", "Senha temporária do e-mail (troca obrigatória no 1º acesso)"),
+    ("senha_ubd", "Senha da UBD Learning.rocks"),
     ("link_wmw", "Link de acesso do WMW Vendas"),
     ("senha_wmw", "Senha do WMW Vendas"),
     ("ramal_sip", "Ramal (CompanySIP)"),
