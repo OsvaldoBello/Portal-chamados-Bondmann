@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 import asyncpg
 import pytest
@@ -103,9 +104,11 @@ async def test_fila_entrega_finaliza_e_trava_sync_sem_chamado(admin_na_transacao
     if not await _aplicada(conn):
         pytest.skip("0093 não aplicada neste banco")
     await conn.execute("UPDATE automacao_jobs SET status = 'CANCELADO' WHERE status IN ('NA_FILA', 'EXECUTANDO')")
+    # No passado: dentro da transação do teste o now() do Postgres fica
+    # congelado no início dela, antes do relógio do Python.
     novo = await repo_admin.admin_agendar_job(
         chamado_id=None, tipo="SINCRONIZAR_LIDERANCA", payload={"modo": "relatorio"},
-        executar_apos=repo_admin.agora_utc(), aprovado_por=None,
+        executar_apos=repo_admin.agora_utc() - timedelta(hours=1), aprovado_por=None,
     )
     assert novo is not None and novo["chamado_id"] is None
     job = await repo_admin.admin_claim_proximo("w-e2e", ["SINCRONIZAR_LIDERANCA"])
