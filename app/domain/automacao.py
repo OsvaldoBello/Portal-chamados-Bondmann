@@ -31,7 +31,8 @@ VERSAO_CONTRATO = "1"
 TIPO_CRIACAO = "CRIACAO"
 TIPO_DESLIGAMENTO = "DESLIGAMENTO"
 TIPO_REVOGAR_LICENCA = "REVOGAR_LICENCA"
-TIPOS = (TIPO_CRIACAO, TIPO_DESLIGAMENTO, TIPO_REVOGAR_LICENCA)
+TIPO_SINCRONIZAR_LIDERANCA = "SINCRONIZAR_LIDERANCA"
+TIPOS = (TIPO_CRIACAO, TIPO_DESLIGAMENTO, TIPO_REVOGAR_LICENCA, TIPO_SINCRONIZAR_LIDERANCA)
 
 STATUS_NA_FILA = "NA_FILA"
 STATUS_EXECUTANDO = "EXECUTANDO"
@@ -344,12 +345,14 @@ _TIPO_LABEL = {
     TIPO_CRIACAO: "criação de acessos",
     TIPO_DESLIGAMENTO: "desligamento de acessos",
     TIPO_REVOGAR_LICENCA: "revogação da licença Microsoft 365",
+    TIPO_SINCRONIZAR_LIDERANCA: "sincronização de liderança",
 }
 # Artigo + rótulo, para frases como "O desligamento foi executado" (concordância).
 _TIPO_FRASE = {
     TIPO_CRIACAO: ("A", "criação de acessos", "concluída", "executada"),
     TIPO_DESLIGAMENTO: ("O", "desligamento de acessos", "concluído", "executado"),
     TIPO_REVOGAR_LICENCA: ("A", "revogação da licença Microsoft 365", "concluída", "executada"),
+    TIPO_SINCRONIZAR_LIDERANCA: ("A", "sincronização de liderança", "concluída", "executada"),
 }
 _ETAPA_ICONE = {ETAPA_SUCCESS: "✅", ETAPA_FAILED: "❌", ETAPA_SKIPPED: "⏭️"}
 
@@ -524,3 +527,106 @@ def resumo_payload(payload: dict[str, Any]) -> list[tuple[str, str]]:
     _add("Data do desligamento (licença)", payload.get("offboard_date"))
     _add("Etapas a pular (já concluídas)", payload.get("pular_etapas"))
     return pares
+
+
+# --------------------------------------------------------------------------
+# Sincronização de liderança na UBD (plano v2, F5)
+# --------------------------------------------------------------------------
+SYNC_MODO_RELATORIO = "relatorio"
+SYNC_MODO_APLICAR = "aplicar"
+ETAPA_SYNC = "UBD Learning.rocks - Sincronização de Liderança"
+ETAPAS_VAGA = (
+    "SAP Business One (Service Layer) - Ocupar Vaga (Equipe/Gerência)",
+    "SAP Business One (Service Layer) - Devolver Vaga (Equipe/Gerência)",
+)
+_PERFIS_COM_VAGA = ("SUPERVISOR", "GERENTE")
+
+
+def montar_payload_sync(
+    modo: str, lideres_gerenciados: Any, origem: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Payload do job SINCRONIZAR_LIDERANCA — sem chamado próprio; ``origem`` é o
+    chamado que disparou (evento), só para a nota interna do relatório."""
+    return {
+        "versao": VERSAO_CONTRATO,
+        "tipo": TIPO_SINCRONIZAR_LIDERANCA,
+        "chamado": ({"id": str(origem["id"]), "codigo": origem.get("codigo") or ""} if origem else None),
+        "pular_etapas": [],
+        "modo": SYNC_MODO_APLICAR if str(modo or "").strip().lower() == SYNC_MODO_APLICAR else SYNC_MODO_RELATORIO,
+        "lideres_gerenciados": sorted({str(e).strip().lower() for e in (lideres_gerenciados or []) if str(e).strip()}),
+    }
+
+
+def dispara_sync_por_evento(job: dict[str, Any], etapas: list[dict[str, Any]]) -> bool:
+    """Criação/desligamento REAL de supervisor/gerente que mexeu na vaga no SAP."""
+    if job.get("dry_run") or str(job.get("tipo")) not in (TIPO_CRIACAO, TIPO_DESLIGAMENTO):
+        return False
+    if (job.get("payload") or {}).get("perfil") not in _PERFIS_COM_VAGA:
+        return False
+    return any(e.get("nome") in ETAPAS_VAGA and e.get("status") == ETAPA_SUCCESS for e in etapas)
+
+
+def detalhes_sync(etapas: list[dict[str, Any]]) -> dict[str, Any]:
+    for e in etapas:
+        if e.get("nome") == ETAPA_SYNC:
+            return e.get("detalhes") or {}
+    return {}
+
+
+def sync_diaria_devida(agora: datetime, hora: int, ultima_criacao: datetime | None) -> bool:
+    """A partir de ``hora`` (Brasília), se nenhuma sync foi criada hoje."""
+    local = agora.astimezone(TZ_BR)
+    if local.hour < hora:
+        return False
+    return ultima_criacao is None or ultima_criacao.astimezone(TZ_BR).date() < local.date()
+
+
+def sync_precisa_alerta(status_final: str, detalhes: dict[str, Any]) -> bool:
+    """Modo relatório: sempre (o gestor revisa). Aplicar: só com problema."""
+    if detalhes.get("modo") != SYNC_MODO_APLICAR or status_final != STATUS_CONCLUIDO:
+        return True
+    return any(detalhes.get(k) for k in ("nao_encontrados", "divergentes", "erros"))
+
+
+def texto_relatorio_sync(
+    job: dict[str, Any], etapas: list[dict[str, Any]], status_final: str, *, erro_geral: str | None = None
+) -> str:
+    """Relatório da sincronização (nota interna do chamado de origem e e-mail à TI)."""
+    d = detalhes_sync(etapas)
+    modo = d.get("modo") or (job.get("payload") or {}).get("modo") or SYNC_MODO_RELATORIO
+    cab = "Sincronização de liderança na UBD — " + (
+        "aplicada" if modo == SYNC_MODO_APLICAR else "MODO RELATÓRIO (nada foi alterado na UBD)"
+    )
+    partes = [cab, f"Status: {STATUS_LABEL.get(status_final, status_final)}", f"Worker: {job.get('worker_id') or '—'}"]
+    origem = (job.get("payload") or {}).get("chamado") or {}
+    if origem.get("codigo"):
+        partes.append(f"Disparada pela troca de vaga no chamado {origem['codigo']}")
+    if erro_geral:
+        partes += ["", f"Erro fora do fluxo: {erro_geral}"]
+    for e in etapas:
+        if e.get("status") != ETAPA_SUCCESS and e.get("erro"):
+            partes += ["", f"Etapa com falha: {e.get('erro')}"]
+    partes += [
+        "",
+        f"Usuários verificados: {d.get('verificados', 0)}",
+        f"Regiões não confirmadas na regioes: {d.get('regioes_nao_confirmadas', 0)}",
+    ]
+    corrigidos = d.get("corrigidos") or []
+    rotulo = "Corrigidos" if modo == SYNC_MODO_APLICAR else "Seriam corrigidos"
+    partes += ["", f"{rotulo} ({len(corrigidos)}):"]
+    for c in corrigidos:
+        mais = ", ".join(c.get("adicionados") or []) or "—"
+        menos = ", ".join(c.get("removidos") or []) or "—"
+        partes.append(f"- {c.get('email')}: + {mais}; − {menos}")
+    for chave, titulo in (("nao_encontrados", "Fora da UBD (ou inativos)"), ("avisos", "Avisos")):
+        itens = d.get(chave) or []
+        if itens:
+            partes += ["", f"{titulo} ({len(itens)}):"] + [f"- {i}" for i in itens]
+    divergentes = d.get("divergentes") or []
+    if divergentes:
+        partes += ["", f"Fora do cálculo — região diverge entre SAP e regioes ({len(divergentes)}):"]
+        partes += [f"- {p.get('email')} (regiões {p.get('regioes')})" for p in divergentes]
+    erros = d.get("erros") or []
+    if erros:
+        partes += ["", f"Erros ({len(erros)}):"] + [f"- {x.get('email')}: {x.get('erro')}" for x in erros]
+    return "\n".join(partes)

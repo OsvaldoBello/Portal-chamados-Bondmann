@@ -179,6 +179,14 @@ class Settings(BaseSettings):
     automacao_hora_criacao: int = Field(default=7)
     automacao_hora_desligamento: int = Field(default=17)
 
+    # Sincronização de liderança na UBD (plano v2, F5): "relatorio" só relata;
+    # "aplicar" grava. Diária a partir de `automacao_sync_hora` (Brasília) e por
+    # evento `automacao_sync_atraso_min` depois de mexer numa vaga (a `regioes`
+    # se atualiza em lote).
+    automacao_sync_modo: str = Field(default="relatorio")
+    automacao_sync_hora: int = Field(default=6)
+    automacao_sync_atraso_min: int = Field(default=60)
+
     # --- Monitor de sessão do wuzapi (Fase 1 da migração, 2026-09-02) ---
     # E-mail que recebe o alerta quando a sessão cai (e o aviso de
     # recuperação). Vazio = monitor desligado — mesmo kill switch implícito

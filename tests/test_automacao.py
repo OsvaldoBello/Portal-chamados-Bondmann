@@ -836,3 +836,56 @@ def test_cancelar_job_na_fila(settings_automacao):
         r2 = c.post("/workspace/chamados/c1/automacao/j-outro/cancelar", headers={"X-CSRF-Token": t})
     assert r.status_code == 303 and arepo.cancelados[0] == ("c1", "j-fila")
     assert r2.status_code == 200 and "não está mais na fila" in r2.text
+
+
+# --------------------------------------------------------------------------
+# Sincronização de liderança (v2, F5)
+# --------------------------------------------------------------------------
+ETAPA_OCUPAR = "SAP Business One (Service Layer) - Ocupar Vaga (Equipe/Gerência)"
+
+
+def test_payload_sync_normaliza_modo_e_emails():
+    p = dom.montar_payload_sync("APLICAR", [" B@bondmann.com.br", "a@bondmann.com.br", ""], {"id": "c1", "codigo": "BD-1"})
+    assert p["tipo"] == "SINCRONIZAR_LIDERANCA" and p["modo"] == "aplicar"
+    assert p["lideres_gerenciados"] == ["a@bondmann.com.br", "b@bondmann.com.br"]
+    assert p["chamado"] == {"id": "c1", "codigo": "BD-1"} and p["pular_etapas"] == []
+    assert dom.montar_payload_sync("qualquer coisa", [])["modo"] == "relatorio"
+    assert dom.montar_payload_sync("aplicar", [])["chamado"] is None
+
+
+def test_sync_por_evento_so_para_vaga_real_de_supervisor_ou_gerente():
+    etapas = [{"nome": ETAPA_OCUPAR, "status": "SUCCESS"}]
+    job = {"tipo": "CRIACAO", "dry_run": False, "payload": {"perfil": "SUPERVISOR"}}
+    assert dom.dispara_sync_por_evento(job, etapas)
+    assert not dom.dispara_sync_por_evento({**job, "dry_run": True}, etapas)
+    assert not dom.dispara_sync_por_evento({**job, "payload": {"perfil": "REPRESENTANTE"}}, etapas)
+    assert not dom.dispara_sync_por_evento(job, [{"nome": ETAPA_OCUPAR, "status": "FAILED"}])
+    assert not dom.dispara_sync_por_evento({**job, "tipo": "REVOGAR_LICENCA"}, etapas)
+
+
+def test_sync_diaria_a_partir_das_6h_uma_vez_por_dia():
+    # 2026-09-30 09:00 UTC = 06:00 em Brasília
+    seis = datetime(2026, 9, 30, 9, 0, tzinfo=UTC)
+    assert not dom.sync_diaria_devida(seis - timedelta(minutes=1), 6, None)
+    assert dom.sync_diaria_devida(seis, 6, None)
+    assert dom.sync_diaria_devida(seis, 6, datetime(2026, 9, 29, 9, 30, tzinfo=UTC))
+    assert not dom.sync_diaria_devida(seis, 6, datetime(2026, 9, 30, 3, 5, tzinfo=UTC))  # 00:05 BR do mesmo dia
+
+
+def test_alerta_da_sync_sempre_no_relatorio_e_so_com_problema_no_aplicar():
+    limpo = {"modo": "aplicar", "nao_encontrados": [], "divergentes": [], "erros": []}
+    assert dom.sync_precisa_alerta("CONCLUIDO", {"modo": "relatorio"})
+    assert not dom.sync_precisa_alerta("CONCLUIDO", limpo)
+    assert dom.sync_precisa_alerta("CONCLUIDO", {**limpo, "erros": [{"email": "x", "erro": "y"}]})
+    assert dom.sync_precisa_alerta("FALHOU", limpo)
+
+
+def test_texto_do_relatorio_da_sync():
+    etapas = [{"nome": dom.ETAPA_SYNC, "status": "SUCCESS", "erro": None, "detalhes": {
+        "modo": "relatorio", "verificados": 3, "regioes_nao_confirmadas": 1,
+        "corrigidos": [{"email": "rep@bondmann.com.br", "adicionados": ["sup@bondmann.com.br"], "removidos": ["velho@bondmann.com.br"]}],
+        "nao_encontrados": ["fulano@bondmann.com.br"], "divergentes": [], "erros": [], "avisos": []}}]
+    txt = dom.texto_relatorio_sync({"worker_id": "w1", "payload": {"chamado": {"id": "c1", "codigo": "BD-9"}}}, etapas, "CONCLUIDO")
+    assert "MODO RELATÓRIO" in txt and "BD-9" in txt and "Usuários verificados: 3" in txt
+    assert "rep@bondmann.com.br: + sup@bondmann.com.br; − velho@bondmann.com.br" in txt
+    assert "fulano@bondmann.com.br" in txt
