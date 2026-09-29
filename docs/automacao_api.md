@@ -41,6 +41,10 @@ Corpo opcional: `{"tipos": ["CRIACAO", "DESLIGAMENTO"]}` (default: todos).
  "chamado": {"id": "uuid", "codigo": "BD-2026-00901"},
  "payload": { ... ver abaixo ... }}
 ```
+`chamado` é `null` num job de `SINCRONIZAR_LIDERANCA` sem origem (a
+sincronização diária); a por evento leva o chamado que disparou (só
+informativo — não entra no cálculo).
+
 Recomendação de polling: a cada 15–30 s.
 
 ### `POST /jobs/{id}/heartbeat`
@@ -102,11 +106,13 @@ recebe a mensagem de encerramento com as credenciais); nenhuma `SUCCESS` ou
 
 ## Payload por tipo
 
-Campos comuns: `versao` (`"1"`), `tipo`, `chamado {id, codigo}`,
-`pular_etapas` (lista de `step_name` já concluídos num job anterior — o
-worker deve **pular** essas etapas e devolvê-las como `SKIPPED` com
-`error_message: "já concluída em execução anterior"`; o portal conta essas
-etapas como **concluídas** na classificação, não como pendência).
+Campos comuns: `versao` (`"1"`), `tipo`, `chamado {id, codigo}` (`null` só em
+`SINCRONIZAR_LIDERANCA` sem origem), `pular_etapas` (lista de `step_name` já
+concluídos num job anterior — o worker deve **pular** essas etapas e
+devolvê-las como `SKIPPED` com `error_message: "já concluída em execução
+anterior"`; o portal conta essas etapas como **concluídas** na
+classificação, não como pendência; sempre `[]` em `SINCRONIZAR_LIDERANCA`,
+que não reexecuta por partes).
 
 Nomes de etapa (`step_name`) que o worker devolve — são constantes em
 `flow.py` (`STEP_*`) e parte do contrato:
@@ -116,6 +122,7 @@ Nomes de etapa (`step_name`) que o worker devolve — são constantes em
 | `CRIACAO` | `Microsoft 365 (MS Graph) - Criação de Conta e Grupos` · `UBD Learning.rocks - Cadastro e Atribuição de Times` · `WMW Vendas Web - Cadastro e Gerador de Link` (só REPRESENTANTE) · `CompanySIP PABX - Criação de Ramal Interno` (só INTERNO) · `SAP Business One (Service Layer) - Criação de Usuário Interno` (INTERNO), `SAP Business One (Service Layer) - Vínculo Comercial (Consultor PJ)` (REPRESENTANTE com região) ou `SAP Business One (Service Layer) - Ocupar Vaga (Equipe/Gerência)` (SUPERVISOR/GERENTE) |
 | `DESLIGAMENTO` | `Microsoft 365 (MS Graph) - Bloqueio e Encaminhamento` · `UBD Learning.rocks - Inativação da Conta` · `WMW Vendas Web - Bloqueio de Acesso` (só REPRESENTANTE) · `SAP Business One (Service Layer) - Bloqueio e Liberação de Licenças` (INTERNO), `SAP Business One (Service Layer) - Devolver Vaga (Equipe/Gerência)` (SUPERVISOR/GERENTE com `vaga`) ou `SAP Business One (Service Layer) - Transferência para RH2020` (demais) |
 | `REVOGAR_LICENCA` | `Microsoft 365 (MS Graph) - Revogação da Licença` |
+| `SINCRONIZAR_LIDERANCA` | `UBD Learning.rocks - Sincronização de Liderança` (etapa única) |
 
 A etapa "Portal de Chamados Bondmann - Conta e Permissões" é acrescentada
 pelo **portal** ao processar uma `CRIACAO` concluída (não vem do worker).
@@ -130,6 +137,12 @@ receba `GERENTE` ou supervisor sem `regiao` levanta `PayloadInvalido` e o job
 FALHA sem tocar em sistema nenhum (fail-safe). Pelo mesmo motivo, um chamado de
 supervisor aberto **antes** do deploy do portal (só com `regiao`, sem `vaga`)
 falha no worker novo: reabrir o formulário e escolher a equipe.
+
+**Mudanças da v2 (F5, 2026-09-29) — aditivas, o contrato continua `"1"`:**
+tipo novo `SINCRONIZAR_LIDERANCA`, sem chamado dono (ver seção própria
+abaixo). Não muda nada nos demais tipos; só entra em ação quando
+`AUTOMACAO_TIPOS` o lista (worker antigo que nunca receba esse tipo não
+precisa saber que ele existe).
 
 ### `CRIACAO`
 | Campo | Tipo | Notas |
@@ -186,6 +199,66 @@ liderança alterada — aviso na etapa). Resolvida pelo **worker**:
 Líder inexistente na UBD ou falha de leitura ⇒ etapa **SUCCESS** com aviso em
 `details.avisos`; nunca aborta o fluxo. Envs do worker: `REGIOES_API_URL`,
 `REGIOES_API_KEY` (chave anon) e `REGIOES_API_TOKEN` (qualquer uma vazia ⇒ confirmação desligada).
+
+### `SINCRONIZAR_LIDERANCA` (v2, F5)
+
+Mantém a liderança de representantes e supervisores na UBD igual à do SAP —
+a criação (acima) só resolve líder pra usuário **novo**; quem já existia
+depende desta sincronização. Sem chamado dono: nasce da vigilância (diária,
+`AUTOMACAO_SYNC_HORA`) ou do resultado de um job de `CRIACAO`/`DESLIGAMENTO`
+de SUPERVISOR/GERENTE cuja etapa de vaga deu `SUCCESS` (por evento, com
+`executar_apos = agora + AUTOMACAO_SYNC_ATRASO_MIN`). Etapa única.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `chamado` | `{id, codigo}` \| null | `null` na sincronização diária; o chamado que disparou o evento, só informativo, na por evento |
+| `pular_etapas` | `[]` | sempre vazio — etapa única |
+| `modo` | `"relatorio"` \| `"aplicar"` | `AUTOMACAO_SYNC_MODO` (default `relatorio`); `relatorio` só lê (`PATCH {}`), nunca grava; `aplicar` grava com `PATCH {"leaders": [...]}` (lista completa — o PATCH substitui, não acumula) |
+| `lideres_gerenciados` | list[str] | e-mails (minúsculos, ordenados) dos supervisores/gerentes já vistos por sincronizações anteriores (tabela `automacao_lideranca_gerenciada`) — só estes podem ser **removidos** de alguém |
+
+Regras (worker: `services/lideranca.py` + `_sincronizar_lideranca` em
+`flow.py`):
+
+- **Fonte = SAP, a `regioes` só confirma.** O worker lê a `IB_CO_REGIAO`
+  (`U_IB_CodCom1` representante, `CodCom3` supervisor, `CodCom4` gerente) e
+  confirma cada região pela função `lideranca_da_regiao` da `regioes` (GET
+  somente leitura, mesma API da criação). **Divergente** (SAP ≠ `regioes`)
+  ⇒ os usuários da região ficam **fora do cálculo** nesta execução (não são
+  tocados) e aparecem em `divergentes`. Sem confirmação possível
+  (indisponível ou sem linha) ⇒ segue com o SAP e conta em
+  `regioes_nao_confirmadas`.
+- **Esperados:** representante = supervisor + gerente das regiões em que é
+  o `CodCom1`; supervisor = gerentes das regiões em que é o `CodCom3`;
+  gerente não tem líder; interno usa `gestor_email` e não passa por esta
+  etapa.
+- **Espelho com proteção (V4):** `novo = (atuais − (gerenciados −
+  esperados)) ∪ esperados` — remove só quem está em `lideres_gerenciados` e
+  deixou de ser esperado; um líder posto manualmente (fora dessa lista)
+  nunca é removido. Só grava (`set_leader_ids`) quando `novo != atuais` e
+  `modo = aplicar`.
+- **Leitura por `PATCH {}`:** a API não tem GET de líderes (spike F5.0,
+  2026-09-29) — `PATCH` com corpo vazio não altera nada e devolve
+  `leader_ids`. Se a resposta parar de trazer essa chave
+  (`LeituraLiderancaIndisponivel`), a **etapa inteira falha** — nunca é
+  tratado como lista vazia, porque isso apagaria líderes de todo mundo.
+- Falha ao consultar **um alvo** (usuário sendo verificado) que não seja a
+  ausência de `leader_ids` acima ⇒ vai para `details.erros`, os demais
+  alvos continuam normalmente.
+- Falha ao consultar **um líder gerenciado** (ao montar `lideres_gerenciados
+  ∪ comerciais de hoje no SAP`) ⇒ vira `details.avisos`, e esse líder
+  **não é removido de ninguém nesta execução** (fica de fora do cálculo,
+  como se não fosse gerenciado agora).
+- `details` do resultado: `{modo, verificados, corrigidos: [{email,
+  adicionados, removidos}], nao_encontrados, divergentes: [{email,
+  regioes}], regioes_nao_confirmadas, erros: [{email, erro}], avisos,
+  lideres_comerciais}`. O portal grava `lideres_comerciais` na tabela
+  `automacao_lideranca_gerenciada` (soma com execuções anteriores) depois
+  de cada resultado — é essa tabela que alimenta `lideres_gerenciados` na
+  próxima chamada.
+
+Contrato continua `"1"` (aditivo). Migrations `0092`/`0093`, gatilhos e
+envs (`AUTOMACAO_SYNC_MODO`/`AUTOMACAO_SYNC_HORA`/`AUTOMACAO_SYNC_ATRASO_MIN`)
+estão em `plano_md_mestre_automacao_acessos_v2.md` (Seção 6).
 
 ## Comportamento esperado do worker
 

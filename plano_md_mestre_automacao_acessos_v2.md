@@ -10,7 +10,7 @@
 > alertas; o worker (`Automação/`: `worker.py` + `flow.py`) continua executando nos sistemas
 > (M365, UBD, SAP, WMW, SIP). A v2 acrescenta funções, campos e um tipo de job.
 >
-> **Status:** 🟡 `Em processo` (F1–F4 em código; F5 aguarda o spike F5.0) · **Criado em:** 2026-09-25 · **Atualizado em:** 2026-09-25 ·
+> **Status:** 🟡 `Em processo` (F1–F5 em código, aguardando deploy e homologação) · **Criado em:** 2026-09-25 · **Atualizado em:** 2026-09-29 ·
 > **Origem:** brainstorming com o gestor (Osvaldo) após o desligamento parcial de Paola Kemel
 > (2026-09-24, etapa SAP ❌).
 
@@ -44,7 +44,7 @@ homologado conforme o DoD).
 | **F2** | Checkbox "Urgência" no desligamento + horário padrão 17h | portal | — | 🟡 Em processo | 2026-09-25 | Independente; pode ir junto com F1 |
 | **F3** | Perfil GERENTE; campos Equipe/Gerência correspondente; ocupar/devolver vaga na `IB_CO_REGIAO`; grupos de Gerência; contrato v1 aditivo | portal + worker | F0 | 🟡 Em processo | 2026-09-25 | Código + testes; aguarda deploy (worker primeiro) e homologação |
 | **F4** | Liderança na UBD na criação (representante, supervisor, interno); campo "Gerência responsável" | portal + worker | F0, F3 | 🟡 Em processo | 2026-09-25 | Código + testes; envs `REGIOES_*` e política de SELECT na `regioes` pendentes |
-| **F5** | Job `SINCRONIZAR_LIDERANCA` diário e por evento; espelho com proteção | portal + worker | F4 | 🔵 Projetado | 2026-09-29 | Spike F5.0 concluído (PATCH substitui; leitura por `PATCH {}`); plano escrito; estreia em modo relatório |
+| **F5** | Job `SINCRONIZAR_LIDERANCA` diário e por evento; espelho com proteção | portal + worker | F4 | 🟡 Em processo | 2026-09-29 | Código + testes nos dois repos (Task 9); aguarda deploy (worker primeiro, migrations `0092`/`0093`) e homologação (Seção 8) — estreia em modo relatório |
 
 ### Detalhamento por item
 
@@ -73,10 +73,10 @@ homologado conforme o DoD).
 | F4 | Campo "Gerência responsável" + mapa de gerentes | 🟡 Em processo |
 | F4 | Líderes resolvidos pelo worker (SAP) e exibidos na nota (`leaders_aplicados`/`avisos`) | 🟡 Em processo |
 | F4 | Worker envia `leaders` — só usuário novo (existente fica para a F5, após o spike) | 🟡 Em processo |
-| F5 | Migration `0092` (tipo novo, `chamado_id` nulo, RLS) | 🔵 Projetado |
-| F5 | Gatilho diário 06h + gatilho por evento com atraso | 🔵 Projetado |
-| F5 | `run_leadership_sync_flow` no worker | 🔵 Projetado |
-| F5 | Modo relatório revisado pelo gestor → modo aplicar | 🔵 Projetado |
+| F5 | Migration `0092` (tipo novo, `chamado_id` nulo, RLS) | 🟡 Em processo — falta aplicar em produção |
+| F5 | Gatilho diário 06h + gatilho por evento com atraso | 🟡 Em processo |
+| F5 | `run_leadership_sync_flow` no worker | 🟡 Em processo |
+| F5 | Modo relatório revisado pelo gestor → modo aplicar | 🔵 Projetado — homologação (Seção 8) ainda não rodou |
 
 ---
 
@@ -567,7 +567,7 @@ Atualizar `docs/automacao_api.md` na F3 (mudanças da F2 são aditivas e não ex
 | `vaga: {tipo: EQUIPE\|GERENCIA, codigo, nome}` para supervisor e gerente; `regiao` nula para eles | F3 | v2 |
 | Etapas novas: Ocupar Vaga, Devolver Vaga | F3 | v2 |
 | `lideres_ubd: [email]`, `lideres_nao_resolvidos` na CRIACAO | F4 | v2 |
-| Tipo `SINCRONIZAR_LIDERANCA` (`modo`, `origem_chamado_id`, `usuarios`, `lideres_gerenciados`) + etapa de sync | F5 | v2 |
+| Tipo `SINCRONIZAR_LIDERANCA` (`chamado` nulo ou de origem, `modo`, `lideres_gerenciados`) + etapa única de sync | F5 | v1 (aditivo) |
 
 **Troca de versão sem janela quebrada:** (1) o worker passa a aceitar `versao_contrato` `1` e
 `2`; (2) o portal passa a emitir `2` e `/saude` devolve `"2"`.
@@ -578,6 +578,13 @@ Atualizar `docs/automacao_api.md` na F3 (mudanças da F2 são aditivas e não ex
 worker antigo recebendo `GERENTE` ou supervisor sem `regiao` levanta `PayloadInvalido` e o job
 falha sem tocar em sistema. `lideres_ubd`/`lideres_nao_resolvidos` no payload **não** foram
 criados: a F4 resolve a liderança no worker (abaixo).
+
+**Desvio aplicado na F5 (2026-09-29, implementação):** o contrato **continua `"1"`** — sem
+`origem_chamado_id`/`usuarios` (esboçados aqui antes do código); o payload real é
+`{versao, tipo, chamado: {id, codigo} | null, pular_etapas: [], modo, lideres_gerenciados}` (ver
+`docs/automacao_api.md`). `chamado` reaproveita o campo comum em vez de um campo novo — `null`
+na sincronização diária, o chamado de origem (só informativo) na por evento. Sem `usuarios`: o
+worker recalcula os alvos sozinho a partir do SAP a cada execução, não recebe uma lista pronta.
 
 ---
 
