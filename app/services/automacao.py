@@ -488,8 +488,15 @@ async def processar_resultado(
 
     # 6) Alerta detalhado aos admins da TI quando algo falhou (regra do gestor,
     #    2026-09-15): cada etapa com o erro devolvido, o que ficou por fazer, link.
-    if status_final in (dom.STATUS_COM_PENDENCIAS, dom.STATUS_FALHOU):
-        rotulo = "FALHOU" if status_final == dom.STATUS_FALHOU else "com pendências"
+    #    Também quando concluiu mas deixou AÇÃO MANUAL (ex.: licença do SAP,
+    #    que a API não tira nem atribui — gestor, 2026-09-30); não em simulação.
+    acao_manual = status_final == dom.STATUS_CONCLUIDO and not dry_run and bool(dom.acoes_manuais(etapas))
+    if status_final in (dom.STATUS_COM_PENDENCIAS, dom.STATUS_FALHOU) or acao_manual:
+        rotulo = (
+            "FALHOU" if status_final == dom.STATUS_FALHOU
+            else "com pendências" if status_final == dom.STATUS_COM_PENDENCIAS
+            else "concluída — ação manual necessária"
+        )
         await _email_alerta_ti(
             settings,
             f"[Automação de acessos] {tipo} {rotulo} — chamado {codigo}{' (simulação)' if dry_run else ''}",

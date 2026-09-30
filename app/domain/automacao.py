@@ -372,6 +372,20 @@ def _linhas_etapas(etapas: list[dict[str, Any]], *, com_detalhes: bool) -> list[
     return linhas
 
 
+def acoes_manuais(etapas: list[dict[str, Any]]) -> list[str]:
+    """Ações que a automação não consegue fazer e a TI precisa fazer à mão
+    (`detalhes.acoes_manuais` de etapas concluídas nesta execução) — ex.:
+    tirar/atribuir licença do SAP, que a Service Layer não faz (2026-09-30)."""
+    acoes: list[str] = []
+    for e in etapas:
+        if e.get("status") != ETAPA_SUCCESS:
+            continue
+        for a in (e.get("detalhes") or {}).get("acoes_manuais") or []:
+            if isinstance(a, str) and a.strip() and a.strip() not in acoes:
+                acoes.append(a.strip())
+    return acoes
+
+
 def texto_nota_interna(
     job: dict[str, Any], etapas: list[dict[str, Any]], *, erro_geral: str | None = None
 ) -> str:
@@ -387,6 +401,9 @@ def texto_nota_interna(
     pendentes = [e["nome"] for e in etapas if not etapa_concluida(e)]
     if pendentes:
         partes += ["", "Pendências para ação manual da TI: " + "; ".join(pendentes)]
+    acoes = acoes_manuais(etapas)
+    if acoes:
+        partes += ["", "Ações manuais para a TI:"] + [f"- {a}" for a in acoes]
     return "\n".join(partes)
 
 
@@ -461,6 +478,10 @@ def texto_email_alerta_ti(
                     partes.append(f"        {k}: {v}")
     pendentes = [e["nome"] for e in etapas if not etapa_concluida(e)]
     partes.append("")
+    acoes = acoes_manuais(etapas)
+    if acoes:
+        partes += ["AÇÃO MANUAL NECESSÁRIA (a automação não consegue fazer):"]
+        partes += [f"  - {a}" for a in acoes] + [""]
     if pendentes:
         partes += ["Ficou por fazer (ação manual ou 'Reexecutar pendências' no card):"]
         partes += [f"  - {n}" for n in pendentes]

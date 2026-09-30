@@ -84,6 +84,12 @@ Transição final. Enviar **uma vez**; segundo envio → `409`.
   `SUCCESS|FAILED|SKIPPED`, `error_message`, `details`). Chaves de `details`
   que pareçam segredo (`senha`, `password`, `token`, …) são **mascaradas**
   pelo portal antes de gravar; mesmo assim, prefira não mandá-las ali.
+  `details.acoes_manuais` (2026-09-30, aditivo): lista de textos com o que a
+  automação **não consegue** fazer e a TI precisa fazer à mão — hoje, atribuir
+  (criação) ou retirar (desligamento) a licença nominal do SAP, que a Service
+  Layer não permite sem apagar o usuário. O portal lista essas ações na nota
+  interna e, mesmo com a automação CONCLUÍDA, manda o alerta por e-mail aos
+  admins da TI (não em simulação).
 - `erro` — exceção fora do fluxo (o worker morreu antes de completar as
   etapas). Presente ⇒ job `FALHOU`.
 - `credenciais` — só as chaves acima são reconhecidas; vão **exclusivamente**

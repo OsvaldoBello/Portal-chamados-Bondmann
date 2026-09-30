@@ -559,6 +559,63 @@ def test_processar_falhou_so_nota_interna(settings_automacao, monkeypatch):
     assert adm.resolvidos == [] and adm.emails == []
 
 
+ACAO_LICENCA = ("retirar a licença do usuário SAP PAOLAK (se houver) em Administração → Licença → "
+                "Administração de licenças — a API do SAP não desatribui licença")
+ETAPAS_COM_ACAO = [
+    {"nome": "M365", "status": "SUCCESS", "erro": None, "detalhes": {}},
+    {"nome": "SAP - Bloqueio", "status": "SUCCESS", "erro": None,
+     "detalhes": {"user_code": "PAOLAK", "acoes_manuais": [ACAO_LICENCA]}},
+    {"nome": "UBD", "status": "SKIPPED", "erro": "já concluída em execução anterior", "detalhes": {}},
+]
+
+
+def _alertas(monkeypatch):
+    enviados: list[tuple[str, str]] = []
+
+    async def alerta(settings, assunto, corpo):
+        enviados.append((assunto, corpo))
+
+    monkeypatch.setattr(svc, "_email_alerta_ti", alerta)
+    return enviados
+
+
+def test_acoes_manuais_das_etapas():
+    assert dom.acoes_manuais(ETAPAS_COM_ACAO) == [ACAO_LICENCA]
+    assert dom.acoes_manuais([{"nome": "x", "status": "FAILED", "erro": "e", "detalhes": {"acoes_manuais": ["y"]}}]) == []
+
+
+def test_nota_interna_e_alerta_listam_as_acoes_manuais():
+    job = {"tipo": "DESLIGAMENTO", "dry_run": False, "worker_id": "w1"}
+    assert "Ações manuais para a TI:" in dom.texto_nota_interna(job, ETAPAS_COM_ACAO)
+    assert ACAO_LICENCA in dom.texto_nota_interna(job, ETAPAS_COM_ACAO)
+    alerta = dom.texto_email_alerta_ti(job, ETAPAS_COM_ACAO, dom.STATUS_CONCLUIDO, erro_geral=None, link="L")
+    assert "AÇÃO MANUAL" in alerta and ACAO_LICENCA in alerta
+
+
+def test_concluido_com_acao_manual_resolve_e_avisa_a_ti(settings_automacao, monkeypatch):
+    adm = _Admin(monkeypatch)
+    enviados = _alertas(monkeypatch)
+    _run(svc.processar_resultado(_job(tipo="DESLIGAMENTO"), ETAPAS_COM_ACAO, None, None, settings=settings_automacao))
+    assert adm.resolvidos == ["c1"]
+    assert len(enviados) == 1 and "ação manual" in enviados[0][0] and ACAO_LICENCA in enviados[0][1]
+
+
+def test_concluido_sem_acao_manual_nao_manda_alerta(settings_automacao, monkeypatch):
+    _Admin(monkeypatch)
+    enviados = _alertas(monkeypatch)
+    etapas = [{"nome": "M365", "status": "SUCCESS", "erro": None, "detalhes": {}}]
+    _run(svc.processar_resultado(_job(tipo="DESLIGAMENTO"), etapas, None, None, settings=settings_automacao))
+    assert enviados == []
+
+
+def test_simulacao_com_acao_manual_nao_manda_alerta(settings_automacao, monkeypatch):
+    _Admin(monkeypatch)
+    enviados = _alertas(monkeypatch)
+    _run(svc.processar_resultado(_job(tipo="DESLIGAMENTO", dry_run=True), ETAPAS_COM_ACAO, None, None,
+                                 settings=settings_automacao))
+    assert enviados == []
+
+
 def test_processar_desligamento_agenda_revogacao_de_licenca(settings_automacao, monkeypatch):
     adm = _Admin(monkeypatch)
     etapas = [{"nome": "M365", "status": "SUCCESS", "erro": None, "detalhes": {}}]
