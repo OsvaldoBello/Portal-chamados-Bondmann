@@ -87,7 +87,11 @@ Transição final. Enviar **uma vez**; segundo envio → `409`.
 - `erro` — exceção fora do fluxo (o worker morreu antes de completar as
   etapas). Presente ⇒ job `FALHOU`.
 - `credenciais` — só as chaves acima são reconhecidas; vão **exclusivamente**
-  para a mensagem de encerramento ao RH (D4), nunca para a tabela. Omitir
+  para a mensagem pública ao RH (D4), nunca para a tabela — na de
+  encerramento e, desde 2026-09-30, também na **parcial** (com pendências),
+  com as credenciais do que já foi criado: a reexecução pula essas etapas e
+  não as gera de novo (BD-2026-01011 ficou sem as senhas do M365 e da UBD).
+  O e-mail de aviso continua neutro, sem reproduzir o texto. Omitir
   em dry-run. Ignorado em `DESLIGAMENTO`/`REVOGAR_LICENCA`. `senha_sap`
   (2026-09-15, aditivo): senha inicial do usuário SAP gerada pelo worker
   (4–10 chars, política do B1) — antes a CLI usava um valor fixo.
