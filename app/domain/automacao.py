@@ -414,8 +414,10 @@ def texto_mensagem_publica(
     status_final: str,
 ) -> str:
     """Mensagem ao RH (autor). Quando tudo deu certo (D4), é a mensagem de
-    encerramento com as credenciais; com pendências, é um parcial sem senhas
-    — o TI conclui manualmente e entrega o que faltar."""
+    encerramento com as credenciais; com pendências, é um parcial que já leva
+    as credenciais do que foi criado nesta execução (gestor, 2026-09-30:
+    a reexecução pula essas etapas e não gera as senhas de novo —
+    BD-2026-01011 ficou sem a senha do M365 e da UBD)."""
     tipo = _TIPO_LABEL.get(str(job.get("tipo")), str(job.get("tipo")))
     if job.get("dry_run"):
         return (
@@ -433,6 +435,11 @@ def texto_mensagem_publica(
         return "\n".join(partes)
     partes = [f"{artigo} {tipo} foi {executada} parcialmente:", ""]
     partes += _linhas_etapas(etapas, com_detalhes=False) or ["(nenhuma etapa concluída)"]
+    # Só o e-mail não justifica o bloco: ele sai sempre, mesmo sem conta criada.
+    if any(rotulo != "E-mail corporativo" for rotulo, _ in credenciais):
+        partes += ["", "Credenciais do que já foi criado (o restante vem quando a TI concluir):"]
+        partes += [f"• {rotulo}: {valor}" for rotulo, valor in credenciais]
+        partes += ["", "Guarde estas informações e repasse ao colaborador por canal seguro."]
     partes += ["", "A TI vai concluir manualmente o que ficou pendente e retornar por aqui."]
     return "\n".join(partes)
 
