@@ -298,19 +298,31 @@ def test_alerta_vai_para_todos_os_admins_configurados(settings_automacao, monkey
     assert enviados == []
 
 
-def test_textos_publico_com_credenciais_so_quando_concluido():
+def test_textos_publico_com_credenciais_no_concluido_e_no_parcial():
     job = {"tipo": "CRIACAO", "dry_run": False, "worker_id": "w1"}
     etapas = [{"nome": "M365", "status": "SUCCESS", "erro": None, "detalhes": {}}]
     cred = dom.filtrar_credenciais({"senha_temporaria_m365": "S3nh@", "email": "a@bondmann.com.br", "ignorada": "x"})
     txt = dom.texto_mensagem_publica(job, etapas, cred, dom.STATUS_CONCLUIDO)
     assert "concluída" in txt and "S3nh@" in txt and "a@bondmann.com.br" in txt and "ignorada" not in txt
+    # Gestor, 2026-09-30 (BD-2026-01011): o parcial leva as credenciais do que
+    # já foi criado — a reexecução pula essas etapas e não as gera de novo.
     parcial = dom.texto_mensagem_publica(job, etapas, cred, dom.STATUS_COM_PENDENCIAS)
-    assert "parcialmente" in parcial and "S3nh@" not in parcial
+    assert "parcialmente" in parcial and "S3nh@" in parcial and "a@bondmann.com.br" in parcial
+    assert "já foi criado" in parcial and "Guarde estas informações" in parcial
     sim = dom.texto_mensagem_publica({**job, "dry_run": True}, etapas, cred, dom.STATUS_CONCLUIDO)
     assert "Simulação" in sim and "S3nh@" not in sim
     nota = dom.texto_nota_interna(job, etapas + [{"nome": "WMW", "status": "FAILED", "erro": "timeout", "detalhes": {}}])
     assert "Pendências" in nota and "WMW" in nota and "timeout" in nota
     assert "senha" not in dom.texto_email_neutro("BD-1", dom.STATUS_CONCLUIDO).lower()
+
+
+def test_parcial_so_com_email_nao_mostra_bloco_de_credenciais():
+    job = {"tipo": "CRIACAO", "dry_run": False, "worker_id": "w1"}
+    etapas = [{"nome": "M365", "status": "FAILED", "erro": "x", "detalhes": {}},
+              {"nome": "WMW", "status": "SUCCESS", "erro": None, "detalhes": {}}]
+    cred = dom.filtrar_credenciais({"email": "a@bondmann.com.br"})
+    parcial = dom.texto_mensagem_publica(job, etapas, cred, dom.STATUS_COM_PENDENCIAS)
+    assert "parcialmente" in parcial and "Credenciais" not in parcial and "a@bondmann.com.br" not in parcial
 
 
 def test_credencial_senha_ubd_aparece_na_mensagem_logo_apos_o_email():
@@ -540,7 +552,7 @@ def test_processar_criacao_concluida_resolve_e_manda_credenciais(settings_automa
     assert adm.agendados == []
 
 
-def test_processar_com_pendencias_nao_resolve_nem_expoe_senha(settings_automacao, monkeypatch):
+def test_processar_com_pendencias_manda_credenciais_do_que_foi_criado_e_nao_resolve(settings_automacao, monkeypatch):
     adm = _Admin(monkeypatch)
     etapas = [
         {"nome": "M365", "status": "SUCCESS", "erro": None, "detalhes": {}},
@@ -548,7 +560,8 @@ def test_processar_com_pendencias_nao_resolve_nem_expoe_senha(settings_automacao
     ]
     _run(svc.processar_resultado(_job(status="CONCLUIDO_COM_PENDENCIAS"), etapas, {"senha_temporaria_m365": "S3nh@"}, None, settings=settings_automacao))
     publicas = [m for m in adm.mensagens if not m[3]]
-    assert publicas and "parcialmente" in publicas[0][2] and "S3nh@" not in publicas[0][2]
+    assert publicas and "parcialmente" in publicas[0][2] and "S3nh@" in publicas[0][2]
+    assert adm.emails and "S3nh@" not in adm.emails[0][2]  # e-mail continua neutro
     assert adm.resolvidos == []
 
 
