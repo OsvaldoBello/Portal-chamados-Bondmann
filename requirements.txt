@@ -8,12 +8,12 @@ fastapi==0.141.1
 # do fastapi. A partir do fastapi 0.137.0 o requisito é `starlette>=0.46.0`,
 # sem teto; fixar aqui torna a versão resolvida uma decisão visível e
 # versionada, em vez de reintroduzir a mesma classe de ponto cego.
-starlette==1.6.0
-uvicorn[standard]==0.52.0
+starlette==1.7.0
+uvicorn[standard]==0.54.0
 supabase==2.31.0
 jinja2==3.1.6
-pydantic==2.13.4
-pydantic-settings==2.14.2
+pydantic==2.13.5
+pydantic-settings==2.15.0
 asyncpg==0.31.0
 slowapi==0.1.10
 python-multipart==0.0.32
@@ -29,28 +29,28 @@ httpx==0.28.1
 # [DECISÃO DE ENGENHARIA] adicionado ao stack: a spec exige verificação local
 # de assinatura/exp/aud por request; chamar a API do Supabase a cada request
 # seria gargalo. PyJWT[crypto] cobre JWKS e HS256.
-pyjwt[crypto]==2.13.0
+pyjwt[crypto]==2.15.0
 # Base de fusos IANA para o zoneinfo (America/Sao_Paulo, Seção 5.2). Obrigatório
 # no Windows/imagens slim, onde o SO não traz o tz database — sem isto o import
 # de app.templating quebra (ZoneInfoNotFoundError) e o servidor não sobe.
-tzdata==2026.3
+tzdata==2026.4
 # Feriados nacionais calculados (Fase 5, 2026-07-09) — substitui a tabela
 # `feriados` hardcoded/editada à mão a cada virada de ano (app/domain/feriados.py).
-holidays==0.101
+holidays==0.105
 # Recorte automático da foto de perfil em quadrado (Fase 7 — app/avatar_storage.py):
 # qualquer proporção enviada vira um PNG quadrado centralizado antes do upload.
 Pillow==12.3.0
 # Observabilidade — exceções não tratadas (Sprint 2 / item 2.6). Só ativo se
 # SENTRY_DSN estiver configurada (app/config.py); sem DSN, sentry_sdk.init()
 # nunca é chamado e capture_exception() vira no-op.
-sentry-sdk==2.66.1
+sentry-sdk==2.71.0
 # Ingestão da base do Dpto Químico (F4): parse determinístico de planilha (.xlsx)
 # e PDF de fichas técnicas → tabelas base_quimico_*. Usado pela CLI
 # (scripts/ingestao_base_quimico.py) E pelo painel web /admin/base-quimico
 # (app/services/ingestao_quimico.py, importado em runtime) — por isso runtime,
 # não dev-only. Os arquivos-fonte nunca entram no repo (sobem pela tela).
 openpyxl==3.1.5
-pypdf==6.15.0
+pypdf==6.19.0
 # Leitura de anexos pela IA de triagem (F7 — app/ia/anexos_contexto.py):
 # extração de texto de Word/PowerPoint anexados a chamados (Excel já cai no
 # openpyxl acima, em modo leitura). Nunca usados para GERAR arquivo, só ler.
