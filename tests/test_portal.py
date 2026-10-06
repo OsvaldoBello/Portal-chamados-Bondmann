@@ -2051,3 +2051,28 @@ def test_detalhe_rotula_campos_da_criacao_de_usuario():
     assert "Nome completo do colaborador" in resp.text
     assert "Região comercial (WMW / SAP)" in resp.text
     assert "082-ARARAQUARA" in resp.text
+
+
+def test_criar_chamado_dispara_enfileiramento_automacao(monkeypatch):
+    enfileirados = []
+
+    async def fake_enfileirar(chamado, settings=None):
+        enfileirados.append(chamado)
+        return {"id": "job-1"}
+
+    monkeypatch.setattr("app.services.automacao.enfileirar_automatico", fake_enfileirar)
+
+    repo = _repo_acessos()
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data=_abertura_criacao_representante(),
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 303
+    assert len(enfileirados) == 1
+    assert enfileirados[0]["subcategoria"] == _SUB_CRIACAO
+    assert enfileirados[0]["id"] == "novo-id"
+

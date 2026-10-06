@@ -38,10 +38,12 @@ from app.anexos import (
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.config import get_settings
 from app.db import commit_now, rls_request_scope
+from app.domain import automacao as dom_automacao
 from app.domain.formularios_dinamicos import layout_para, rotular_chamado
 from app.domain.formularios_rh import formulario_da_subcategoria
 from app.domain.periodo import periodo_invertido
 from app.ia import triagem
+from app.services import automacao as automacao_svc
 from app.ratelimit import limiter
 from app.repositories.chamados import (
     PRIORIDADES,
@@ -741,6 +743,23 @@ async def criar_chamado(
     # status NOVO, idempotência) ao executar.
     if triagem_cobre:
         triagem.agendar_triagem(str(novo["id"]))
+
+    # (3) Automação de acessos (Criação / Desligamento): enfileiramento automático
+    tipo_automacao = dom_automacao.tipo_da_subcategoria(nome_subcategoria_val)
+    if tipo_automacao and dados_formulario_val:
+        try:
+            await automacao_svc.enfileirar_automatico(
+                {
+                    "id": str(novo["id"]),
+                    "codigo": novo["codigo"],
+                    "subcategoria": nome_subcategoria_val,
+                    "dados_formulario": dados_formulario_val,
+                    "cliente_id": ctx.user.id,
+                }
+            )
+        except Exception:
+            log.exception("[AUTOMACAO] falha ao enfileirar job automático para %s", novo["codigo"])
+
 
     # Aviso por e-mail à equipe do setor de destino: até aqui a fila só
     # avisava quem já estivesse com o sino/Realtime do Workspace aberto —
