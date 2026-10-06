@@ -289,13 +289,14 @@ def test_alerta_vai_para_todos_os_admins_configurados(settings_automacao, monkey
 
     monkeypatch.setattr(notif, "enviar_email", fake_enviar)
     monkeypatch.setattr(settings_automacao, "automacao_alerta_email", "osvaldo.bello@bondmann.com.br, Giordano.Burtet@bondmann.com.br;osvaldo.bello@bondmann.com.br")
-    assert svc.destinatarios_alerta(settings_automacao) == ["osvaldo.bello@bondmann.com.br", "giordano.burtet@bondmann.com.br"]
+    assert svc.destinatarios_alerta(settings_automacao) == ["ti@bondmann.com.br", "osvaldo.bello@bondmann.com.br", "giordano.burtet@bondmann.com.br"]
     _run(svc._email_alerta_ti(settings_automacao, "assunto", "corpo"))
-    assert [p for p, _ in enviados] == ["osvaldo.bello@bondmann.com.br", "giordano.burtet@bondmann.com.br"]
+    assert [p for p, _ in enviados] == ["ti@bondmann.com.br", "osvaldo.bello@bondmann.com.br", "giordano.burtet@bondmann.com.br"]
     monkeypatch.setattr(settings_automacao, "automacao_alerta_email", "")
     enviados.clear()
     _run(svc._email_alerta_ti(settings_automacao, "assunto", "corpo"))
-    assert enviados == []
+    assert [p for p, _ in enviados] == ["ti@bondmann.com.br"]
+
 
 
 def test_textos_publico_com_credenciais_no_concluido_e_no_parcial():
@@ -1168,6 +1169,71 @@ async def test_admin_obter_perfil_ti_id_mock(monkeypatch):
     monkeypatch.setattr(repo_admin, "admin_connection", fake_admin_conn)
     perfil_id = await repo_admin.admin_obter_perfil_ti_id()
     assert perfil_id == "perfil-ti-uuid"
+
+
+@pytest.mark.asyncio
+async def test_enfileirar_automatico_criacao(monkeypatch, settings_automacao):
+    chamado = {
+        "id": "c1",
+        "codigo": "BD-2026-00001",
+        "subcategoria": ac.SUB_CRIACAO_USUARIO,
+        "dados_formulario": DADOS_CRIACAO,
+        "cliente_id": "usr-rh-1",
+    }
+    agendado = {}
+
+    async def fake_agendar(**kwargs):
+        agendado.update(kwargs)
+        return {"id": "job-1", "status": "NA_FILA", **kwargs}
+
+    async def fake_historico(*args, **kwargs):
+        pass
+
+    async def fake_perfil_ti():
+        return "ti-profile-id"
+
+    async def fake_feriados(*a):
+        return set()
+
+    monkeypatch.setattr(repo_admin, "admin_agendar_job", fake_agendar)
+    monkeypatch.setattr(repo_admin, "admin_feriados_entre", fake_feriados)
+    monkeypatch.setattr(repo_admin, "admin_obter_perfil_ti_id", fake_perfil_ti)
+    monkeypatch.setattr(repo_admin, "admin_registrar_historico", fake_historico)
+
+    job = await svc.enfileirar_automatico(chamado, settings=settings_automacao)
+    assert job is not None
+    assert job["tipo"] == "CRIACAO"
+    assert agendado["aprovado_por"] == "ti-profile-id"
+    assert agendado["chamado_id"] == "c1"
+    assert agendado["payload"]["perfil"] == "REPRESENTANTE"
+
+
+@pytest.mark.asyncio
+async def test_enfileirar_automatico_respeita_kill_switch(monkeypatch, settings_automacao):
+    monkeypatch.setattr(settings_automacao, "automacao_ativa", False)
+    chamado = {
+        "id": "c1",
+        "codigo": "BD-2026-00001",
+        "subcategoria": ac.SUB_CRIACAO_USUARIO,
+        "dados_formulario": DADOS_CRIACAO,
+        "cliente_id": "usr-rh-1",
+    }
+    job = await svc.enfileirar_automatico(chamado, settings=settings_automacao)
+    assert job is None
+
+
+@pytest.mark.asyncio
+async def test_enfileirar_automatico_ignora_subcategoria_comum(monkeypatch, settings_automacao):
+    chamado = {
+        "id": "c1",
+        "codigo": "BD-2026-00001",
+        "subcategoria": "Outros Problemas",
+        "dados_formulario": {},
+        "cliente_id": "usr-rh-1",
+    }
+    job = await svc.enfileirar_automatico(chamado, settings=settings_automacao)
+    assert job is None
+
 
 
 

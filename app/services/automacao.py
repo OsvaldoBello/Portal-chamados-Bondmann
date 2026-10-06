@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.config import Settings, get_settings
-from app.db import rls_connection
+from app.db import admin_connection, rls_connection
 from app.domain import automacao as dom
 from app.repositories import automacao as repo_admin
 from app.repositories.automacao import AutomacaoRepo, JobAtivoExistente
@@ -202,6 +202,79 @@ async def aprovar(
         raise AprovacaoInvalida("Já existe uma execução na fila para este chamado.") from exc
 
 
+async def enfileirar_automatico(
+    chamado: dict[str, Any],
+    settings: Settings | None = None,
+) -> dict[str, Any] | None:
+    """Enfileira automaticamente o job para chamados de Criação/Desligamento
+    na abertura do chamado (sem exigir aprovação manual do operador)."""
+    settings = settings or get_settings()
+    if not settings.automacao_ativa:
+        log.info("[AUTOMACAO] job automático não enfileirado: automação desativada")
+        return None
+
+    tipo = dom.tipo_da_subcategoria(chamado.get("subcategoria"))
+    dados = chamado.get("dados_formulario") or {}
+    if tipo is None or not dados:
+        return None
+
+    if tipo not in tipos_liberados(settings):
+        log.info("[AUTOMACAO] job automático não enfileirado: tipo %s não liberado", tipo)
+        return None
+
+    chamado_id = str(chamado.get("id") or "")
+    if not chamado_id:
+        return None
+
+    # Resolve perfil aprovador (preferência para TI; fallback para cliente_id)
+    aprovador_id = await repo_admin.admin_obter_perfil_ti_id()
+    if not aprovador_id:
+        aprovador_id = str(chamado.get("cliente_id") or "")
+    if not aprovador_id:
+        log.warning("[AUTOMACAO] chamado %s sem autor/TI para enfileirar job", chamado_id)
+        return None
+
+    payload = dom.montar_payload(tipo, dados, chamado)
+    agora = datetime.now(UTC)
+    feriados = await repo_admin.admin_feriados_entre(
+        agora.date() - timedelta(days=1), agora.date() + timedelta(days=400)
+    )
+    executar_apos = dom.calcular_executar_apos(
+        tipo,
+        payload,
+        agora=agora,
+        feriados=feriados,
+        hora_criacao=settings.automacao_hora_criacao,
+        hora_desligamento=settings.automacao_hora_desligamento,
+        licenca_dias=settings.automacao_licenca_dias,
+    )
+
+    job = await repo_admin.admin_agendar_job(
+        chamado_id=chamado_id,
+        tipo=tipo,
+        payload=payload,
+        executar_apos=executar_apos,
+        aprovado_por=aprovador_id,
+    )
+    if job:
+        await repo_admin.admin_registrar_historico(
+            chamado_id,
+            aprovador_id,
+            "AUTOMACAO_ENFILEIRADA",
+            {
+                "job_id": str(job["id"]),
+                "tipo": tipo,
+                "executar_apos": executar_apos.isoformat(),
+                "automatico": True,
+            },
+        )
+        log.info(
+            "[AUTOMACAO] job %s (%s) enfileirado automaticamente para chamado %s (executar_apos: %s)",
+            job["id"], tipo, chamado.get("codigo") or chamado_id, executar_apos.isoformat(),
+        )
+    return job
+
+
 # --------------------------------------------------------------------------
 # Resultado do worker (conexão administrativa; roda em background)
 # --------------------------------------------------------------------------
@@ -217,8 +290,7 @@ async def _criar_conta_portal(payload: dict[str, Any], aprovado_por: str) -> tup
     automático). Mesmo caminho de ``/admin/usuarios``: GoTrue Admin cria a
     conta (senha aleatória descartada — o 1º acesso é por "Esqueci minha
     senha", instruído no e-mail de boas-vindas) e o perfil recebe papel +
-    setor via RLS do aprovador (TI), o que satisfaz `perfis_admin_all` e o
-    trigger `perfis_self_so_avatar`."""
+    setor via conexão administrativa, evitando barreiras de RLS."""
     from app.auth.supabase_client import ensure_admin_client
 
     email = str(payload.get("email") or "").strip().lower()
@@ -234,8 +306,7 @@ async def _criar_conta_portal(payload: dict[str, Any], aprovado_por: str) -> tup
     client = await ensure_admin_client()
     if client is None:
         return False, "service_role não configurada no portal"
-    claims = _claims_aprovador(aprovado_por)
-    async with rls_connection(claims) as conn:
+    async with admin_connection() as conn:
         dep_id = await conn.fetchval(
             "SELECT id::text FROM departamentos WHERE ativo AND lower(nome) = lower($1)", setor_nome
         )
@@ -261,8 +332,8 @@ async def _criar_conta_portal(payload: dict[str, Any], aprovado_por: str) -> tup
         return False, "resposta inesperada do Supabase ao criar a conta"
     user_id = str(novo.id)
     # O trigger `handle_new_user` criou o perfil como CLIENTE sem setor;
-    # promove papel + setor (dual-write: app_metadata já foi no create_user).
-    async with rls_connection(claims) as conn:
+    # promove papel + setor usando admin_connection (bypassa RLS de autor).
+    async with admin_connection() as conn:
         await conn.execute(
             "UPDATE perfis SET nome = $2, role = $3::papel_usuario, departamento_id = $4::uuid WHERE id = $1::uuid",
             user_id, nome, papel, dep_id,
