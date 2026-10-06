@@ -10,7 +10,7 @@ TI na tela de atendimento.
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -1151,4 +1151,24 @@ def test_destinatarios_alerta_combina_com_env(settings_automacao, monkeypatch):
     assert "ti@bondmann.com.br" in destinos
     assert "admin@bondmann.com.br" in destinos
     assert "outro@bondmann.com.br" in destinos
+
+
+@pytest.mark.asyncio
+async def test_admin_obter_perfil_ti_id_mock(monkeypatch):
+    class FakeConn:
+        async def fetchval(self, query, *args):
+            if "ti@bondmann.com.br" in query or "TI" in query.upper():
+                return "perfil-ti-uuid"
+            return None
+
+    @asynccontextmanager
+    async def fake_admin_conn():
+        yield FakeConn()
+
+    monkeypatch.setattr(repo_admin, "admin_connection", fake_admin_conn)
+    perfil_id = await repo_admin.admin_obter_perfil_ti_id()
+    assert perfil_id == "perfil-ti-uuid"
+
+
+
 

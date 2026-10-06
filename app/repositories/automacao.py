@@ -400,5 +400,24 @@ async def admin_registrar_lideres_comerciais(emails: list[str]) -> None:
         )
 
 
+async def admin_obter_perfil_ti_id() -> str | None:
+    """Busca o id do perfil ti@bondmann.com.br ou do primeiro admin/operador
+    do departamento TI para autoria de jobs automáticos."""
+    async with admin_connection() as conn:
+        perfil_id = await conn.fetchval(
+            "SELECT id::text FROM perfis WHERE lower(email) = 'ti@bondmann.com.br' LIMIT 1"
+        )
+        if perfil_id:
+            return str(perfil_id)
+        perfil_id = await conn.fetchval(
+            """SELECT p.id::text FROM perfis p
+                 JOIN departamentos d ON d.id = p.departamento_id
+                WHERE d.ativo AND lower(d.nome) = 'ti' AND p.role IN ('ADMIN', 'OPERADOR')
+                ORDER BY p.role = 'ADMIN' DESC, p.created_at ASC LIMIT 1"""
+        )
+        return str(perfil_id) if perfil_id else None
+
+
 def agora_utc() -> datetime:
     return datetime.now(UTC)
+
