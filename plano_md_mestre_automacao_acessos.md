@@ -54,7 +54,7 @@ desenho do portal é o mesmo nos dois casos, então o trabalho pode começar ant
 | # | Decisão | Recomendação | Bloqueia |
 |---|---|---|---|
 | **D1** | Onde o worker roda: (a) VM/servidor on-prem com Docker; (b) serviço no Railway + Tailscale *subnet router* on-prem; (c) SAP exposto publicamente (**descartado** — Seção 2). | **Decidido pelo gestor (2026-09-14): (b) — worker como segundo serviço no projeto Railway, alcançando o SAP por Tailscale.** Pré-requisito de infra na Seção 2.1. (a) fica como plano B com a mesma imagem. | F3/F4 |
-| **D2** | Gate humano: execução automática na abertura ou só após um clique do TI ("Executar automação") no atendimento? | **Decidido pelo gestor (2026-09-14): gate obrigatório** nas duas subcategorias na v1**; auto-execução da *criação* fica atrás de env (`AUTOMACAO_AUTOEXEC_TIPOS`), como o padrão sombra→ativo da frente de IA. Desligamento é destrutivo (bloqueio, reset de senha, remoção de grupos, encaminhamento) — nunca sem gate. | F2 |
+| **D2** | Gate humano: execução automática na abertura ou só após um clique do TI ("Executar automação") no atendimento? | **Atualizado pelo gestor (2026-10-06): automação ponta a ponta sem gate humano**. Com a maturidade das rotinas, chamados de Criação e Desligamento agora enfileiram e executam automaticamente logo na abertura (respeitando data de início/desligamento). Em caso de erro, o processo aborta imediatamente e um e-mail detalhado é enviado para `ti@bondmann.com.br`. *(Histórico 2026-09-14: v1 usava gate obrigatório manual).* | F2 |
 | **D3** | Quem vê o formulário estruturado: todos os autores nas duas subcategorias, ou só RH/TI/ADMIN? | **Decidido pelo gestor (2026-09-14): só RH, TI e ADMIN de setor.** Outros autores continuam no formulário livre e veem aviso "solicitações de criação/desligamento partem do RH". Motivo: campos como licenças SAP, papel no portal e motivo do desligamento não são de funcionário comum. | F1 |
 | **D4** | Onde ficam as credenciais geradas (senha temporária M365, senha SIP, senha WMW)? | **Decidido pelo gestor (2026-09-14): mensagem pública de encerramento para o RH no chamado.** Quando o job termina sem pendência, o portal posta a mensagem final (e-mail criado, ramal, link WMW, senhas) visível ao autor (RH) e observadores e resolve o chamado; com pendência, posta o parcial sem "encerramento" e o TI fecha. **Cuidado obrigatório:** o e-mail de "nova mensagem" hoje reproduz o texto integral (`notification.py`) — a mensagem da automação dispara um e-mail **neutro** ("credenciais disponíveis no chamado BD-…", sem o conteúdo). M365 força troca no 1º login. | F2 |
 
@@ -189,9 +189,8 @@ card. Monitorar esse servidor (é o único ponto on-prem do desenho).
 RH/TI abre chamado (subcategoria Criação | Desligamento)
    │  formulário estruturado → chamados.dados_formulario
    ▼
-Portal (Railway)  ── cria automacao_jobs(status=AGUARDANDO_APROVACAO, payload normalizado)
-   │                 card no atendimento: [Executar automação]  ←  TI (gate D2)
-   │                 → status NA_FILA (executar_apos = data informada no form, ou agora)
+Portal (Railway)  ── enfileira automaticamente automacao_jobs(status=NA_FILA, payload normalizado)
+   │                 (executar_apos = véspera útil às 07:00 para Criação; data_desligamento às 17:00 ou imediato se urgente)
    ▼
 Worker (on-prem / Railway)  ── POST /api/automacao/jobs/proximo   (claim atômico, SKIP LOCKED)
    │  roda flow.py            ── POST /api/automacao/jobs/{id}/heartbeat  (a cada etapa)
@@ -199,8 +198,8 @@ Worker (on-prem / Railway)  ── POST /api/automacao/jobs/proximo   (claim at�
    ▼
 Portal  ── grava resultado; nota interna com o detalhe técnico por sistema (só staff);
            sem pendência → mensagem pública de ENCERRAMENTO ao RH com as credenciais (D4)
-           e status RESOLVIDO; com pendência → mensagem pública parcial, status
-           EM_ATENDIMENTO e o TI conclui manualmente
+           e status RESOLVIDO; com erro → interrompe imediatamente, mantém EM_ATENDIMENTO
+           e envia e-mail de alerta com logs para ti@bondmann.com.br
         ── agenda job REVOGAR_LICENCA (executar_apos = desligamento + 15 dias)
         ── loop de vigilância: job EXECUTANDO sem heartbeat > N min → FALHOU + e-mail ao TI;
            worker sem `proximo` há > 30 min em horário comercial → e-mail "worker parado"
@@ -507,7 +506,7 @@ Total até produção com gate: **~15–18 dias úteis** (3,5 semanas com uma pe
 | Worker para (crash, deploy quebrado) e ninguém percebe (precedente wuzapi) | jobs param na fila | Railway reinicia; vigilância 5.4 + e-mail ao TI; card mostra "aguardando worker há X" |
 | Servidor subnet router on-prem cai / auth key expira | só as etapas SAP falham | fluxo segue com `SKIPPED`; `/saude` expõe estado do Tailscale; monitorar o servidor; auth key reusable sem expiração curta, rotação documentada no runbook |
 | Scraper WMW/SIP quebra por mudança de tela | etapa `FAILED` | fluxo continua (SKIP), TI faz manual, reexecução só das pendências; manter modo `--headed` local para consertar seletor |
-| Desligamento executado no chamado errado | bloqueio indevido de conta | gate humano (D2), resumo do payload no card antes do clique, dry-run disponível; reversão documentada no runbook (reativar conta, remover regra de encaminhamento) |
+| Desligamento executado indevidamente | bloqueio indevido de conta | restrição de formulário ao RH/TI (D3); interrupção imediata em erro com alerta a `ti@bondmann.com.br`; reversão documentada no runbook (reativar conta, remover regra de encaminhamento) |
 | Licença M365 atribuída automaticamente a todo novo usuário | custo | ⚠️ confirmar com o gestor que Business Basic é sempre correto; se não, vira campo `select` no formulário |
 | SAP em PRD sem homologação documentada de criação de usuário interno | usuário/licença errados no ERP | F4 item (2) cobre; até lá, `licencas_sap` pode ser forçado a vazio por env |
 | Drift entre os dois repos (contrato da API) | worker incompatível após deploy do portal | `docs/automacao_api.md` versionado; `/saude` devolve `versao_contrato`; worker recusa rodar se diferente |
