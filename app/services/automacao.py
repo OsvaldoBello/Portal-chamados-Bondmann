@@ -276,11 +276,15 @@ async def _criar_conta_portal(payload: dict[str, Any], aprovado_por: str) -> tup
     return True, f"conta {email} criada como {papel} em {setor_nome}"
 
 
+EMAIL_TI_PADRAO = "ti@bondmann.com.br"
+
+
 def destinatarios_alerta(settings: Settings) -> list[str]:
     """`AUTOMACAO_ALERTA_EMAIL` aceita vários endereços separados por vírgula
-    ou ponto-e-vírgula (admins da TI escolhidos pelo gestor)."""
+    ou ponto-e-vírgula (admins da TI escolhidos pelo gestor). `ti@bondmann.com.br`
+    é sempre incluído como destinatário padrão garantido."""
     brutos = (settings.automacao_alerta_email or "").replace(";", ",").split(",")
-    vistos: list[str] = []
+    vistos: list[str] = [EMAIL_TI_PADRAO]
     for e in (b.strip().lower() for b in brutos):
         if e and "@" in e and e not in vistos:
             vistos.append(e)

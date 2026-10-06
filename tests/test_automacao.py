@@ -1137,3 +1137,18 @@ def test_texto_do_relatorio_da_sync():
     assert "MODO RELATÓRIO" in txt and "BD-9" in txt and "Usuários verificados: 3" in txt
     assert "rep@bondmann.com.br: + sup@bondmann.com.br; − velho@bondmann.com.br" in txt
     assert "fulano@bondmann.com.br" in txt
+
+
+def test_destinatarios_alerta_sempre_inclui_ti_bondmann(settings_automacao, monkeypatch):
+    monkeypatch.setattr(settings_automacao, "automacao_alerta_email", "")
+    destinos = svc.destinatarios_alerta(settings_automacao)
+    assert "ti@bondmann.com.br" in destinos
+
+
+def test_destinatarios_alerta_combina_com_env(settings_automacao, monkeypatch):
+    monkeypatch.setattr(settings_automacao, "automacao_alerta_email", "admin@bondmann.com.br;outro@bondmann.com.br")
+    destinos = svc.destinatarios_alerta(settings_automacao)
+    assert "ti@bondmann.com.br" in destinos
+    assert "admin@bondmann.com.br" in destinos
+    assert "outro@bondmann.com.br" in destinos
+
