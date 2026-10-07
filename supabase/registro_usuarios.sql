@@ -79,6 +79,17 @@ UPDATE auth.users
        COALESCE(raw_app_meta_data, '{}'::jsonb) || jsonb_build_object('role', 'ADMIN')
  WHERE email = 'ti@bondmann.com.br';
 
+-- GESTORES do setor de Manutenção (Elias e Manutenção):
+UPDATE perfis
+   SET role = 'ADMIN',
+       departamento_id = (SELECT id FROM departamentos WHERE nome = 'Manutenção')
+ WHERE id IN (SELECT id FROM auth.users WHERE email IN ('elias@bondmann.com.br', 'manutencao@bondmann.com.br'));
+UPDATE auth.users
+   SET raw_app_meta_data =
+       COALESCE(raw_app_meta_data, '{}'::jsonb) || jsonb_build_object('role', 'ADMIN')
+ WHERE email IN ('elias@bondmann.com.br', 'manutencao@bondmann.com.br');
+
+
 -- ---------------------------------------------------------------------------
 -- PERFIL DE SERVIÇO "Assistente IA" (frente de IA de triagem — F0, decisão C4
 -- do plano_md_mestre_IA.md). `perfis.id` tem FK para `auth.users(id)`, então o

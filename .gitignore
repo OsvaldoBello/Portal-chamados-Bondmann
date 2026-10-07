@@ -37,8 +37,11 @@ supabase/.temp/
 !app/static/formularios/**/*.docx
 ~$*
 
-# Claude Agent Workspace
+# Agent Workspaces
 .claude/
+.agent/
+.agents/
+
 
 # graphify — cache/derived e config de máquina local (não versionar; graph.json,
 # GRAPH_REPORT.md, graph.html e manifest.json permanecem versionados)

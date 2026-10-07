@@ -1,7 +1,7 @@
 # Portal de Chamados, Bondmann Química
 
 Help desk interno da Bondmann Química. Colaboradores abrem chamados para os
-setores que têm fila de atendimento (TI, RH e Marketing), e o staff de cada
+setores que têm fila de atendimento (TI, RH, Marketing, Dpto Químico e Manutenção), e o staff de cada
 setor atende, responde e conduz o chamado até fechar, com SLA, histórico
 auditável e avaliação (CSAT) do autor no final.
 
@@ -51,7 +51,7 @@ O isolamento não é por "empresa cliente", já que o portal é de uso interno e
 tem multi-tenant externo. Ele é por departamento de destino do chamado:
 
 - Funcionário (papel CLIENTE) vê e avalia apenas os chamados que abriu.
-- Staff (OPERADOR ou ADMIN) de um setor com fila, ou seja, TI, RH e Marketing,
+- Staff (OPERADOR ou ADMIN) de um setor com fila, ou seja, TI, RH, Marketing, Dpto Químico e Manutenção,
   atende só os chamados do próprio setor, mais os que ele mesmo abriu.
 - Líder de setor, que é o ADMIN com `departamento_id` mesmo em setor sem fila,
   enxerga em modo leitura os chamados abertos pela sua equipe, inclusive os

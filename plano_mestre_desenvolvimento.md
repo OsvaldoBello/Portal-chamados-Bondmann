@@ -336,8 +336,16 @@ Enum de papéis (coerente com a spec): **`ADMIN`**, **`OPERADOR`**, **`CLIENTE`*
 > mesmo tempo, suporte (recebe chamado de fora) **e** quadro Trello (gerencia as próprias demandas) —
 > a distinção "suporte clássico vs. autoatendimento" descrita acima deixa de ser por setor e passa a
 > valer por chamado (quem abriu é do mesmo setor de destino, ou não).
+>
+> ### 🔁 `[DECISÃO DE PRODUTO 2026-10-07]` `0094` — Setor de Manutenção como destino de chamados
+>
+> Pedido do usuário: o setor de **Manutenção** passa a receber chamados no Portal (`recebe_chamados = true`, `autoatendimento = true`),
+> permitindo que qualquer colaborador abra solicitações de manutenção predial/elétrica/hidráulica/geral pelo portal.
+> Gestores/proprietários do setor: `elias@bondmann.com.br` e `manutencao@bondmann.com.br` (role `ADMIN` vinculados ao setor).
+> Catálogo inicial provisionado com 7 categorias e 34 subcategorias para validação pelo gestor Elias.
 
-Matriz consolidada (Seção 4.3/5 da spec, **reescrita** no modelo vigente — `0020`/`0027`/`0028`/`0038`/`0042`/`0047`):
+Matriz consolidada (Seção 4.3/5 da spec, **reescrita** no modelo vigente — `0020`/`0027`/`0028`/`0038`/`0042`/`0047`/`0094`):
+
 
 O eixo deixou de ser só "TI = tudo, resto = só o setor": hoje depende de **três coisas** — o setor de
 **destino** do chamado, o setor de **origem** (autor) de quem está olhando, e se esse setor tem
