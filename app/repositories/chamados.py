@@ -511,10 +511,22 @@ class ChamadosRepo:
         return await self._atendimento.excluir(claims, chamado_id)
 
     async def salvar_marketing_meta(
-        self, claims: dict, chamado_id: str, *, volume: int, origem_demanda: str, causa_atraso: str | None
+        self,
+        claims: dict,
+        chamado_id: str,
+        *,
+        volume: int,
+        origem_demanda: str,
+        causa_atraso: str | None,
+        especificacao_atraso: str | None = None,
     ) -> dict[str, Any] | None:
         return await self._atendimento.salvar_marketing_meta(
-            claims, chamado_id, volume=volume, origem_demanda=origem_demanda, causa_atraso=causa_atraso
+            claims,
+            chamado_id,
+            volume=volume,
+            origem_demanda=origem_demanda,
+            causa_atraso=causa_atraso,
+            especificacao_atraso=especificacao_atraso,
         )
 
 

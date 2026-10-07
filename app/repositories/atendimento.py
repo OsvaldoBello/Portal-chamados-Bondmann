@@ -48,7 +48,7 @@ class AtendimentoRepo:
                        c.created_at, c.limite_resposta, c.limite_resolucao,
                        c.respondido_em, c.resolvido_em,
                        c.avaliacao_nota, c.avaliacao_comentario, c.avaliacao_em,
-                       c.volume, c.origem_demanda, c.causa_atraso,
+                       c.volume, c.origem_demanda, c.causa_atraso, c.especificacao_atraso,
                        c.dados_formulario, c.resumo_ia, c.resumo_ia_em,
                        c.chamado_principal_id, c.combinado_em,
                        c.prazo_projeto_dias, c.projeto_em,
@@ -858,27 +858,41 @@ class AtendimentoRepo:
             return row is not None
 
     async def salvar_marketing_meta(
-        self, claims: dict, chamado_id: str, *, volume: int, origem_demanda: str, causa_atraso: str | None
+        self,
+        claims: dict,
+        chamado_id: str,
+        *,
+        volume: int,
+        origem_demanda: str,
+        causa_atraso: str | None,
+        especificacao_atraso: str | None = None,
     ) -> dict[str, Any] | None:
-        """Salva as informações de volume, origem da demanda e causa de atraso (staff no escopo)."""
+        """Salva as informações de volume, origem da demanda, causa e especificação de atraso (staff no escopo)."""
         async with rls_connection(claims) as conn:
             row = await conn.fetchrow(
                 """
                 UPDATE chamados
                    SET volume = $2::integer,
                        origem_demanda = $3,
-                       causa_atraso = $4
+                       causa_atraso = $4,
+                       especificacao_atraso = $5
                  WHERE id = $1::uuid
-             RETURNING id, volume, origem_demanda, causa_atraso
+             RETURNING id, volume, origem_demanda, causa_atraso, especificacao_atraso
                 """,
                 chamado_id,
                 volume,
                 origem_demanda,
                 causa_atraso,
+                especificacao_atraso,
             )
             if row is not None:
                 await self._registrar(
                     conn, chamado_id, claims["sub"], "MARKETING_META_ALTERADO",
-                    {"volume": volume, "origem_demanda": origem_demanda, "causa_atraso": causa_atraso},
+                    {
+                        "volume": volume,
+                        "origem_demanda": origem_demanda,
+                        "causa_atraso": causa_atraso,
+                        "especificacao_atraso": especificacao_atraso,
+                    },
                 )
             return dict(row) if row else None
