@@ -45,7 +45,7 @@ class FakeRepo:
                  operador_id=None, cliente_id="aaa", observadores=None, departamento="TI",
                  recebe_chamados=True, ia_triagem=None, combinados=None,
                  candidatos_combinacao=None, chamado_principal_id=None,
-                 combinar_erro=None):
+                 combinar_erro=None, chamado_extra=None):
         self.acoes = []
         self._ia_triagem = ia_triagem
         self._combinados = combinados or []
@@ -60,6 +60,7 @@ class FakeRepo:
         self._observadores = observadores or []
         self._departamento = departamento
         self._recebe_chamados = recebe_chamados
+        self._chamado_extra = dict(chamado_extra or {})
         self.operadores_dep = "__nao_chamado__"  # captura o filtro de departamento
         self.operadores_excluir = "__nao_chamado__"  # captura o excluir_id
 
@@ -114,11 +115,13 @@ class FakeRepo:
         # status oferecidos na tela de atendimento (`_status_ui`), e não o do
         # usuário — um chamado de TI aberto num FakeRepo de RH daria as colunas
         # do TI a quem não as tem.
-        return _chamado(id=cid, status=self._status, operador_id=self._operador_id,
-                         cliente_id=self._cliente_id, departamento=self._departamento,
-                         chamado_principal_id=self._chamado_principal_id,
-                         principal_codigo="BOND-2026-00009" if self._chamado_principal_id else None,
-                         combinado_em=NOW if self._chamado_principal_id else None)
+        res = _chamado(id=cid, status=self._status, operador_id=self._operador_id,
+                       cliente_id=self._cliente_id, departamento=self._departamento,
+                       chamado_principal_id=self._chamado_principal_id,
+                       principal_codigo="BOND-2026-00009" if self._chamado_principal_id else None,
+                       combinado_em=NOW if self._chamado_principal_id else None)
+        res.update(self._chamado_extra)
+        return res
 
     async def marcar_notificacao_vista(self, claims, cid):
         self.acoes.append(("visto", cid))
@@ -201,6 +204,16 @@ class FakeRepo:
     async def avaliar_ia_triagem(self, claims, cid, *, triagem_id, nota, avaliador_id):
         self.acoes.append(("ia_avaliacao", cid, triagem_id, nota, avaliador_id))
         return self._ia_triagem is not None and triagem_id == self._ia_triagem["id"]
+
+    async def salvar_marketing_meta(self, claims, cid, *, volume, origem_demanda, causa_atraso=None, especificacao_atraso=None):
+        self.acoes.append(("marketing_meta", cid, volume, origem_demanda, causa_atraso, especificacao_atraso))
+        self._chamado_extra.update({
+            "volume": volume,
+            "origem_demanda": origem_demanda,
+            "causa_atraso": causa_atraso,
+            "especificacao_atraso": especificacao_atraso,
+        })
+        return {"id": cid, "volume": volume, "origem_demanda": origem_demanda, "causa_atraso": causa_atraso, "especificacao_atraso": especificacao_atraso}
 
 
 @contextmanager
@@ -1167,3 +1180,141 @@ def test_prazo_fora_da_faixa_volta_na_tela_com_o_motivo():
     assert r.status_code == 200
     assert "Prazo fora da faixa" in r.text
     assert not [a for a in repo.acoes if a[0] == "prazo_projeto"]
+
+
+# --------------------------------------------------------------------------
+# Demandas de Marketing — Regras de Encerramento com Causa de Atraso
+# --------------------------------------------------------------------------
+def test_drag_kanban_bloqueia_marketing_atrasado_sem_causa():
+    repo = FakeRepo(
+        departamento="Marketing",
+        is_ti=False,
+        status="EM_ATENDIMENTO",
+        operador_id=OP,
+        chamado_extra={
+            "departamento": "Marketing",
+            "limite_resolucao": NOW - timedelta(days=2),
+            "sem_prazo": False,
+            "causa_atraso": None,
+        },
+    )
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/status",
+            data={"csrf_token": t, "novo_status": "RESOLVIDO"},
+            headers={"X-Kanban-Drag": "1", "X-CSRF-Token": t},
+        )
+    assert r.status_code == 200
+    dados = r.json()
+    assert dados["ok"] is False
+    assert "Demanda em atraso" in dados["erro"]
+    assert not [a for a in repo.acoes if a[0] == "status" and a[2] == "RESOLVIDO"]
+
+
+def test_drag_kanban_permite_marketing_atrasado_com_causa():
+    repo = FakeRepo(
+        departamento="Marketing",
+        is_ti=False,
+        status="EM_ATENDIMENTO",
+        operador_id=OP,
+        chamado_extra={
+            "departamento": "Marketing",
+            "limite_resolucao": NOW - timedelta(days=2),
+            "sem_prazo": False,
+            "causa_atraso": "DEPENDÊNCIA DE TERCEIROS",
+        },
+    )
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/status",
+            data={"csrf_token": t, "novo_status": "RESOLVIDO"},
+            headers={"X-Kanban-Drag": "1", "X-CSRF-Token": t},
+        )
+    assert r.status_code == 200
+    dados = r.json()
+    assert dados["ok"] is True
+    assert any(a[0] in ("status", "iniciar") and a[1] == "c1" for a in repo.acoes)
+
+
+def test_encerrar_bloqueia_marketing_atrasado_sem_causa():
+    repo = FakeRepo(
+        departamento="Marketing",
+        is_ti=False,
+        status="EM_ATENDIMENTO",
+        operador_id=OP,
+        chamado_extra={
+            "departamento": "Marketing",
+            "limite_resolucao": NOW - timedelta(days=2),
+            "sem_prazo": False,
+            "causa_atraso": None,
+        },
+    )
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/encerrar",
+            data={"csrf_token": t, "resolucao": "Finalizado", "causa_atraso": ""},
+        )
+    assert r.status_code == 200
+    assert "obrigatório informar a causa do atraso" in r.text
+    assert not [a for a in repo.acoes if a[0] == "status" and a[2] == "RESOLVIDO"]
+
+
+def test_encerrar_sucesso_com_causa_e_especificacao():
+    repo = FakeRepo(
+        departamento="Marketing",
+        is_ti=False,
+        status="EM_ATENDIMENTO",
+        operador_id=OP,
+        chamado_extra={
+            "departamento": "Marketing",
+            "limite_resolucao": NOW - timedelta(days=2),
+            "sem_prazo": False,
+            "causa_atraso": None,
+            "volume": 1,
+            "origem_demanda": "Solicitação",
+        },
+    )
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/encerrar",
+            data={
+                "csrf_token": t,
+                "resolucao": "Finalizado",
+                "causa_atraso": "DEPENDÊNCIA DE EXECUÇÃO INTERNA",
+                "especificacao_atraso": "Aguardando aprovação de arte pela diretoria",
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert ("marketing_meta", "c1", 1, "Solicitação", "DEPENDÊNCIA DE EXECUÇÃO INTERNA", "Aguardando aprovação de arte pela diretoria") in repo.acoes
+    assert ("status", "c1", "RESOLVIDO") in repo.acoes
+
+
+def test_salvar_marketing_meta_persiste_especificacao():
+    repo = FakeRepo(
+        departamento="Marketing",
+        is_ti=False,
+        status="EM_ATENDIMENTO",
+        operador_id=OP,
+        chamado_extra={"departamento": "Marketing"},
+    )
+    with ws_client(repo) as c:
+        t = _csrf(c)
+        r = c.post(
+            "/workspace/chamados/c1/marketing-meta",
+            data={
+                "csrf_token": t,
+                "volume": 3,
+                "origem_demanda": "Marketing",
+                "causa_atraso": "AGUARDANDO DEFINIÇÃO INTERNA",
+                "especificacao_atraso": "Briefing de campanha pendente",
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert ("marketing_meta", "c1", 3, "Marketing", "AGUARDANDO DEFINIÇÃO INTERNA", "Briefing de campanha pendente") in repo.acoes
+

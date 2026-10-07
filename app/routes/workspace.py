@@ -31,6 +31,11 @@ from app.config import get_settings
 from app.db import rls_request_scope
 from app.domain import automacao as automacao_dom
 from app.domain.formularios_dinamicos import rotular_chamado
+from app.domain.marketing import (
+    CAUSAS_ATRASO_MARKETING,
+    demanda_marketing_atrasada,
+    validar_conclusao_marketing,
+)
 from app.domain.periodo import periodo_invertido
 from app.domain.sla_visual import estado_sla
 from app.repositories.automacao import AutomacaoRepo, get_automacao_repo
@@ -577,6 +582,9 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         "origem": origem,
         "ia_triagem": ia_triagem,
         "formulario_pendente": formulario_pendente,
+        "demanda_atrasada": demanda_marketing_atrasada(chamado),
+        "causas_atraso_marketing": CAUSAS_ATRASO_MARKETING,
+        "marketing_bloqueio_erro": extra.get("marketing_bloqueio_erro"),
     }
     ctx_render.update(extra)
     return render(request, "workspace/atendimento.html", ctx_render)
@@ -709,6 +717,8 @@ async def mudar_status(
     request: Request,
     chamado_id: str,
     novo_status: str = Form(...),
+    causa_atraso: str = Form(""),
+    especificacao_atraso: str = Form(""),
     origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
@@ -727,12 +737,28 @@ async def mudar_status(
     """
     resultado: dict | None = None
     bloqueio = None
+    marketing_bloqueio = None
     if novo_status in STATUS_VALIDOS:
         # Concluir (RESOLVIDO) exige o formulário do RH anexado, quando a
         # subcategoria do chamado exigir um (2026-08-10, app/domain/formularios_rh.py).
         if novo_status == "RESOLVIDO":
             bloqueio = await repo.formulario_pendente(ctx.user.claims, chamado_id)
-        if bloqueio is None:
+            if bloqueio is None:
+                chamado = await repo.obter(ctx.user.claims, chamado_id)
+                if chamado:
+                    marketing_bloqueio = validar_conclusao_marketing(
+                        chamado, causa_atraso=causa_atraso.strip() or None
+                    )
+                    if not marketing_bloqueio and causa_atraso.strip() and chamado.get("departamento") == "Marketing":
+                        await repo.salvar_marketing_meta(
+                            ctx.user.claims,
+                            chamado_id,
+                            volume=chamado.get("volume") or 1,
+                            origem_demanda=chamado.get("origem_demanda") or "Solicitação",
+                            causa_atraso=causa_atraso.strip() or None,
+                            especificacao_atraso=especificacao_atraso.strip() or None,
+                        )
+        if bloqueio is None and marketing_bloqueio is None:
             if novo_status not in ("NOVO", "A_FAZER"):
                 resultado = await repo.iniciar_atendimento(
                     ctx.user.claims, chamado_id, operador_id=ctx.user.id, novo_status=novo_status
@@ -749,9 +775,16 @@ async def mudar_status(
                 "ok": False,
                 "erro": f'Anexe o formulário "{bloqueio.label}" preenchido antes de concluir este chamado.',
             })
+        if marketing_bloqueio is not None:
+            return JSONResponse({
+                "ok": False,
+                "erro": "Demanda em atraso: para concluí-la, é obrigatório preencher a causa do atraso na tela de atendimento.",
+            })
         return JSONResponse({"ok": resultado is not None})
-    if bloqueio is not None:
-        return await _carregar_atendimento(request, chamado_id, ctx, repo, origem=origem)
+    if bloqueio is not None or marketing_bloqueio is not None:
+        return await _carregar_atendimento(
+            request, chamado_id, ctx, repo, origem=origem, marketing_bloqueio_erro=marketing_bloqueio
+        )
     return _voltar(chamado_id, origem)
 
 
@@ -762,6 +795,7 @@ async def salvar_marketing_meta(
     volume: int = Form(...),
     origem_demanda: str = Form(...),
     causa_atraso: str = Form(""),
+    especificacao_atraso: str = Form(""),
     origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
@@ -772,7 +806,8 @@ async def salvar_marketing_meta(
         chamado_id,
         volume=volume,
         origem_demanda=origem_demanda,
-        causa_atraso=causa_atraso.strip() or None
+        causa_atraso=causa_atraso.strip() or None,
+        especificacao_atraso=especificacao_atraso.strip() or None,
     )
     return _voltar(chamado_id, origem)
 
@@ -1094,6 +1129,8 @@ async def encerrar(
     chamado_id: str,
     background_tasks: BackgroundTasks,
     resolucao: str = Form(""),
+    causa_atraso: str = Form(""),
+    especificacao_atraso: str = Form(""),
     origem: str = "",
     ctx: StaffCtx = Depends(staff_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
@@ -1104,22 +1141,44 @@ async def encerrar(
     de staff no escopo (RLS); as duas escritas rodam na mesma transação do request.
 
     Bloqueada se a subcategoria exigir um formulário do RH ainda não anexado
-    (2026-08-10, app/domain/formularios_rh.py) — reexibe a tela com o aviso."""
+    (2026-08-10, app/domain/formularios_rh.py) — reexibe a tela com o aviso.
+    Também bloqueada se for demanda de Marketing em atraso sem causa preenchida."""
     if await repo.formulario_pendente(ctx.user.claims, chamado_id) is not None:
         return await _carregar_atendimento(request, chamado_id, ctx, repo, origem=origem)
+
+    chamado = await repo.obter(ctx.user.claims, chamado_id)
+    if chamado is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
+
+    marketing_bloqueio = validar_conclusao_marketing(
+        chamado, causa_atraso=causa_atraso.strip() or None
+    )
+    if marketing_bloqueio is not None:
+        return await _carregar_atendimento(
+            request, chamado_id, ctx, repo, origem=origem, marketing_bloqueio_erro=marketing_bloqueio
+        )
+
+    if chamado.get("departamento") == "Marketing" and causa_atraso.strip():
+        await repo.salvar_marketing_meta(
+            ctx.user.claims,
+            chamado_id,
+            volume=chamado.get("volume") or 1,
+            origem_demanda=chamado.get("origem_demanda") or "Solicitação",
+            causa_atraso=causa_atraso.strip() or None,
+            especificacao_atraso=especificacao_atraso.strip() or None,
+        )
+
     resolucao = resolucao.strip()
     if resolucao:
         await repo.responder_staff(
             ctx.user.claims, chamado_id, conteudo=resolucao, is_interna=False
         )
-        chamado = await repo.obter(ctx.user.claims, chamado_id)
-        if chamado:
-            from app.notification import agendar_notificacao_email
-            observadores = await repo.observadores(ctx.user.claims, chamado_id)
-            await agendar_notificacao_email(
-                background_tasks, chamado, ctx.user.id, resolucao,
-                observadores=[str(o["perfil_id"]) for o in observadores],
-            )
+        from app.notification import agendar_notificacao_email
+        observadores = await repo.observadores(ctx.user.claims, chamado_id)
+        await agendar_notificacao_email(
+            background_tasks, chamado, ctx.user.id, resolucao,
+            observadores=[str(o["perfil_id"]) for o in observadores],
+        )
     await repo.alterar_status(ctx.user.claims, chamado_id, "RESOLVIDO")
     return _voltar(chamado_id, origem)
 
