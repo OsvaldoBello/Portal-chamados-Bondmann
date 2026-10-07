@@ -173,7 +173,7 @@ def _aba_solicitantes(wb: Workbook, dados: dict[str, Any]) -> None:
 
 def _aba_atrasos(wb: Workbook, dados: dict[str, Any]) -> None:
     ws = wb.create_sheet("Tempo e Atrasos")
-    colunas = ["Demanda", "Mês", "Dias em aberto", "Causa do atraso"]
+    colunas = ["Demanda", "Mês", "Dias em aberto", "Causa do atraso", "Especificação"]
     _titulo(ws, "Demandas com Atraso > 5 dias", len(colunas))
     _cabecalho(ws, 3, colunas)
     for i, a in enumerate(dados["atrasosData"], start=4):
@@ -181,7 +181,8 @@ def _aba_atrasos(wb: Workbook, dados: dict[str, Any]) -> None:
         ws.cell(row=i, column=2, value=a["mes"])
         ws.cell(row=i, column=3, value=a["dias"])
         ws.cell(row=i, column=4, value=a["causa"])
-    _autofit(ws, [40, 10, 15, 32])
+        ws.cell(row=i, column=5, value=a.get("especificacao") or "")
+    _autofit(ws, [40, 10, 15, 32, 40])
 
 
 def _aba_midia_regional(wb: Workbook, dados: dict[str, Any]) -> None:

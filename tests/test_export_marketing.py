@@ -106,3 +106,21 @@ def test_periodo_sem_dados_gera_planilha_vazia_sem_lancar():
     resumo = dict(_sheet_rows(wb, "Resumo")[2:])
     assert resumo["Total de demandas"] == 0
     assert resumo["Maior setor solicitante"] == "—"
+
+
+def test_aba_atrasos_inclui_especificacao():
+    dados = dict(_MKT_DATA)
+    dados["atrasosData"] = [
+        {
+            "nome": "Demanda X",
+            "mes": "JUL/26",
+            "dias": 10,
+            "causa": "DEPENDÊNCIA DE EXECUÇÃO INTERNA",
+            "especificacao": "Aguardando aprovação",
+        }
+    ]
+    wb = openpyxl.load_workbook(gerar_workbook(dados, "all"))
+    atrasos_rows = _sheet_rows(wb, "Tempo e Atrasos")[1:]  # cabeçalho + linhas
+    assert atrasos_rows[0] == ("Demanda", "Mês", "Dias em aberto", "Causa do atraso", "Especificação")
+    assert atrasos_rows[1] == ("Demanda X", "JUL/26", 10, "DEPENDÊNCIA DE EXECUÇÃO INTERNA", "Aguardando aprovação")
+

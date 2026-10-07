@@ -19,7 +19,12 @@
   const atrasosData = mktData.atrasosData || [];
   const midia = mktData.midia || { meses: [], investimento: [], regioes: [], descontinuidades: [], aderencias: [] };
 
-  const causaLabels = ["Sem causa registrada", "Aguardando definição interna", "Dependência de execução"];
+  const causaLabels = [
+    "SEM CAUSA REGISTRADA",
+    "AGUARDANDO DEFINIÇÃO INTERNA",
+    "DEPENDÊNCIA DE EXECUÇÃO INTERNA",
+    "DEPENDÊNCIA DE TERCEIROS",
+  ];
 
   // ─── FILTER ───────────────────────────────────────────────────────────
   let activeFilter = "all";
@@ -409,7 +414,12 @@
     const causasCount = {};
     causaLabels.forEach(lbl => causasCount[lbl] = 0);
     rows.forEach(a => {
-      const c = a.causa || "Sem causa registrada";
+      const raw = (a.causa || "").trim().toUpperCase();
+      let c = "SEM CAUSA REGISTRADA";
+      if (raw.includes("AGUARDANDO DEFINIÇÃO INTERNA")) c = "AGUARDANDO DEFINIÇÃO INTERNA";
+      else if (raw.includes("EXECUÇÃO")) c = "DEPENDÊNCIA DE EXECUÇÃO INTERNA";
+      else if (raw.includes("TERCEIROS")) c = "DEPENDÊNCIA DE TERCEIROS";
+      else if (causaLabels.includes(raw)) c = raw;
       causasCount[c] = (causasCount[c] || 0) + 1;
     });
     const causaVals = causaLabels.map(lbl => causasCount[lbl] || 0);
@@ -510,11 +520,14 @@
     const rows=atrasosData.filter(a=>filtLabels.includes(a.mes));
     const tbody=document.getElementById("atrasos-tbody");
     if (tbody) {
-      tbody.innerHTML=rows.map(a=>`<tr>
+      tbody.innerHTML=rows.map(a=>{
+        const esp = a.especificacao ? `<span class="block text-[10px] text-muted font-normal mt-0.5">${a.especificacao}</span>` : "";
+        return `<tr>
         <td class="p-2 border-b font-medium text-navy">${a.nome}</td><td class="p-2 border-b">${a.mes}</td>
         <td class="p-2 border-b"><span class="tag-atraso bg-red-50 text-red-700 px-2 py-0.5 rounded-full font-bold text-[10px]">${a.dias}d</span></td>
-        <td class="p-2 border-b"><span class="tag-causa bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium text-[10px]">${a.causa}</span></td>
-      </tr>`).join("");
+        <td class="p-2 border-b"><span class="tag-causa bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium text-[10px]">${a.causa}</span>${esp}</td>
+      </tr>`;
+      }).join("");
     }
   }
 

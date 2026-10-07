@@ -406,8 +406,37 @@
         </span>
       </div>
       {% endif %}
+      {% if marketing_bloqueio_erro %}
+      <div class="mb-3 rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs text-red-800">
+        <strong>Não foi possível concluir a demanda:</strong> {{ marketing_bloqueio_erro }}
+      </div>
+      {% endif %}
       <form method="post" action="/workspace/chamados/{{ chamado.id }}/encerrar{% if origem %}?origem={{ origem }}{% endif %}" class="space-y-3">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if demanda_atrasada and chamado.departamento == 'Marketing' %}
+        <div class="rounded-lg bg-amber-50 border border-amber-200 p-3 space-y-2.5 text-xs text-amber-900">
+          <div class="font-semibold text-amber-800 flex items-center gap-1.5">
+            <svg class="w-4 h-4 text-amber-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            Demanda com prazo ultrapassado
+          </div>
+          <p class="text-amber-700">Para concluir esta demanda em atraso, é obrigatório registrar o motivo do atraso.</p>
+          <div>
+            <label class="block font-semibold text-navy mb-1">Causa do Atraso <span class="text-red-500">*</span></label>
+            <select name="causa_atraso" required class="w-full px-3 py-2 rounded-lg ring-1 ring-amber-300 bg-white text-sm outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer">
+              <option value="" {% if not chamado.causa_atraso %}selected{% endif %} disabled>— Selecione o motivo do atraso —</option>
+              {% for causa in causas_atraso_marketing %}
+              <option value="{{ causa }}" {% if chamado.causa_atraso == causa %}selected{% endif %}>{{ causa }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="block font-semibold text-navy mb-1">Especificação do Atraso (opcional)</label>
+            <input type="text" name="especificacao_atraso" value="{{ chamado.especificacao_atraso or '' }}"
+                   placeholder="Ex.: Aguardando validação das artes pelo solicitante"
+                   class="w-full px-3 py-2 rounded-lg ring-1 ring-amber-300 bg-white text-sm outline-none focus:ring-2 focus:ring-amber-500 placeholder:text-faint">
+          </div>
+        </div>
+        {% endif %}
         <textarea name="resolucao" rows="3"
                   placeholder="Ex.: Substituído o sensor do dosador; linha 3 operando normalmente. Qualquer dúvida, reabra o chamado."
                   class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-brandgreen-600 outline-none text-sm resize-none placeholder:text-faint"></textarea>
@@ -610,13 +639,20 @@
         </label>
 
         <label class="block">
-          <span class="text-[13px] font-semibold text-navy">Causa do Atraso (se > 5 dias)</span>
+          <span class="text-[13px] font-semibold text-navy">Causa do Atraso</span>
           <select name="causa_atraso" class="w-full mt-1.5 px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500 cursor-pointer">
             <option value="" {% if not chamado.causa_atraso %}selected{% endif %}>— Nenhuma registrada —</option>
-            <option value="Sem causa registrada" {% if chamado.causa_atraso == 'Sem causa registrada' %}selected{% endif %}>Sem causa registrada</option>
-            <option value="Aguardando definição interna" {% if chamado.causa_atraso == 'Aguardando definição interna' %}selected{% endif %}>Aguardando definição interna</option>
-            <option value="Dependência de execução" {% if chamado.causa_atraso == 'Dependência de execução' %}selected{% endif %}>Dependência de execução</option>
+            {% for causa in causas_atraso_marketing %}
+            <option value="{{ causa }}" {% if chamado.causa_atraso == causa %}selected{% endif %}>{{ causa }}</option>
+            {% endfor %}
           </select>
+        </label>
+
+        <label class="block">
+          <span class="text-[13px] font-semibold text-navy">Especificação do Atraso</span>
+          <input type="text" name="especificacao_atraso" value="{{ chamado.especificacao_atraso or '' }}"
+                 placeholder="Ex.: Aguardando aprovação interna da diretoria"
+                 class="w-full mt-1.5 px-3 py-2 rounded-lg ring-1 ring-line bg-white text-sm outline-none focus:ring-2 focus:ring-navy-500">
         </label>
         
         <button type="submit" class="w-full py-2 rounded-lg bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 transition shadow-soft">
