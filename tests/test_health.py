@@ -40,6 +40,8 @@ def test_login_page_renders_and_sets_csrf_cookie():
     assert resp.status_code == 200
     assert "csrf_token" in resp.cookies
     assert "Entrar" in resp.text
+    for setor in ("TI", "RH", "Marketing", "Departamento Químico", "Manutenção"):
+        assert setor in resp.text
 
 
 def test_mutation_without_csrf_is_forbidden():
