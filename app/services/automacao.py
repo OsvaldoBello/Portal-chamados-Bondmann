@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.config import Settings, get_settings
-from app.db import admin_connection, rls_connection
+from app.db import admin_connection
 from app.domain import automacao as dom
 from app.repositories import automacao as repo_admin
 from app.repositories.automacao import AutomacaoRepo, JobAtivoExistente

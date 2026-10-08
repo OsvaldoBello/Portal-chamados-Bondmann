@@ -43,7 +43,6 @@ from app.domain.formularios_dinamicos import layout_para, rotular_chamado
 from app.domain.formularios_rh import formulario_da_subcategoria
 from app.domain.periodo import periodo_invertido
 from app.ia import triagem
-from app.services import automacao as automacao_svc
 from app.ratelimit import limiter
 from app.repositories.chamados import (
     PRIORIDADES,
@@ -57,6 +56,7 @@ from app.repositories.chamados import (
 from app.routes.transacao import CommitBeforeResponseRoute
 from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
+from app.services import automacao as automacao_svc
 from app.services.ia_resumo import gerar_e_salvar_resumo
 from app.services.portal import PortalService
 from app.templating import portal_base_template, render
