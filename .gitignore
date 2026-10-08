@@ -56,3 +56,5 @@ graphify-out/.graphify_uncached.txt
 graphify-out/converted/
 docs/graphify-out/cache/
 
+# Arquivos temporários e zips locais
+*.zip

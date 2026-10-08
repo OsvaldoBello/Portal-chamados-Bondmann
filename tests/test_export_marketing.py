@@ -62,7 +62,7 @@ def test_acumulado_agrega_todos_os_meses():
     resumo = dict(_sheet_rows(wb, "Resumo")[2:])  # pula título + cabeçalho
     assert resumo["Total de demandas"] == 78  # 2 + 76
     assert resumo["Concluídas"] == 49
-    assert resumo["Atrasos > 5 dias"] == 2  # len(atrasosData) sem filtro
+    assert resumo["Demandas com atraso"] == 2  # len(atrasosData) sem filtro
     assert resumo["Maior setor solicitante"] == "Marketing"
     assert resumo["Demandas do maior solicitante"] == 53  # 2 + 51
 
@@ -80,7 +80,7 @@ def test_filtro_por_mes_restringe_todas_as_abas():
     wb = openpyxl.load_workbook(gerar_workbook(_MKT_DATA, "JUL/26"))
     resumo = dict(_sheet_rows(wb, "Resumo")[2:])
     assert resumo["Total de demandas"] == 76
-    assert resumo["Atrasos > 5 dias"] == 1  # só o atraso de JUL/26
+    assert resumo["Demandas com atraso"] == 1  # só o atraso de JUL/26
     assert resumo["Demandas do maior solicitante"] == 51  # não soma JAN/26
 
     volume_rows = _sheet_rows(wb, "Volume Mensal")[2:]
@@ -121,6 +121,6 @@ def test_aba_atrasos_inclui_especificacao():
     ]
     wb = openpyxl.load_workbook(gerar_workbook(dados, "all"))
     atrasos_rows = _sheet_rows(wb, "Tempo e Atrasos")[1:]  # cabeçalho + linhas
-    assert atrasos_rows[0] == ("Demanda", "Mês", "Dias em aberto", "Causa do atraso", "Especificação")
+    assert atrasos_rows[0] == ("Demanda", "Mês", "Dias de atraso", "Causa do atraso", "Especificação")
     assert atrasos_rows[1] == ("Demanda X", "JUL/26", 10, "DEPENDÊNCIA DE EXECUÇÃO INTERNA", "Aguardando aprovação")
 

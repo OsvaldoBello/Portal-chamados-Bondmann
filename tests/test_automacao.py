@@ -78,6 +78,8 @@ def settings_automacao(monkeypatch):
     monkeypatch.setattr(s, "automacao_tipos", "CRIACAO,DESLIGAMENTO,REVOGAR_LICENCA")
     monkeypatch.setattr(s, "automacao_alerta_email", "")
     monkeypatch.setattr(s, "site_url", "https://portal.test")
+    monkeypatch.setattr(s, "mailgun_api_key", "")
+    monkeypatch.setattr(s, "smtp_host", "")
     return s
 
 
@@ -493,6 +495,7 @@ class _Admin:
         self.agendados: list[dict] = []
         self.historico: list[tuple] = []
         self.emails: list[tuple] = []
+        self.alertas: list[tuple[str, str]] = []
 
         async def gravar(chamado_id, remetente_id, conteudo, *, interna):
             self.mensagens.append((chamado_id, remetente_id, conteudo, interna))
@@ -514,11 +517,15 @@ class _Admin:
         async def conta(payload, aprovado_por):
             return True, "conta x criada"
 
+        async def alerta(settings, assunto, corpo):
+            self.alertas.append((assunto, corpo))
+
         monkeypatch.setattr(repo_admin, "admin_gravar_mensagem", gravar)
         monkeypatch.setattr(repo_admin, "admin_resolver_chamado", resolver)
         monkeypatch.setattr(repo_admin, "admin_agendar_job", agendar)
         monkeypatch.setattr(repo_admin, "admin_registrar_historico", hist)
         monkeypatch.setattr(svc, "_criar_conta_portal", conta)
+        monkeypatch.setattr(svc, "_email_alerta_ti", alerta)
         import app.notification as notif
 
         monkeypatch.setattr(notif, "notificar_nova_mensagem_email", notificar)
@@ -571,6 +578,7 @@ def test_processar_falhou_so_nota_interna(settings_automacao, monkeypatch):
     _run(svc.processar_resultado(_job(status="FALHOU", erro="worker explodiu"), [], None, None, settings=settings_automacao))
     assert len(adm.mensagens) == 1 and adm.mensagens[0][3] is True and "worker explodiu" in adm.mensagens[0][2]
     assert adm.resolvidos == [] and adm.emails == []
+    assert len(adm.alertas) == 1 and "worker explodiu" in adm.alertas[0][1]
 
 
 ACAO_LICENCA = ("retirar a licença do usuário SAP PAOLAK (se houver) em Administração → Licença → "
@@ -683,6 +691,7 @@ def test_vigilancia_marca_travado_e_requeue_so_fora_do_desligamento(settings_aut
     _run(svc.vigiar_uma_vez(settings_automacao))
     assert marcados == [("j1", True), ("j2", False)]
     assert len([m for m in adm.mensagens if m[3]]) == 2
+    assert len(adm.alertas) == 2
 
 
 # --------------------------------------------------------------------------
@@ -694,7 +703,6 @@ class _AdminSync(_Admin):
     def __init__(self, monkeypatch, *, gerenciados=(), ultima=None):
         super().__init__(monkeypatch)
         self.registrados: list[list[str]] = []
-        self.alertas: list[tuple[str, str]] = []
 
         async def lideres():
             return list(gerenciados)
@@ -705,13 +713,9 @@ class _AdminSync(_Admin):
         async def ultima_sync():
             return ultima
 
-        async def alerta(settings, assunto, corpo):
-            self.alertas.append((assunto, corpo))
-
         monkeypatch.setattr(repo_admin, "admin_lideres_gerenciados", lideres)
         monkeypatch.setattr(repo_admin, "admin_registrar_lideres_comerciais", registrar)
         monkeypatch.setattr(repo_admin, "admin_ultima_sync_criada_em", ultima_sync)
-        monkeypatch.setattr(svc, "_email_alerta_ti", alerta)
 
 
 def _etapa_sync(**detalhes):

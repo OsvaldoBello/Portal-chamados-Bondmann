@@ -124,7 +124,7 @@ def _aba_resumo(wb: Workbook, dados: dict[str, Any], periodo: str) -> None:
         ("Abertas", abertas),
         ("Volume produzido (peças/cards)", volume),
         ("Tempo médio de entrega (dias, só concluídas)", round(tempo_medio, 1)),
-        ("Atrasos > 5 dias", atrasos),
+        ("Demandas com atraso", atrasos),
         ("% atrasos sobre as demandas abertas", round(100 * atrasos / aberturas, 1) if aberturas else 0.0),
         ("Demandas abertas no período", aberturas),
         ("Demandas com origem Marketing", mkt_orig),
@@ -173,8 +173,8 @@ def _aba_solicitantes(wb: Workbook, dados: dict[str, Any]) -> None:
 
 def _aba_atrasos(wb: Workbook, dados: dict[str, Any]) -> None:
     ws = wb.create_sheet("Tempo e Atrasos")
-    colunas = ["Demanda", "Mês", "Dias em aberto", "Causa do atraso", "Especificação"]
-    _titulo(ws, "Demandas com Atraso > 5 dias", len(colunas))
+    colunas = ["Demanda", "Mês", "Dias de atraso", "Causa do atraso", "Especificação"]
+    _titulo(ws, "Demandas com Atraso", len(colunas))
     _cabecalho(ws, 3, colunas)
     for i, a in enumerate(dados["atrasosData"], start=4):
         ws.cell(row=i, column=1, value=a["nome"])

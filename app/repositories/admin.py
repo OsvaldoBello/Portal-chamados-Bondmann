@@ -826,13 +826,17 @@ class AdminRepo:
                 """
                 SELECT c.titulo,
                        date_trunc('month', c.created_at AT TIME ZONE 'America/Sao_Paulo')::date AS mes,
-                       EXTRACT(EPOCH FROM (COALESCE(c.resolvido_em, now()) - c.created_at)) / 86400.0 AS dias,
+                       EXTRACT(EPOCH FROM (now() - c.limite_resolucao)) / 86400.0 AS dias,
                        c.causa_atraso,
                        c.especificacao_atraso
                   FROM chamados c
                   JOIN departamentos d ON d.id = c.departamento_id
                  WHERE d.nome = 'Marketing'
-                   AND (COALESCE(c.resolvido_em, now()) - c.created_at) > interval '5 days'
+                   AND c.chamado_principal_id IS NULL
+                   AND c.status IN ('NOVO', 'A_FAZER', 'EM_ATENDIMENTO', 'AGUARDANDO_TERCEIROS')
+                   AND NOT COALESCE(c.sem_prazo, false)
+                   AND c.limite_resolucao IS NOT NULL
+                   AND now() > c.limite_resolucao
                  ORDER BY c.created_at ASC
                 """
             )
@@ -1033,7 +1037,7 @@ class AdminRepo:
             {
                 "nome": r["titulo"] or "Sem assunto",
                 "mes": self._mes_label(r["mes"]),
-                "dias": int(round(max(0.0, r["dias"]))),
+                "dias": max(1, int(round(r["dias"]))),
                 "causa": r["causa_atraso"] or "SEM CAUSA REGISTRADA",
                 "especificacao": r.get("especificacao_atraso") or "",
             }

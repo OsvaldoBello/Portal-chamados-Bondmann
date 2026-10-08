@@ -12,6 +12,7 @@ import pytest
 from app.domain.marketing import (
     CAUSAS_ATRASO_MARKETING,
     demanda_marketing_atrasada,
+    dias_atraso_marketing,
     validar_conclusao_marketing,
 )
 
@@ -117,3 +118,121 @@ def test_validar_conclusao_marketing_usa_causa_previa_se_nao_enviada():
     }
     erro = validar_conclusao_marketing(chamado, causa_atraso=None, agora=agora)
     assert erro is None
+
+
+def test_demanda_prazo_longo_novembro_criada_em_julho_nao_atrasada():
+    """Cenário relatado pelo usuário: chamado aberto em julho com entrega para novembro.
+
+    Em outubro, mais de 5 dias se passaram desde a criação, mas o prazo
+    ainda não venceu. Não deve ser considerada atrasada nem computar dias de atraso.
+    """
+    julho = datetime(2026, 7, 10, 10, 0, tzinfo=UTC)
+    novembro = datetime(2026, 11, 20, 18, 0, tzinfo=UTC)
+    outubro = datetime(2026, 10, 8, 14, 0, tzinfo=UTC)
+
+    chamado = {
+        "departamento": "Marketing",
+        "created_at": julho,
+        "limite_resolucao": novembro,
+        "sem_prazo": False,
+        "resolvido_em": None,
+    }
+
+    assert demanda_marketing_atrasada(chamado, agora=outubro) is False
+    assert dias_atraso_marketing(chamado, agora=outubro) == 0
+
+
+def test_demanda_concluida_no_prazo_mesmo_com_ciclo_longo_nao_atrasa():
+    """Demanda que levou 60 dias para ser feita, mas foi entregue dentro da data acordada."""
+    criacao = datetime(2026, 5, 1, 10, 0, tzinfo=UTC)
+    prazo = datetime(2026, 7, 1, 18, 0, tzinfo=UTC)
+    conclusao = datetime(2026, 6, 28, 15, 0, tzinfo=UTC)
+
+    chamado = {
+        "departamento": "Marketing",
+        "created_at": criacao,
+        "limite_resolucao": prazo,
+        "sem_prazo": False,
+        "resolvido_em": conclusao,
+    }
+
+    assert demanda_marketing_atrasada(chamado) is False
+    assert dias_atraso_marketing(chamado) == 0
+
+
+def test_demanda_concluida_com_atraso_calcula_dias_sobre_limite():
+    """Demanda criada há 120 dias, com prazo há 3 dias e concluída hoje: atraso é de 3 dias, não 120."""
+    criacao = datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
+    prazo = datetime(2026, 10, 5, 18, 0, tzinfo=UTC)
+    conclusao = datetime(2026, 10, 8, 18, 0, tzinfo=UTC)
+
+    chamado = {
+        "departamento": "Marketing",
+        "created_at": criacao,
+        "limite_resolucao": prazo,
+        "sem_prazo": False,
+        "resolvido_em": conclusao,
+    }
+
+    assert demanda_marketing_atrasada(chamado, agora=conclusao) is True
+    assert dias_atraso_marketing(chamado, agora=conclusao) == 3
+
+
+def test_demanda_sem_prazo_nunca_computa_dias_atraso():
+    """Demandas marcadas como sem_prazo nunca acumulam dias de atraso."""
+    criacao = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    agora = datetime(2026, 10, 8, 14, 0, tzinfo=UTC)
+
+    chamado = {
+        "departamento": "Marketing",
+        "created_at": criacao,
+        "limite_resolucao": None,
+        "sem_prazo": True,
+        "resolvido_em": None,
+    }
+
+    assert demanda_marketing_atrasada(chamado, agora=agora) is False
+    assert dias_atraso_marketing(chamado, agora=agora) == 0
+
+
+def test_status_pausado_e_avaliacao_nao_contam_como_atrasados():
+    """Status AGUARDANDO (prazo pausado) e RESOLVIDO (aguardando avaliacao) nunca contam como atrasados."""
+    passado = datetime(2026, 8, 1, 18, 0, tzinfo=UTC)
+    agora = datetime(2026, 10, 8, 14, 0, tzinfo=UTC)
+
+    chamado_pausado = {
+        "departamento": "Marketing",
+        "status": "AGUARDANDO",
+        "limite_resolucao": passado,
+        "sem_prazo": False,
+        "resolvido_em": None,
+    }
+    assert demanda_marketing_atrasada(chamado_pausado, agora=agora) is False
+    assert dias_atraso_marketing(chamado_pausado, agora=agora) == 0
+
+    chamado_resolvido = {
+        "departamento": "Marketing",
+        "status": "RESOLVIDO",
+        "limite_resolucao": passado,
+        "sem_prazo": False,
+        "resolvido_em": agora,
+    }
+    assert demanda_marketing_atrasada(chamado_resolvido, agora=agora) is False
+    assert dias_atraso_marketing(chamado_resolvido, agora=agora) == 0
+
+
+def test_status_ativos_contam_como_atrasados_quando_vencidos():
+    """NOVO, A_FAZER, EM_ATENDIMENTO e AGUARDANDO_TERCEIROS contam como atrasados se vencidos."""
+    passado = datetime(2026, 10, 1, 18, 0, tzinfo=UTC)
+    agora = datetime(2026, 10, 8, 18, 0, tzinfo=UTC)
+
+    for st in ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS"):
+        chamado = {
+            "departamento": "Marketing",
+            "status": st,
+            "limite_resolucao": passado,
+            "sem_prazo": False,
+            "resolvido_em": None,
+        }
+        assert demanda_marketing_atrasada(chamado, agora=agora) is True, f"Falhou para status {st}"
+        assert dias_atraso_marketing(chamado, agora=agora) == 7, f"Dias incorretos para status {st}"
