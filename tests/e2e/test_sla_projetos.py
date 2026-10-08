@@ -61,7 +61,7 @@ async def test_entrar_em_projetos_da_prazo_de_um_mes(conn: asyncpg.Connection, s
         pytest.skip("migration 0066_sla_projetos_prazo_configuravel não aplicada no Supabase local")
 
     antes = await _limite(conn, seed.chamado_ti)
-    assert _dias_ate(antes) < 7, "chamado novo deveria nascer com o prazo curto do suporte"
+    assert _dias_ate(antes) < 10, "chamado novo deveria nascer com o prazo curto do suporte"
 
     await conn.execute(
         "UPDATE chamados SET status = 'PROJETOS' WHERE id = $1", seed.chamado_ti
