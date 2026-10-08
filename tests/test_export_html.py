@@ -87,6 +87,18 @@ def test_relatorio_geral_fora_do_ti_nao_tem_kpi_de_projetos():
     assert not ctx["tabelas"]  # sem avaliações, sem tabela vazia pendurada
 
 
+def test_relatorio_geral_manutencao_tem_kpi_de_projetos():
+    ctx = montar_relatorio_geral(
+        escopo="Manutenção", periodo="2026-07", kpis=KPIS, graficos=GRAFICOS, avaliacoes=[]
+    )
+    rotulos = [k["rotulo"] for k in ctx["kpis"]]
+    assert "TMA (Projetos)" in rotulos
+    valores = {k["rotulo"]: k["valor"] for k in ctx["kpis"]}
+    assert valores["TMA (Projetos)"] == "80.0h"
+    assert valores["Projetos concluídos"] == 1
+
+
+
 def test_relatorio_geral_sem_metrica_mostra_travessao_em_vez_de_none():
     vazio = dict(KPIS, conformidade_sla=None, csat_media=None, tma_horas=None, csat_respostas=0)
     ctx = montar_relatorio_geral(

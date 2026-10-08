@@ -108,11 +108,11 @@
   {{ kpi("Resolvidos no mês de abertura", kpis.resolvidos_no_mes_abertura,
          (kpis.pct_resolvidos_no_mes_abertura ~ "% dos " ~ kpis.total ~ " abertos no mês")
          if kpis.pct_resolvidos_no_mes_abertura is not none else "sem chamados abertos no mês") }}
-  {% if escopo == "TI" %}
+  {% if escopo in ("TI", "Manutenção") %}
   {# Coluna "Projetos" do Kanban (migration 0057) é trabalho mais robusto —
      pedido do usuário (2026-07-24): TMA separado do TMA geral acima (que já
      exclui esses chamados), pra não misturar/distorcer a velocidade do time
-     nos chamados normais. Só existe pro TI (única fila com essa coluna) — ver
+     nos chamados normais. Disponível para TI e Manutenção — ver
      AdminRepo.kpis (identifica via historico_chamados, sem coluna nova). #}
   <div class="bg-white rounded-xl shadow-card border border-st_projetos/40 p-5">
     <div class="text-3xl font-display font-bold text-st_projetos">

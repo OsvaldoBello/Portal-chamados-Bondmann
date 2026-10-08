@@ -259,7 +259,7 @@ def montar_relatorio_geral(
             VERDE,
         ),
     ]
-    if escopo == "TI":
+    if escopo in ("TI", "Manutenção"):
         cartoes += [
             _kpi(
                 "TMA (Projetos)",

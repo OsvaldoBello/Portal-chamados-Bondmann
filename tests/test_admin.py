@@ -392,7 +392,7 @@ def test_dashboard_ti_mostra_tma_projetos_separado():
 
 
 def test_dashboard_fora_do_ti_nao_mostra_card_de_projetos():
-    # A coluna "Projetos" é exclusiva do TI (0057) — outros setores não têm
+    # A coluna "Projetos" é do TI e Manutenção — outros setores (como RH) não têm
     # card nenhum de Projetos no painel, mesmo que o repo devolva algo (fake).
     perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="RH")
     with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
@@ -400,6 +400,17 @@ def test_dashboard_fora_do_ti_nao_mostra_card_de_projetos():
     assert r.status_code == 200
     assert "TMA (Projetos)" not in r.text
     assert "Projetos concluídos" not in r.text
+
+
+def test_dashboard_manutencao_mostra_tma_projetos_separado():
+    perfil = FakePerfilRepo(is_ti=False, role="ADMIN", departamento="Manutenção")
+    with admin_client(FakeAdmin(is_ti=False), user=_user(role="ADMIN"), perfil=perfil) as c:
+        r = c.get("/admin")
+    assert r.status_code == 200
+    assert "TMA (Projetos)" in r.text
+    assert "80.0h" in r.text
+    assert "Projetos concluídos" in r.text
+
 
 
 def test_ti_dashboard_nao_tem_seletor_e_mostra_so_o_proprio_setor():

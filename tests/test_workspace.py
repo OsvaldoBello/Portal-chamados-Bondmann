@@ -280,7 +280,7 @@ def test_kanban_fora_do_marketing_nao_tem_coluna_a_fazer():
 
 
 def test_kanban_projetos_e_exclusivo_do_ti():
-    """A coluna "Projetos" (PROJETOS) não aparece fora do TI — RH usa o fluxo
+    """A coluna "Projetos" (PROJETOS) não aparece fora do TI e Manutenção — RH usa o fluxo
     clássico, igual aos demais setores sem coluna extra própria, mas também
     ganha "Última Interação do Usuário" (RESPOSTA_CLIENTE), pedida pro TI e
     pro RH (migration 0060/0061)."""
@@ -291,6 +291,22 @@ def test_kanban_projetos_e_exclusivo_do_ti():
     for s in ("NOVO", "EM_ATENDIMENTO", "RESPOSTA_CLIENTE", "AGUARDANDO", "RESOLVIDO"):
         assert f'data-status="{s}"' in r.text
     assert "Última Interação do Usuário" in r.text
+
+
+def test_kanban_manutencao_tem_coluna_projetos():
+    """Manutenção ganha a coluna "Projetos" (PROJETOS) para demandas de projeto e
+    reformas de grande porte, ao lado do fluxo clássico (NOVO, PROJETOS, EM_ATENDIMENTO,
+    AGUARDANDO, RESOLVIDO)."""
+    with ws_client(FakeRepo(departamento="Manutenção", is_ti=False)) as c:
+        r = c.get("/workspace/kanban")
+    assert r.status_code == 200
+    assert 'data-status="PROJETOS"' in r.text
+    for s in ("NOVO", "PROJETOS", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO"):
+        assert f'data-status="{s}"' in r.text
+    assert 'data-status="A_FAZER"' not in r.text
+    assert 'data-status="AGUARDANDO_TERCEIROS"' not in r.text
+    assert 'data-status="RESPOSTA_CLIENTE"' not in r.text
+    assert "Projetos" in r.text
 
 
 def test_kanban_marketing_tem_coluna_aguardando_terceiros_apos_em_andamento():
@@ -1147,6 +1163,11 @@ def test_campo_de_prazo_do_projeto_so_quando_o_chamado_esta_em_projetos():
                             departamento="RH", is_ti=False)) as c:
         r = c.get("/workspace/chamados/c1")
     assert "Prazo do projeto (dias)" not in r.text
+
+    with ws_client(FakeRepo(status="PROJETOS", operador_id=OP,
+                            departamento="Manutenção", is_ti=False)) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert "Prazo do projeto (dias)" in r.text
 
 
 def test_definir_prazo_do_projeto_chama_o_repo_e_redireciona():

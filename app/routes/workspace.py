@@ -68,29 +68,33 @@ STATUS_VALIDOS = STATUS_CHAMADO
 # Status oferecidos na UI (dropdown de atendimento e colunas do Kanban) variam por
 # setor: "A fazer" (A_FAZER) e "Aguardando terceiros" (AGUARDANDO_TERCEIROS) são
 # exclusivos do Marketing (quadro Trello com autoatendimento/validação); "Projetos"
-# (PROJETOS, migration 0057) é exclusivo do TI — demanda de projeto, sem vínculo de
-# atendimento reativo a um solicitante. "Última Interação do Usuário"
-# (RESPOSTA_CLIENTE, migration 0060/0061) é exclusiva de TI/RH — o chamado cai
-# ali sozinho (trigger em `mensagens`) quando a última mensagem pública foi de
-# quem abriu o chamado; volta pra EM_ATENDIMENTO quando o setor responde. Os
-# demais setores (Marketing) usam o fluxo clássico ali. STATUS_VALIDOS continua
+# (PROJETOS, migration 0057) está disponível para TI e Manutenção — demandas de projeto
+# ou reformas de grande porte, sem vínculo de atendimento reativo a um solicitante.
+# "Última Interação do Usuário" (RESPOSTA_CLIENTE, migration 0060/0061) é exclusiva
+# de TI/RH — o chamado cai ali sozinho (trigger em `mensagens`) quando a última
+# mensagem pública foi de quem abriu o chamado; volta pra EM_ATENDIMENTO quando o
+# setor responde. Os demais setores usam o fluxo clássico ali. STATUS_VALIDOS continua
 # sendo a whitelist completa da validação server-side (o enum do banco), já
 # que cada setor tem status extras próprios.
 _STATUS_UI_MARKETING = ("NOVO", "A_FAZER", "EM_ATENDIMENTO", "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO")
 _STATUS_UI_TI = ("NOVO", "PROJETOS", "EM_ATENDIMENTO", "RESPOSTA_CLIENTE", "AGUARDANDO", "RESOLVIDO")
 _STATUS_UI_RH = ("NOVO", "EM_ATENDIMENTO", "RESPOSTA_CLIENTE", "AGUARDANDO", "RESOLVIDO")
+_STATUS_UI_MANUTENCAO = ("NOVO", "PROJETOS", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
 _STATUS_UI_PADRAO = ("NOVO", "EM_ATENDIMENTO", "AGUARDANDO", "RESOLVIDO")
 
 
 def _status_ui(departamento: str | None) -> tuple[str, ...]:
-    """Status oferecidos na UI para o setor do chamado/staff (Marketing/TI/RH vs. clássico)."""
+    """Status oferecidos na UI para o setor do chamado/staff (Marketing/TI/RH/Manutenção vs. clássico)."""
     if departamento == "Marketing":
         return _STATUS_UI_MARKETING
     if departamento == "TI":
         return _STATUS_UI_TI
     if departamento == "RH":
         return _STATUS_UI_RH
+    if departamento in ("Manutenção", "Manutencao"):
+        return _STATUS_UI_MANUTENCAO
     return _STATUS_UI_PADRAO
+
 
 
 @dataclass(frozen=True)
