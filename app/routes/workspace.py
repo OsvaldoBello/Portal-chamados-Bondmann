@@ -37,6 +37,7 @@ from app.domain.marketing import (
     validar_conclusao_marketing,
 )
 from app.domain.periodo import periodo_invertido
+from app.domain.projetos import ordenar_chamados_sla_prioridade
 from app.domain.sla_visual import estado_sla
 from app.repositories.automacao import AutomacaoRepo, get_automacao_repo
 from app.repositories.chamados import (
@@ -405,12 +406,17 @@ async def kanban(
     # fórmula por conta própria (ver histórico do item 2.2, M2).
     for c in chamados:
         c["dept_bate"] = AtendimentoService.dept_bate(c, ctx.perfil)
-    colunas = {s: [c for c in chamados if c["status"] == s] for s in status_list}
-    if is_marketing:
-        # Coluna "Concluídos" foge da ordenação padrão da fila (por data de
-        # entrega): aqui o que importa é destacar quem terminou por último, não
-        # o prazo (já cumprido). Mais recente concluído primeiro.
-        colunas["RESOLVIDO"].sort(key=lambda c: c["resolvido_em"] or c["created_at"], reverse=True)
+    colunas = {}
+    for s in status_list:
+        cards_coluna = [c for c in chamados if c["status"] == s]
+        if s == "RESOLVIDO":
+            # Coluna "Concluídos" foge da ordenação padrão da fila: aqui o que
+            # importa é destacar quem terminou por último, não o prazo (já cumprido).
+            # Mais recente concluído primeiro.
+            cards_coluna.sort(key=lambda c: c.get("resolvido_em") or c.get("created_at"), reverse=True)
+        else:
+            cards_coluna = ordenar_chamados_sla_prioridade(cards_coluna)
+        colunas[s] = cards_coluna
     # Contador do cabeçalho = nº de cartões REALMENTE na coluna, não um total
     # solto do setor (bug reportado pelo usuário 2026-08-03: "filtro de data no
     # kanban não está funcionando"). Os cartões filtravam, mas o badge vinha de

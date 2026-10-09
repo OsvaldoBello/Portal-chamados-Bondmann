@@ -1339,3 +1339,47 @@ def test_salvar_marketing_meta_persiste_especificacao():
     assert r.status_code == 303
     assert ("marketing_meta", "c1", 3, "Marketing", "AGUARDANDO DEFINIÇÃO INTERNA", "Briefing de campanha pendente") in repo.acoes
 
+
+def test_kanban_ordenacao_sla_e_prioridade_nas_colunas():
+    """Valida que o Kanban ordena colunas ativas por SLA e prioridade (desempate em 24h)."""
+    agora = datetime.now(UTC)
+    chamados_teste = [
+        _chamado(
+            id="c_longe", codigo="BOND-2026-00101", status="NOVO", prioridade="URGENTE",
+            limite_resolucao=agora + timedelta(hours=72)
+        ),
+        _chamado(
+            id="c_baixa", codigo="BOND-2026-00102", status="NOVO", prioridade="BAIXA",
+            limite_resolucao=agora + timedelta(hours=2)
+        ),
+        _chamado(
+            id="c_alta", codigo="BOND-2026-00103", status="NOVO", prioridade="ALTA",
+            limite_resolucao=agora + timedelta(hours=6)
+        ),
+        _chamado(
+            id="c_urgente", codigo="BOND-2026-00104", status="NOVO", prioridade="URGENTE",
+            limite_resolucao=agora + timedelta(hours=8)
+        ),
+        _chamado(
+            id="c_estourado", codigo="BOND-2026-00105", status="NOVO", prioridade="MEDIA",
+            limite_resolucao=agora - timedelta(hours=2)
+        ),
+    ]
+
+    class FakeRepoOrdenacao(FakeRepo):
+        async def fila(self, claims, **kw):
+            return list(chamados_teste)
+
+    with ws_client(FakeRepoOrdenacao()) as c:
+        r = c.get("/workspace/kanban")
+    assert r.status_code == 200
+
+    pos_estourado = r.text.index('data-id="c_estourado"')
+    pos_urgente = r.text.index('data-id="c_urgente"')
+    pos_alta = r.text.index('data-id="c_alta"')
+    pos_baixa = r.text.index('data-id="c_baixa"')
+    pos_longe = r.text.index('data-id="c_longe"')
+
+    assert pos_estourado < pos_urgente < pos_alta < pos_baixa < pos_longe
+
+
