@@ -380,7 +380,6 @@ async def kanban(
 ):
     if not ctx.perfil.get("recebe_chamados"):
         return RedirectResponse("/portal", status_code=status.HTTP_303_SEE_OTHER)
-    is_marketing = ctx.perfil.get("departamento") == "Marketing"
     # A_FAZER e AGUARDANDO_TERCEIROS voltam a ser exclusivos do Marketing (decisão
     # de produto 2026-07-21): os demais setores usam o fluxo clássico, sem essas
     # colunas. Os chamados legados "[Legado #...]" que estavam em A_FAZER foram

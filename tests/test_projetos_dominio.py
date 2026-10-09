@@ -13,6 +13,14 @@ from app.domain.projetos import (
 AGORA = datetime(2026, 10, 9, 10, 0, 0, tzinfo=UTC)  # Sexta-feira 10:00
 
 
+def test_chave_ordenacao_direta():
+    c = {"limite_resolucao": AGORA + timedelta(hours=5), "prioridade": "ALTA"}
+    k = chave_ordenacao_sla_prioridade(c, agora=AGORA)
+    assert k[0] == 0
+    assert k[1] == 0
+    assert k[2] == 2
+
+
 def test_ordenacao_vencido_primeiro():
     c_vencido = {"id": "1", "limite_resolucao": AGORA - timedelta(hours=2), "prioridade": "BAIXA"}
     c_futuro = {"id": "2", "limite_resolucao": AGORA + timedelta(hours=10), "prioridade": "URGENTE"}
