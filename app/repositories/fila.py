@@ -209,6 +209,47 @@ class FilaRepo:
             )
             return [dict(r) for r in rows]
 
+    async def fila_projetos_desenvolvimento(
+        self,
+        claims: dict,
+        *,
+        departamento_id: str | None = None,
+        limite: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Busca projetos ativos de TI (categoria Desenvolvimento ou status PROJETOS)
+        para compor a fila visual de projetos."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                self._FILA_COLUNAS
+                + """
+                 WHERE c.resolvido_em IS NULL
+                   AND c.chamado_principal_id IS NULL
+                   AND ($1::uuid IS NULL OR c.departamento_id = $1::uuid)
+                   AND (cat.nome ILIKE '%Desenvolvimento%' OR c.status = 'PROJETOS')
+                 ORDER BY c.limite_resolucao ASC NULLS LAST, c.created_at ASC
+                 LIMIT $2
+                """,
+                departamento_id,
+                limite,
+            )
+            return [dict(r) for r in rows]
+
+    async def metricas_projetos_desenvolvimento(self, claims: dict) -> dict[str, Any]:
+        """Calcula métricas históricas de projetos de desenvolvimento concluídos."""
+        async with rls_connection(claims) as conn:
+            row = await conn.fetchrow(
+                """SELECT 
+                    COUNT(*)::int as total_concluidos,
+                    COALESCE(AVG(EXTRACT(EPOCH FROM (c.resolvido_em - c.created_at))/86400)::numeric(10,1), 7.5)::float as media_dias_reais,
+                    COALESCE(AVG(EXTRACT(EPOCH FROM (c.limite_resolucao - c.created_at))/86400)::numeric(10,1), 12.5)::float as media_dias_sla
+                FROM chamados c
+                JOIN categorias cat ON cat.id = c.categoria_id
+                WHERE cat.nome ILIKE '%Desenvolvimento%'
+                  AND c.resolvido_em IS NOT NULL
+                """
+            )
+            return dict(row) if row else {"total_concluidos": 0, "media_dias_reais": 7.5, "media_dias_sla": 12.5}
+
     async def fila_assinatura(
         self, claims: dict, *, departamento_id: str | None, status: str | None = None
     ):

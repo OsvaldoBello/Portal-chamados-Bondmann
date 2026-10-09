@@ -66,7 +66,8 @@ class FakeRepo:
     def __init__(self, *, chamado=None, categorias=None, departamentos=None, subcategorias=None,
                  role="CLIENTE", departamento_id=None, departamento=None, chamados_colegas=None,
                  avaliacao_pendente=None, telefone="", chamados_meus=None,
-                 operadores_por_departamento=None, chamados_copia=None):
+                 operadores_por_departamento=None, chamados_copia=None,
+                 projetos_desenvolvimento=None, metricas_desenvolvimento=None):
         self._chamado = chamado
         self._chamados_meus = chamados_meus if chamados_meus is not None else [
             {
@@ -85,6 +86,10 @@ class FakeRepo:
         self._departamento_id = departamento_id
         self._departamento = departamento
         self._chamados_colegas = chamados_colegas if chamados_colegas is not None else []
+        self._projetos_desenvolvimento = projetos_desenvolvimento if projetos_desenvolvimento is not None else []
+        self._metricas_desenvolvimento = metricas_desenvolvimento or {
+            "total_concluidos": 54, "media_dias_reais": 7.5, "media_dias_sla": 12.5
+        }
         self.chamados_departamento_filtros = None
         self._categorias = categorias or [{"id": "c1", "nome": "Logística / Entrega"}]
         # Catálogo unificado (0027): setores que recebem chamado (têm fila) +
@@ -125,6 +130,12 @@ class FakeRepo:
                                      categoria_id=None, prioridade=None, limite=200):
         self.chamados_departamento_filtros = {"departamento_id": departamento_id}
         return self._chamados_colegas
+
+    async def fila_projetos_desenvolvimento(self, claims, *, departamento_id=None, limite=50):
+        return list(self._projetos_desenvolvimento)
+
+    async def metricas_projetos_desenvolvimento(self, claims):
+        return dict(self._metricas_desenvolvimento)
 
     async def listar(self, claims, *, limite=100, busca=None, data_de=None, data_ate=None):
         """Espelha os filtros que o SQL real aplica (busca em código/assunto/

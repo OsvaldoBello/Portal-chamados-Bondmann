@@ -372,6 +372,20 @@ class ChamadosRepo:
     async def fila_stats(self, claims: dict, *, departamento_id: str | None = None) -> dict[str, int]:
         return await self._fila.fila_stats(claims, departamento_id=departamento_id)
 
+    async def fila_projetos_desenvolvimento(
+        self,
+        claims: dict,
+        *,
+        departamento_id: str | None = None,
+        limite: int = 50,
+    ) -> list[dict[str, Any]]:
+        return await self._fila.fila_projetos_desenvolvimento(
+            claims, departamento_id=departamento_id, limite=limite
+        )
+
+    async def metricas_projetos_desenvolvimento(self, claims: dict) -> dict[str, Any]:
+        return await self._fila.metricas_projetos_desenvolvimento(claims)
+
     async def operadores(
         self, claims: dict, *, departamento_id: str | None = None, excluir_id: str | None = None
     ) -> list[dict[str, Any]]:
