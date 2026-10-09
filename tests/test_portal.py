@@ -2087,3 +2087,55 @@ def test_criar_chamado_dispara_enfileiramento_automacao(monkeypatch):
     assert enfileirados[0]["subcategoria"] == _SUB_CRIACAO
     assert enfileirados[0]["id"] == "novo-id"
 
+
+def test_fila_projetos_cliente_bloqueado():
+    repo = FakeRepo(
+        role="CLIENTE",
+        categorias=[{"id": "cat-dev", "nome": "Desenvolvimento"}],
+    )
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/fila-projetos?categoria_id=cat-dev")
+    assert resp.status_code == 200
+    assert resp.text.strip() == ""
+
+
+def test_fila_projetos_admin_outra_categoria():
+    repo = FakeRepo(
+        role="ADMIN",
+        categorias=[{"id": "cat-hardware", "nome": "Hardware"}],
+    )
+    with portal_client(repo, user=_admin) as client:
+        resp = client.get("/portal/chamados/fila-projetos?categoria_id=cat-hardware")
+    assert resp.status_code == 200
+    assert resp.text.strip() == ""
+
+
+def test_fila_projetos_admin_categoria_desenvolvimento():
+    projetos = [
+        {
+            "id": "p1", "codigo": "BD-2026-00954", "titulo": "Fila de Projetos",
+            "status": "PROJETOS", "prioridade": "ALTA", "cliente_nome": "Carlos",
+            "setor": "Financeiro", "created_at": datetime(2026, 10, 1, 10, 0, tzinfo=UTC),
+            "limite_resolucao": datetime(2026, 10, 20, 18, 0, tzinfo=UTC),
+        },
+        {
+            "id": "p2", "codigo": "BD-2026-00989", "titulo": "Dashboard Controladoria",
+            "status": "PROJETOS", "prioridade": "URGENTE", "cliente_nome": "Mariana",
+            "setor": "Controladoria", "created_at": datetime(2026, 10, 2, 10, 0, tzinfo=UTC),
+            "limite_resolucao": datetime(2026, 10, 20, 15, 0, tzinfo=UTC),
+        },
+    ]
+    repo = FakeRepo(
+        role="ADMIN",
+        categorias=[{"id": "cat-dev", "nome": "Desenvolvimento"}],
+        projetos_desenvolvimento=projetos,
+        metricas_desenvolvimento={"total_concluidos": 54, "media_dias_reais": 7.5, "media_dias_sla": 12.5},
+    )
+    with portal_client(repo, user=_admin) as client:
+        resp = client.get("/portal/chamados/fila-projetos?categoria_id=cat-dev")
+    assert resp.status_code == 200
+    assert "Fila de Projetos (TI)" in resp.text
+    assert "BD-2026-00989" in resp.text
+    assert "BD-2026-00954" in resp.text
+    assert "Previsão Estimada" in resp.text
+

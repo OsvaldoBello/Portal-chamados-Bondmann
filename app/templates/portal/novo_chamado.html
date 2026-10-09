@@ -274,6 +274,14 @@
       <p class="text-xs text-muted mt-1.5">Após a abertura, o sistema calcula o prazo de resposta e resolução conforme a
         prioridade — acompanhe pelo painel “Meus chamados”.</p>
     </div>
+    {% if perfil.role == 'ADMIN' %}
+    <div id="painel-fila-projetos"
+         hx-get="/portal/chamados/fila-projetos"
+         hx-trigger="change from:#categoria-select"
+         hx-include="#categoria-select"
+         hx-swap="innerHTML">
+    </div>
+    {% endif %}
   </aside>
 </div>
 {% endblock %}

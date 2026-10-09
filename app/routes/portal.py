@@ -42,6 +42,8 @@ from app.domain import automacao as dom_automacao
 from app.domain.formularios_dinamicos import layout_para, rotular_chamado
 from app.domain.formularios_rh import formulario_da_subcategoria
 from app.domain.periodo import periodo_invertido
+from app.domain.projetos import calcular_estimativa_novo_projeto, ordenar_chamados_sla_prioridade
+from app.domain.sla_visual import estado_sla
 from app.ia import triagem
 from app.ratelimit import limiter
 from app.repositories.chamados import (
@@ -374,6 +376,42 @@ async def subcategorias_fragmento(
         else []
     )
     return render(request, "portal/_subcategorias_options.html", {"subcategorias": subs})
+
+
+@router.get("/chamados/fila-projetos")
+async def fila_projetos_fragmento(
+    request: Request,
+    categoria_id: str = "",
+    ctx: PortalCtx = Depends(portal_context),
+    repo: ChamadosRepo = Depends(get_chamados_repo),
+):
+    """Fragmento HTMX da fila de projetos de TI exibido no aside da abertura de
+    chamado. Restrito estritamente a líderes de setor (ADMIN) e disparado
+    quando a categoria selecionada é Desenvolvimento."""
+    if ctx.perfil.get("role") != "ADMIN" or not categoria_id.strip():
+        return Response("", media_type="text/html")
+
+    nome_cat = await repo.nome_categoria(ctx.user.claims, categoria_id.strip())
+    if not nome_cat or "desenvolvimento" not in nome_cat.lower():
+        return Response("", media_type="text/html")
+
+    projetos = await repo.fila_projetos_desenvolvimento(ctx.user.claims)
+    projetos_ordenados = ordenar_chamados_sla_prioridade(projetos)
+
+    metricas = await repo.metricas_projetos_desenvolvimento(ctx.user.claims)
+    estimativa = calcular_estimativa_novo_projeto(projetos_ordenados, metricas)
+
+    for p in projetos_ordenados:
+        p["sla_estado"] = estado_sla(p.get("created_at"), p.get("limite_resolucao"), status=p.get("status"))
+
+    return render(
+        request,
+        "portal/_fila_projetos_aside.html",
+        {
+            "projetos": projetos_ordenados,
+            "estimativa": estimativa,
+        },
+    )
 
 
 async def _layout_da_escolha(
