@@ -344,7 +344,7 @@ class AtendimentoRepo:
                 """
                 UPDATE chamados
                    SET status = $4::status_chamado,
-                       operador_id = $2::uuid
+                       operador_id = COALESCE(operador_id, $2::uuid)
                  WHERE id = $1::uuid
                    AND status IN ('NOVO'::status_chamado, 'A_FAZER'::status_chamado)
                    AND ($3::boolean OR cliente_id <> $2::uuid)
@@ -357,9 +357,10 @@ class AtendimentoRepo:
             )
             if row is None:
                 return None
+            op_efetivo = str(row["operador_id"]) if row["operador_id"] else operador_id
             await self._registrar(
                 conn, chamado_id, claims["sub"], "ATENDIMENTO_INICIADO",
-                {"operador_id": operador_id},
+                {"operador_id": op_efetivo},
             )
             return dict(row)
 
