@@ -505,6 +505,8 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
     # ele acompanha e responde como solicitante em "Meus chamados" (Fase 1).
     pode_reivindicar = perm.pode_reivindicar
     pode_atender = perm.pode_atender
+    pode_atribuir = perm.pode_atribuir
+    pode_iniciar = perm.pode_iniciar
     # Repasse de departamento é exclusivo do TI (RLS reforça); só então buscamos a lista.
     # Só entram setores que RECEBEM chamado (têm fila) — repassar para um setor sem
     # staff de atendimento não faz sentido (0027).
@@ -575,6 +577,8 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         "eh_autor": eh_autor,
         "pode_reivindicar": pode_reivindicar,
         "pode_atender": pode_atender,
+        "pode_atribuir": pode_atribuir,
+        "pode_iniciar": pode_iniciar,
         # Desfazer combinação é do setor de destino, não de quem "pode atender":
         # o duplicado fica RESOLVIDO e às vezes sem operador, então nem
         # pode_atender nem pode_reivindicar descrevem quem tem direito aqui.

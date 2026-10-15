@@ -1383,3 +1383,37 @@ def test_kanban_ordenacao_sla_e_prioridade_nas_colunas():
     assert pos_estourado < pos_urgente < pos_alta < pos_baixa < pos_longe
 
 
+def test_marketing_exibe_atribuicao_e_iniciar_em_novo_sem_operador():
+    repo = FakeRepo(
+        departamento="Marketing",
+        is_ti=False,
+        status="NOVO",
+        operador_id=None,
+        chamado_extra={"departamento": "Marketing", "autoatendimento": True},
+    )
+    with ws_client(repo) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert r.status_code == 200
+    assert 'action="/workspace/chamados/c1/atribuir"' in r.text
+    assert 'name="operador_id"' in r.text
+    assert 'action="/workspace/chamados/c1/iniciar"' in r.text
+    assert "Iniciar atendimento" in r.text
+
+
+def test_marketing_com_operador_em_novo_exibe_composer_e_iniciar():
+    repo = FakeRepo(
+        departamento="Marketing",
+        is_ti=False,
+        status="NOVO",
+        operador_id=OP,
+        chamado_extra={"departamento": "Marketing", "autoatendimento": True},
+    )
+    with ws_client(repo) as c:
+        r = c.get("/workspace/chamados/c1")
+    assert r.status_code == 200
+    assert 'id="composer"' in r.text
+    assert 'action="/workspace/chamados/c1/iniciar"' in r.text
+    assert "Iniciar atendimento" in r.text
+
+
+

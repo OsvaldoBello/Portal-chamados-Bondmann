@@ -319,16 +319,18 @@
         Você abriu este chamado — para responder ou acompanhar como solicitante, acesse
         <a href="/portal/chamados/{{ chamado.id }}" class="font-semibold underline">Meus chamados</a>.
       </p>
-      {% elif pode_reivindicar %}
+      {% elif not pode_atender %}
+      {% if pode_iniciar %}
       <p class="mt-4 rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2.5 text-xs text-amber-800">
-        Este chamado do seu setor ainda não foi assumido por ninguém — clique em
+        Este chamado do seu setor ainda não foi assumido por ninguém — {% if pode_atribuir %}defina um operador ou {% endif %}clique em
         <strong>Iniciar atendimento</strong> para liberar a resposta.
       </p>
-      {% elif not pode_atender %}
+      {% else %}
       <p class="mt-4 rounded-lg bg-navy-50 border border-navy-100 px-3.5 py-2.5 text-xs text-navy">
         Você está <strong>acompanhando</strong> este chamado (aberto por alguém do seu setor) —
         só quem atende a fila do departamento pode responder ou alterá-lo.
       </p>
+      {% endif %}
       {% elif chamado.status != 'RESOLVIDO' %}
       {% if erro_composer %}
       <div class="mt-4 rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-sm text-red-700">{{ erro_composer }}</div>
@@ -362,7 +364,7 @@
 
   {# ---------- Coluna de ações ---------- #}
   <div class="space-y-4">
-    {% if pode_reivindicar %}
+    {% if pode_iniciar %}
     {# Iniciar atendimento: assume o chamado e move para "Em atendimento". Só
        aparece pra quem NÃO é o autor — exceto nos departamentos com
        autoatendimento (todos, desde a 0047), onde o autor é o dono da própria
@@ -377,8 +379,7 @@
     </form>
     {% endif %}
 
-    {% if pode_atender %}
-    {% if chamado.status != 'RESOLVIDO' %}
+    {% if pode_atender and chamado.status != 'RESOLVIDO' %}
     {# Encerramento em destaque (didático): a nota de solução vai ao solicitante. #}
     <div class="bg-brandgreen-600/5 rounded-xl shadow-card border-2 border-brandgreen-600/40 p-5">
       <div class="flex items-center gap-2 mb-1">
@@ -449,6 +450,7 @@
     </div>
     {% endif %}
 
+    {% if pode_atender or pode_atribuir %}
     <div class="bg-white rounded-xl shadow-card border border-line/60 p-5 space-y-4">
       <h3 class="font-display font-bold text-navy">Ações</h3>
 
@@ -561,12 +563,13 @@
       </form>
       {% endif %}
     </div>
+    {% endif %}
 
     {# ---------- Combinar chamados duplicados (0065) ----------
        Mesma ocorrência relatada por várias pessoas (servidor fora do ar, etc.):
        marcar os repetidos aqui encerra todos em favor DESTE chamado, tira os
        repetidos dos indicadores e coloca os autores em cópia neste. #}
-    {% if not chamado.chamado_principal_id %}
+    {% if pode_atender and not chamado.chamado_principal_id %}
     <div class="bg-white rounded-xl shadow-card border border-line/60 p-5 space-y-3">
       <h3 class="font-display font-bold text-navy">Combinar chamados</h3>
       <p class="text-[11px] text-muted leading-relaxed">
@@ -592,12 +595,11 @@
       </form>
     </div>
     {% endif %}
-    {% endif %}{# /pode_atender #}
 
     {# Zona de exclusão: chamado aberto por engano. Não exige que o chamado já
        tenha sido assumido (dept_bate/não-autor basta) — confirmação em duas
        etapas (mesmo padrão de admin/usuarios.html) evita apagar sem querer. #}
-    {% if pode_atender or pode_reivindicar %}
+    {% if pode_atender or pode_reivindicar or pode_atribuir %}
     <div class="bg-white rounded-xl shadow-card border border-sla-danger/30 p-5 space-y-2">
       {% if confirmar_exclusao %}
       <p class="text-[13px] text-sla-danger font-semibold">Excluir o chamado <span class="break-all">{{ chamado.codigo }}</span>? Esta ação é permanente e apaga toda a conversa.</p>
