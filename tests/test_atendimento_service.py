@@ -81,3 +81,64 @@ def test_autoatendimento_libera_autor_como_responsavel():
     )
     assert perm.eh_autor and not perm.bloqueado_por_autoria
     assert perm.pode_reivindicar and not perm.pode_atender
+
+
+def test_marketing_pode_atribuir_em_novo_e_a_fazer_sem_operador():
+    chamado = _chamado(
+        departamento_id=DEP_MKT,
+        cliente_id=USER_AUTOR,
+        operador_id=None,
+        autoatendimento=True,
+    )
+    chamado["departamento"] = "Marketing"
+    chamado["status"] = "NOVO"
+    perm = AtendimentoService.permissoes(chamado, _perfil(departamento_id=DEP_MKT), USER_STAFF)
+    assert perm.pode_atribuir is True
+    assert perm.pode_iniciar is True
+    assert perm.pode_atender is False
+
+
+def test_marketing_pode_iniciar_mesmo_com_operador_definido_em_novo_ou_a_fazer():
+    chamado = _chamado(
+        departamento_id=DEP_MKT,
+        cliente_id=USER_AUTOR,
+        operador_id=USER_STAFF,
+        autoatendimento=True,
+    )
+    chamado["departamento"] = "Marketing"
+    chamado["status"] = "A_FAZER"
+    perm = AtendimentoService.permissoes(chamado, _perfil(departamento_id=DEP_MKT), USER_STAFF)
+    assert perm.pode_atribuir is True
+    assert perm.pode_iniciar is True
+    assert perm.pode_atender is True
+
+
+def test_marketing_pode_iniciar_false_quando_em_atendimento():
+    chamado = _chamado(
+        departamento_id=DEP_MKT,
+        cliente_id=USER_AUTOR,
+        operador_id=USER_STAFF,
+        autoatendimento=True,
+    )
+    chamado["departamento"] = "Marketing"
+    chamado["status"] = "EM_ATENDIMENTO"
+    perm = AtendimentoService.permissoes(chamado, _perfil(departamento_id=DEP_MKT), USER_STAFF)
+    assert perm.pode_atribuir is True
+    assert perm.pode_iniciar is False
+    assert perm.pode_atender is True
+
+
+def test_demais_setores_mantem_pode_atribuir_apenas_quando_ja_assumido():
+    chamado = _chamado(
+        departamento_id=DEP_TI,
+        cliente_id=USER_AUTOR,
+        operador_id=None,
+        autoatendimento=False,
+    )
+    chamado["departamento"] = "TI"
+    chamado["status"] = "NOVO"
+    perm = AtendimentoService.permissoes(chamado, _perfil(departamento_id=DEP_TI), USER_STAFF)
+    assert perm.pode_atribuir is False
+    assert perm.pode_iniciar is True  # equivale a pode_reivindicar
+    assert perm.pode_atender is False
+

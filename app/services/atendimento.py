@@ -27,6 +27,8 @@ class PermissoesAtendimento:
     bloqueado_por_autoria: bool
     pode_reivindicar: bool
     pode_atender: bool
+    pode_atribuir: bool
+    pode_iniciar: bool
 
 
 class AtendimentoService:
@@ -52,8 +54,22 @@ class AtendimentoService:
         dept_bate = cls.dept_bate(chamado, perfil)
         ja_assumido = chamado.get("operador_id") is not None
         bloqueado_por_autoria = eh_autor and not eh_autoatendimento
+        eh_marketing = (chamado.get("departamento") or "").strip().lower() == "marketing"
+
         pode_reivindicar = dept_bate and not bloqueado_por_autoria and not ja_assumido
         pode_atender = dept_bate and not bloqueado_por_autoria and ja_assumido
+
+        if eh_marketing:
+            pode_atribuir = dept_bate and not bloqueado_por_autoria
+            pode_iniciar = (
+                dept_bate
+                and not bloqueado_por_autoria
+                and (chamado.get("status") in ("NOVO", "A_FAZER"))
+            )
+        else:
+            pode_atribuir = pode_atender
+            pode_iniciar = pode_reivindicar
+
         return PermissoesAtendimento(
             dept_bate=dept_bate,
             eh_autor=eh_autor,
@@ -61,4 +77,7 @@ class AtendimentoService:
             bloqueado_por_autoria=bloqueado_por_autoria,
             pode_reivindicar=pode_reivindicar,
             pode_atender=pode_atender,
+            pode_atribuir=pode_atribuir,
+            pode_iniciar=pode_iniciar,
         )
+
