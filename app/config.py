@@ -154,7 +154,7 @@ class Settings(BaseSettings):
     # mostra "pausada" (jobs na fila ficam esperando, nada é cancelado).
     automacao_ativa: bool = Field(default=False)
     # Tipos de job liberados (CSV) — permite ligar só a CRIACAO no rollout.
-    automacao_tipos: str = Field(default="CRIACAO,DESLIGAMENTO,REVOGAR_LICENCA")
+    automacao_tipos: str = Field(default="CRIACAO,DESLIGAMENTO,REVOGAR_LICENCA,SINCRONIZAR_LIDERANCA")
     # Token do worker (header `X-Automacao-Token`, comparado em tempo constante).
     # Vazio = API fechada (fail-closed), mesmo com `automacao_ativa=true`.
     automacao_worker_token: str = Field(default="")

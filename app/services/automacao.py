@@ -227,7 +227,11 @@ async def enfileirar_automatico(
         return None
 
     # Resolve perfil aprovador (preferência para TI; fallback para cliente_id)
-    aprovador_id = await repo_admin.admin_obter_perfil_ti_id()
+    try:
+        aprovador_id = await repo_admin.admin_obter_perfil_ti_id()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[AUTOMACAO] falha ao obter perfil TI, usando cliente_id: %s", exc)
+        aprovador_id = None
     if not aprovador_id:
         aprovador_id = str(chamado.get("cliente_id") or "")
     if not aprovador_id:

@@ -643,13 +643,13 @@ def test_processar_desligamento_agenda_revogacao_de_licenca(settings_automacao, 
     etapas = [{"nome": "M365", "status": "SUCCESS", "erro": None, "detalhes": {}}]
     _run(svc.processar_resultado(
         _job(tipo="DESLIGAMENTO"), etapas, {},
-        {"email": "a@bondmann.com.br", "ms_user_id": "guid", "offboard_date": "2026-09-30"},
+        {"email": "a@bondmann.com.br", "ms_user_id": "guid", "offboard_date": "2027-09-30"},
         settings=settings_automacao,
     ))
     assert len(adm.agendados) == 1
     ag = adm.agendados[0]
     assert ag["tipo"] == "REVOGAR_LICENCA" and ag["payload"]["ms_user_id"] == "guid" and ag["reexecucao_de"] == "j1"
-    assert ag["executar_apos"] == datetime(2026, 10, 15, 10, 0, tzinfo=UTC)
+    assert ag["executar_apos"] == datetime(2027, 10, 15, 10, 0, tzinfo=UTC)
     assert adm.resolvidos == ["c1"]
 
 
@@ -1160,9 +1160,12 @@ def test_destinatarios_alerta_combina_com_env(settings_automacao, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_admin_obter_perfil_ti_id_mock(monkeypatch):
+    queries_executadas = []
+
     class FakeConn:
         async def fetchval(self, query, *args):
-            if "ti@bondmann.com.br" in query or "TI" in query.upper():
+            queries_executadas.append(query)
+            if "auth.users" in query and "ti@bondmann.com.br" in query:
                 return "perfil-ti-uuid"
             return None
 
@@ -1173,6 +1176,7 @@ async def test_admin_obter_perfil_ti_id_mock(monkeypatch):
     monkeypatch.setattr(repo_admin, "admin_connection", fake_admin_conn)
     perfil_id = await repo_admin.admin_obter_perfil_ti_id()
     assert perfil_id == "perfil-ti-uuid"
+    assert any("auth.users" in q for q in queries_executadas)
 
 
 @pytest.mark.asyncio
@@ -1210,6 +1214,86 @@ async def test_enfileirar_automatico_criacao(monkeypatch, settings_automacao):
     assert agendado["aprovado_por"] == "ti-profile-id"
     assert agendado["chamado_id"] == "c1"
     assert agendado["payload"]["perfil"] == "REPRESENTANTE"
+
+
+@pytest.mark.asyncio
+async def test_enfileirar_automatico_supervisor(monkeypatch, settings_automacao):
+    dados_supervisor = {
+        "email": "fabio.pereira@bondmann.com.br",
+        "equipe": "RH2021 — EQUIPE MG 2",
+        "perfil": ac.PERFIL_SUPERVISOR,
+        "telefone": "12 99209-1374",
+        "data_inicio": "2026-10-19",
+        "nome_completo": "Fábio Pereira",
+    }
+    chamado = {
+        "id": "c-sup-1",
+        "codigo": "BD-2026-01129",
+        "subcategoria": ac.SUB_CRIACAO_USUARIO,
+        "dados_formulario": dados_supervisor,
+        "cliente_id": "usr-rh-1",
+    }
+    agendado = {}
+
+    async def fake_agendar(**kwargs):
+        agendado.update(kwargs)
+        return {"id": "job-sup-1", "status": "NA_FILA", **kwargs}
+
+    async def fake_historico(*args, **kwargs):
+        pass
+
+    async def fake_perfil_ti():
+        return "ti-profile-id"
+
+    async def fake_feriados(*a):
+        return set()
+
+    monkeypatch.setattr(repo_admin, "admin_agendar_job", fake_agendar)
+    monkeypatch.setattr(repo_admin, "admin_feriados_entre", fake_feriados)
+    monkeypatch.setattr(repo_admin, "admin_obter_perfil_ti_id", fake_perfil_ti)
+    monkeypatch.setattr(repo_admin, "admin_registrar_historico", fake_historico)
+
+    job = await svc.enfileirar_automatico(chamado, settings=settings_automacao)
+    assert job is not None
+    assert job["tipo"] == "CRIACAO"
+    assert agendado["aprovado_por"] == "ti-profile-id"
+    assert agendado["chamado_id"] == "c-sup-1"
+    assert agendado["payload"]["perfil"] == "SUPERVISOR"
+    assert agendado["payload"]["vaga"] == {"tipo": "EQUIPE", "codigo": "RH2021", "nome": "EQUIPE MG 2"}
+
+
+@pytest.mark.asyncio
+async def test_enfileirar_automatico_fallback_erro_ti(monkeypatch, settings_automacao):
+    chamado = {
+        "id": "c1",
+        "codigo": "BD-2026-00001",
+        "subcategoria": ac.SUB_CRIACAO_USUARIO,
+        "dados_formulario": DADOS_CRIACAO,
+        "cliente_id": "usr-rh-1",
+    }
+    agendado = {}
+
+    async def fake_agendar(**kwargs):
+        agendado.update(kwargs)
+        return {"id": "job-1", "status": "NA_FILA", **kwargs}
+
+    async def fake_historico(*args, **kwargs):
+        pass
+
+    async def fake_perfil_ti_com_erro():
+        raise RuntimeError("Erro temporario no banco ao buscar perfil TI")
+
+    async def fake_feriados(*a):
+        return set()
+
+    monkeypatch.setattr(repo_admin, "admin_agendar_job", fake_agendar)
+    monkeypatch.setattr(repo_admin, "admin_feriados_entre", fake_feriados)
+    monkeypatch.setattr(repo_admin, "admin_obter_perfil_ti_id", fake_perfil_ti_com_erro)
+    monkeypatch.setattr(repo_admin, "admin_registrar_historico", fake_historico)
+
+    job = await svc.enfileirar_automatico(chamado, settings=settings_automacao)
+    assert job is not None
+    assert agendado["aprovado_por"] == "usr-rh-1"  # Fallback para o cliente_id
 
 
 @pytest.mark.asyncio

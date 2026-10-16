@@ -405,7 +405,9 @@ async def admin_obter_perfil_ti_id() -> str | None:
     do departamento TI para autoria de jobs automáticos."""
     async with admin_connection() as conn:
         perfil_id = await conn.fetchval(
-            "SELECT id::text FROM perfis WHERE lower(email) = 'ti@bondmann.com.br' LIMIT 1"
+            """SELECT p.id::text FROM perfis p
+                 JOIN auth.users u ON u.id = p.id
+                WHERE lower(u.email) = 'ti@bondmann.com.br' LIMIT 1"""
         )
         if perfil_id:
             return str(perfil_id)

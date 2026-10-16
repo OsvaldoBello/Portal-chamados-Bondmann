@@ -10,7 +10,7 @@
 > alertas; o worker (`Automação/`: `worker.py` + `flow.py`) continua executando nos sistemas
 > (M365, UBD, SAP, WMW, SIP). A v2 acrescenta funções, campos e um tipo de job.
 >
-> **Status:** 🟡 `Em processo` (F1–F5 em código, aguardando deploy e homologação) · **Criado em:** 2026-09-25 · **Atualizado em:** 2026-09-29 ·
+> **Status:** 🟡 `Em processo` (F0–F3 homologadas; F4–F5 aguardando homologação) · **Criado em:** 2026-09-25 · **Atualizado em:** 2026-10-16 ·
 > **Origem:** brainstorming com o gestor (Osvaldo) após o desligamento parcial de Paola Kemel
 > (2026-09-24, etapa SAP ❌).
 
@@ -42,7 +42,7 @@ homologado conforme o DoD).
 | **F0** | Levantamento: schema da `regioes`, `IB_CO_REGIAO`, lista de equipes, usuário `PAOLAK`, e-mails dos gerentes, grupos de Gerência, API de líderes da UBD | — | — | 🟢 Pronto | 2026-09-25 | Só leitura (Seção 1); #2 resolvido na F0b: gerente = `U_IB_CodCom4` (V3 revisada) |
 | **F1** | Correção SAP: busca por `$filter`, bloqueio por `InternalKey`, código `PAOLAK`, colisão na criação | worker | — | 🟡 Em processo | 2026-09-25 | Resolve o caso Paola |
 | **F2** | Checkbox "Urgência" no desligamento + horário padrão 17h | portal | — | 🟡 Em processo | 2026-09-25 | Independente; pode ir junto com F1 |
-| **F3** | Perfil GERENTE; campos Equipe/Gerência correspondente; ocupar/devolver vaga na `IB_CO_REGIAO`; grupos de Gerência; contrato v1 aditivo | portal + worker | F0 | 🟡 Em processo | 2026-09-25 | Código + testes; aguarda deploy (worker primeiro) e homologação |
+| **F3** | Perfil GERENTE; campos Equipe/Gerência correspondente; ocupar/devolver vaga na `IB_CO_REGIAO`; grupos de Gerência; contrato v1 aditivo | portal + worker | F0 | 🟢 Pronto | 2026-10-16 | Homologado em produção (BD-2026-01129, Fábio Pereira, Supervisor RH2021). Enfileiramento automático corrigido no portal (`admin_obter_perfil_ti_id`). |
 | **F4** | Liderança na UBD na criação (representante, supervisor, interno); campo "Gerência responsável" | portal + worker | F0, F3 | 🟡 Em processo | 2026-09-25 | Código + testes; envs `REGIOES_*` e política de SELECT na `regioes` pendentes |
 | **F5** | Job `SINCRONIZAR_LIDERANCA` diário e por evento; espelho com proteção | portal + worker | F4 | 🟡 Em processo | 2026-09-29 | Código + testes nos dois repos (Task 9); aguarda deploy (worker primeiro, migrations `0092`/`0093`) e homologação (Seção 8) — estreia em modo relatório |
 
@@ -65,10 +65,10 @@ homologado conforme o DoD).
 | F2 | Campo `urgente` + agendamento imediato | 🟡 Em processo |
 | F2 | Padrão 17h | 🟡 Em processo |
 | F2 | Selo "Urgente" no card | 🟡 Em processo |
-| F3 | Catálogo estático de equipes e gerências | 🟡 Em processo |
-| F3 | Formulário: perfil Gerente, campos `equipe` / `gerencia` | 🟡 Em processo |
-| F3 | Worker: `GERENTE`, grupos, `occupy_vacancy` / `release_vacancy` | 🟡 Em processo |
-| F3 | Contrato v1 aditivo (desvio da Seção 7: sem bump para `2`) | 🟡 Em processo |
+| F3 | Catálogo estático de equipes e gerências | 🟢 Pronto |
+| F3 | Formulário: perfil Gerente, campos `equipe` / `gerencia` | 🟢 Pronto |
+| F3 | Worker: `GERENTE`, grupos, `occupy_vacancy` / `release_vacancy` | 🟢 Pronto |
+| F3 | Contrato v1 aditivo (desvio da Seção 7: sem bump para `2`) | 🟢 Pronto |
 | F4 | Leitura somente-GET da `regioes` — **no worker**, só para confirmar (desvio da Seção 5) | 🟡 Em processo |
 | F4 | Campo "Gerência responsável" + mapa de gerentes | 🟡 Em processo |
 | F4 | Líderes resolvidos pelo worker (SAP) e exibidos na nota (`leaders_aplicados`/`avisos`) | 🟡 Em processo |
@@ -417,6 +417,29 @@ Validação servidor-side contra o catálogo. Título automático:
   - Desligamento de SUPERVISOR/GERENTE: nova etapa
     `"SAP Business One (Service Layer) - Devolver Vaga (Equipe/Gerência)"` **no lugar** da
     etapa `RH2020`, que fica só para REPRESENTANTE.
+
+### Homologação em produção e correção do enfileiramento automático (2026-10-16)
+
+- **Primeiro caso real em produção:** Chamado `BD-2026-01129` (Fábio Pereira, Supervisor,
+  `RH2021 — EQUIPE MG 2`).
+- **Validação de ponta a ponta:** O job `1d36b1b9-c295-421d-ad12-a564b1c9bd25` executou com 100% de
+  sucesso:
+  1. M365: conta criada com os grupos corretos de Supervisão (`Supervisão`, `BD Supervisão`, etc.).
+  2. UBD: usuário criado nos times de liderança e líderes atribuídos.
+  3. SAP Service Layer: `occupy_vacancy` localizou o PN do supervisor e ocupou as regiões da vaga
+     `RH2021` em `U_IB_CodCom3`.
+- **Causa raiz da não execução automática na abertura:**
+  Na abertura de chamados estruturados de acesso, `enfileirar_automatico` busca o perfil da TI para
+  autoria do job chamando `admin_obter_perfil_ti_id()`. O método executava
+  `SELECT id::text FROM perfis WHERE lower(email) = 'ti@bondmann.com.br' LIMIT 1`, falhando com
+  `asyncpg.exceptions.UndefinedColumnError: column "email" does not exist` porque a coluna `email`
+  reside em `auth.users`, não na tabela pública `perfis`.
+- **Correção aplicada (Portal):**
+  1. `admin_obter_perfil_ti_id()` atualizado para `JOIN auth.users u ON u.id = p.id WHERE lower(u.email) = 'ti@bondmann.com.br'`.
+  2. Tratamento defensivo em `enfileirar_automatico` com fallback imediato para o `cliente_id` do chamado
+     caso a resolução do perfil TI falhe, impedindo qualquer bloqueio futuro de enfileiramento.
+  3. Default de `automacao_tipos` em `Settings` (`app/config.py`) atualizado para incluir
+     `SINCRONIZAR_LIDERANCA`.
 
 ---
 
