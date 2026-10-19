@@ -94,7 +94,7 @@ Texto fixo (2026-09-25).
 | **V6** | Interno: campo novo e obrigatório **"Gerência responsável"** (8 gerências + "Outra"; "Outra" ⇒ `gestor_email` obrigatório). |
 | **V7** | Abordagem: **o portal lê a `regioes` e resolve os líderes; o worker aplica na UBD**. A sincronização é mais um tipo de job na fila existente. |
 | **V8** | Na F0, o SAP é consultado pela **Service Layer da automação** (`SAPService`, via túnel), somente GET. |
-| **V9** | Fora de escopo: WMW para supervisor e gerente (o fluxo WMW continua só para representante). |
+| **V9** | WMW para supervisor e gerente (integrado na v1.5.0 da automação e refletido no portal em 2026-10-19): geração de usuário no WMW por PN SAP via "Gerar por Representante", seleção de dispositivo no portal (IOS/Android/Simulador) e credenciais de acesso repassadas ao RH na conclusão. |
 | **V10** | Grupo M365 do gerente: **`Gerencia`** (`9bc94d0a-8dca-4f3e-86fe-44cbb7692ee9`, `bd.gerencia@bondmann.com.br`) — gestor, 2026-09-25. Supervisor continua em `Supervisão` + `BD Supervisão` (já no código). |
 | **V11** | Usuário SAP no desligamento de interno (gestor, 2026-09-25): código confere e o nome no SAP é **parecido** ⇒ bloqueia; código confere com nome **não parecido** (e nada por e-mail/nome) ⇒ etapa FAILED "verificar manualmente" com os candidatos; nenhum usuário ⇒ "nada a bloquear". Entregue no worker v1.2.1. |
 | **V12** | Leitura da `regioes` pelo portal: **chave anon/publishable via PostgREST (GET)** fornecida pelo gestor. Hoje ela autentica mas devolve 0 linhas (RLS sem política de SELECT para `anon`) — **pré-requisito do gestor**: o dono do projeto cria a política de leitura. O portal nunca escreve (V1). |
@@ -383,6 +383,7 @@ Rótulo no select: `"RH2018 — EQUIPE SP 1"`. Equipe nova = PR de uma linha.
 | `regiao_wmw` / `regiao` | visível **só para Representante** |
 | `equipe` (novo) | select obrigatório, visível se Supervisor, rótulo **"Equipe correspondente"** |
 | `gerencia` (novo) | select obrigatório, visível se Gerente, rótulo **"Gerência correspondente"** |
+| `dispositivo_wmw` | visível e obrigatório para **Representante, Supervisor e Gerente** (atualizado em 2026-10-19) |
 
 Validação servidor-side contra o catálogo. Título automático:
 `"Criação de usuário — Nome (Supervisor · EQUIPE SP 1)"`.
