@@ -118,6 +118,7 @@ _SO_SUPERVISOR = ("perfil", (PERFIL_SUPERVISOR,))
 _SO_GERENTE = ("perfil", (PERFIL_GERENTE,))
 _SO_REPRESENTANTE = ("perfil", (PERFIL_REPRESENTANTE,))
 _SO_INTERNO = ("perfil", (PERFIL_INTERNO,))
+_SO_COMERCIAIS_WMW = ("perfil", (PERFIL_REPRESENTANTE, PERFIL_SUPERVISOR, PERFIL_GERENTE))
 
 
 def campos_criacao(setores_portal: tuple[str, ...]) -> tuple[CampoDef, ...]:
@@ -186,7 +187,7 @@ def campos_criacao(setores_portal: tuple[str, ...]) -> tuple[CampoDef, ...]:
         ),
         CampoDef(
             "dispositivo_wmw", "Dispositivo do app WMW", "select", obrigatorio=True,
-            opcoes=_DISPOSITIVOS_WMW, visivel_se=_SO_REPRESENTANTE,
+            opcoes=_DISPOSITIVOS_WMW, visivel_se=_SO_COMERCIAIS_WMW,
         ),
         CampoDef(
             "observacoes", "Observações para a TI", "textarea",
