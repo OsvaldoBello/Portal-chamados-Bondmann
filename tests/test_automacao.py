@@ -124,7 +124,20 @@ def test_payload_criacao_gerente_leva_vaga_de_gerencia():
     p = dom.montar_payload(dom.TIPO_CRIACAO, dados, CHAMADO)
     assert p["perfil"] == "GERENTE" and p["regiao"] is None
     assert p["vaga"] == {"tipo": "GERENCIA", "codigo": "RH2005", "nome": "GERENTE SP"}
+    assert p["dispositivo_wmw"] == "IOS"
     assert ("Vaga", "RH2005 — GERENTE SP") in dom.resumo_payload(p)
+
+
+def test_payload_criacao_supervisor_e_gerente_levam_dispositivo_wmw():
+    dados_sup = {
+        **DADOS_CRIACAO,
+        "perfil": ac.PERFIL_SUPERVISOR,
+        "regiao_wmw": "",
+        "equipe": "RH2018 — EQUIPE SP 1",
+        "dispositivo_wmw": "ANDROID (Celular / Tablet)",
+    }
+    p_sup = dom.montar_payload(dom.TIPO_CRIACAO, dados_sup, CHAMADO)
+    assert p_sup["dispositivo_wmw"] == "ANDROID"
 
 
 def test_payload_interno_resolve_gestor_pela_gerencia():

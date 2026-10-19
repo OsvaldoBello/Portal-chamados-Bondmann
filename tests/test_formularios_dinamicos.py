@@ -244,28 +244,56 @@ def test_catalogo_de_vagas_do_sap():
 
 
 def test_criacao_supervisor_pede_equipe_e_nao_regiao():
-    dados = _criacao_representante(perfil=[ac.PERFIL_SUPERVISOR], regiao_wmw=[""], dispositivo_wmw=[""],
+    dados = _criacao_representante(perfil=[ac.PERFIL_SUPERVISOR], regiao_wmw=[""],
+                                   dispositivo_wmw=["IOS (iPhone / iPad)"],
                                    equipe=["RH2018 — EQUIPE SP 1"])
     ok, erro, limpo = validar_campos(ac.campos_criacao(SETORES), dados)
     assert ok, erro
     assert limpo["equipe"] == "RH2018 — EQUIPE SP 1" and "regiao_wmw" not in limpo
+    assert limpo["dispositivo_wmw"] == "IOS (iPhone / iPad)"
     ok, erro, _ = validar_campos(ac.campos_criacao(SETORES), {**dados, "equipe": [""]})
     assert not ok and "Equipe correspondente" in erro
 
 
 def test_criacao_supervisor_com_equipe_fora_do_catalogo_e_recusada():
-    dados = _criacao_representante(perfil=[ac.PERFIL_SUPERVISOR], regiao_wmw=[""], dispositivo_wmw=[""],
+    dados = _criacao_representante(perfil=[ac.PERFIL_SUPERVISOR], regiao_wmw=[""],
+                                   dispositivo_wmw=["IOS (iPhone / iPad)"],
                                    equipe=["RH2040 — EQUIPE RJ 1"])
     ok, erro, _ = validar_campos(ac.campos_criacao(SETORES), dados)
     assert not ok and "Opção inválida" in erro
 
 
 def test_criacao_gerente_pede_gerencia():
-    dados = _criacao_representante(perfil=[ac.PERFIL_GERENTE], regiao_wmw=[""], dispositivo_wmw=[""],
+    dados = _criacao_representante(perfil=[ac.PERFIL_GERENTE], regiao_wmw=[""],
+                                   dispositivo_wmw=["ANDROID (Celular / Tablet)"],
                                    gerencia=["RH2033 — GERENTE MG/RJ"])
     ok, erro, limpo = validar_campos(ac.campos_criacao(SETORES), dados)
     assert ok, erro
     assert limpo["gerencia"] == "RH2033 — GERENTE MG/RJ" and "equipe" not in limpo
+    assert limpo["dispositivo_wmw"] == "ANDROID (Celular / Tablet)"
+
+
+def test_criacao_supervisor_e_gerente_exigem_dispositivo_wmw():
+    # Supervisor sem dispositivo_wmw falha
+    dados_sup_sem_disp = _criacao_representante(
+        perfil=[ac.PERFIL_SUPERVISOR], regiao_wmw=[""], dispositivo_wmw=[""],
+        equipe=["RH2018 — EQUIPE SP 1"],
+    )
+    ok, erro, _ = validar_campos(ac.campos_criacao(SETORES), dados_sup_sem_disp)
+    assert not ok and "Dispositivo do app WMW" in erro
+
+    # Gerente sem dispositivo_wmw falha
+    dados_ger_sem_disp = _criacao_representante(
+        perfil=[ac.PERFIL_GERENTE], regiao_wmw=[""], dispositivo_wmw=[""],
+        gerencia=["RH2005 — GERENTE SP"],
+    )
+    ok, erro, _ = validar_campos(ac.campos_criacao(SETORES), dados_ger_sem_disp)
+    assert not ok and "Dispositivo do app WMW" in erro
+
+    # Interno não exige nem grava dispositivo_wmw
+    ok, erro, limpo = validar_campos(ac.campos_criacao(SETORES), _criacao_interno())
+    assert ok, erro
+    assert "dispositivo_wmw" not in limpo
 
 
 def test_desligamento_supervisor_pede_equipe():
