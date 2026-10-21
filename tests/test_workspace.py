@@ -76,6 +76,7 @@ class FakeRepo:
             "departamento_id": departamento_id, "categoria_id": categoria_id,
             "prioridade": prioridade, "operador_id": operador_id,
             "setor": setor, "data_de": data_de, "data_ate": data_ate, "busca": busca,
+            "limite": limite,
         }
         cs = [
             _chamado(),
@@ -428,6 +429,36 @@ def test_kanban_repassa_busca_para_o_repo():
     assert r.status_code == 200
     assert repo.fila_filtros["busca"] == "impressora"  # normalizada (strip)
     assert "limpar filtros" in r.text
+
+
+def test_kanban_busca_com_limite_expandido():
+    """O Kanban busca a fila com limite expandido (500) para acomodar cartões
+    em todas as colunas sem truncar demandas ativas."""
+    repo = FakeRepo()
+    with ws_client(repo) as c:
+        r = c.get("/workspace/kanban")
+    assert r.status_code == 200
+    assert repo.fila_filtros["limite"] == 500
+
+
+def test_kanban_cards_sem_prazo_aparecem_no_quadro():
+    """Cartões sem prazo definido (sem_prazo=True, limite_resolucao=None) devem
+    aparecer normalmente no quadro do Kanban em suas respectivas colunas."""
+    class FakeRepoSemPrazo(FakeRepo):
+        async def fila(self, claims, **kw):
+            self.fila_filtros = kw
+            return [
+                _chamado(id="c1", codigo="BD-2026-01027", status="EM_ATENDIMENTO", sem_prazo=False),
+                _chamado(id="c2", codigo="BD-2026-00938", titulo="Flyer - Fluidos Bondmann", status="EM_ATENDIMENTO", sem_prazo=True, limite_resolucao=None),
+            ]
+
+    with ws_client(FakeRepoSemPrazo(departamento="Marketing")) as c:
+        r = c.get("/workspace/kanban")
+    assert r.status_code == 200
+    assert "BD-2026-00938" in r.text
+    assert "Flyer - Fluidos Bondmann" in r.text
+    assert _badge_da_coluna(r.text, "EM_ATENDIMENTO") == 2
+
 
 
 def test_kanban_filtro_de_sla_e_aplicado_em_python():

@@ -398,6 +398,7 @@ async def kanban(
         data_de=f["data_de"],
         data_ate=f["data_ate"],
         busca=f["busca"],
+        limite=500,
     )
     chamados = _aplicar_sla(chamados, f["sla"])
     # dept_bate calculado uma única vez aqui (AtendimentoService) e consumido

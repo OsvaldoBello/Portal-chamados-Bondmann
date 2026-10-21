@@ -107,8 +107,11 @@ class FilaRepo:
         `resolvido_em` (ainda não concluído) só pode casar pelo `created_at`, como
         sempre — sem mudança de comportamento para ele.
 
-        **Ordenação padrão: data de entrega (mais próxima primeiro); sem data de
-        entrega fica por último, por data de abertura (mais recentes primeiro).**
+        **Ordenação padrão: chamados ativos primeiro (por data de entrega ASC NULLS LAST,
+        depois created_at DESC). Chamados resolvidos vão para o final, ordenados pelos
+        mais recentemente concluídos (resolvido_em DESC, created_at DESC).
+        Dessa forma, demandas ativas sem prazo (sem_prazo=True) nunca são empurradas
+        para fora do LIMIT por chamados já concluídos.**
         """
         busca_norm = f"%{busca.strip()}%" if busca and busca.strip() else None
         inicio, fim = janela_utc(data_de, data_ate)
@@ -139,7 +142,11 @@ class FilaRepo:
                      )
                    )
                    AND ($10::text IS NULL OR c.titulo ILIKE $10 OR c.descricao ILIKE $10)
-                 ORDER BY c.data_entrega ASC NULLS LAST, c.created_at DESC
+                 ORDER BY 
+                   CASE WHEN c.status = 'RESOLVIDO' THEN 1 ELSE 0 END ASC,
+                   CASE WHEN c.status = 'RESOLVIDO' THEN NULL ELSE c.data_entrega END ASC NULLS LAST,
+                   CASE WHEN c.status = 'RESOLVIDO' THEN c.resolvido_em ELSE NULL END DESC NULLS LAST,
+                   c.created_at DESC
                  LIMIT $2
                 """,
                 status,
