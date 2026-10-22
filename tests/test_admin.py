@@ -1363,11 +1363,15 @@ def test_base_quimico_post_sucesso_chama_ingerir_e_mostra_relatorio(monkeypatch)
     monkeypatch.setattr(admin_mod, "ingerir_conn", _fake_ingerir_conn)
 
     import io
-    import zipfile
 
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Base"
+    ws.append(["teste"])
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("dummy.txt", "conteudo")
+    wb.save(buf)
     xlsx_bytes = buf.getvalue()
     with admin_client(FakeAdmin()) as c:
         t = _csrf(c)
