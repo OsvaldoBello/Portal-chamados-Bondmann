@@ -24,8 +24,14 @@ log = logging.getLogger("app.repositories.atendimento")
 # um subconjunto — ver `app/routes/workspace.py::_status_ui`). Vive aqui, junto
 # de quem escreve status no banco, e é reexportada pela fachada `ChamadosRepo`.
 STATUS_CHAMADO = (
-    "NOVO", "A_FAZER", "PROJETOS", "EM_ATENDIMENTO", "RESPOSTA_CLIENTE",
-    "AGUARDANDO_TERCEIROS", "AGUARDANDO", "RESOLVIDO",
+    "NOVO",
+    "A_FAZER",
+    "PROJETOS",
+    "EM_ATENDIMENTO",
+    "RESPOSTA_CLIENTE",
+    "AGUARDANDO_TERCEIROS",
+    "AGUARDANDO",
+    "RESOLVIDO",
 )
 
 # Status para o qual um duplicado volta ao desfazer a combinação, quando o
@@ -203,7 +209,9 @@ class AtendimentoRepo:
             await self._registrar(conn, chamado_id, claims["sub"], "REABERTO", {})
             return dict(row)
 
-    async def avaliacao_pendente(self, claims: dict) -> dict[str, Any] | None:
+    async def avaliacao_pendente(
+        self, claims: dict, *, departamento_id: str | None = None
+    ) -> dict[str, Any] | None:
         """O chamado RESOLVIDO mais antigo do próprio autor ainda sem avaliação
         (1-5 ★), se houver — usado para redirecionar quem tenta abrir um novo
         chamado antes de avaliar o anterior (2026-07-21). Mesmo recorte de
@@ -217,21 +225,18 @@ class AtendimentoRepo:
         pedindo pro Marketing) não entra: ali o setor se autoatende num quadro
         estilo Trello, sem uma relação real de "quem prestou o serviço" — a
         trava de avaliação só faz sentido pra quem pediu algo a OUTRO
-        departamento (2026-07-23, ex.: BOND-2026-00027 — recorrente no
-        Marketing, travava a abertura de um novo chamado mesmo sem ninguém
-        pra avaliar). Antes disso a regra comparava ``operador_id`` com
-        ``cliente_id``, mas isso falhava sempre que o card era resolvido por
-        um colega do mesmo setor (ou arrastado direto até "Resolvido" sem
-        nunca ser reivindicado, deixando ``operador_id`` nulo).
+        departamento (2026-07-23, ex.: BOND-2026-00027).
 
         Duplicado de uma combinação (0065) também fica de fora: ele é encerrado
-        como RESOLVIDO sem ninguém ter atendido *aquele* chamado, então travar a
-        abertura de um novo chamado pedindo nota nele seria pedir CSAT de um
-        atendimento que acontece no principal (onde o autor está em cópia)."""
+        como RESOLVIDO sem ninguém ter atendido *aquele* chamado.
+
+        Trava por setor (2026-10-21): se ``departamento_id`` for informado,
+        filtra estritamente os chamados resolvidos daquele departamento, de forma
+        que uma pendência de avaliação no Marketing não impeça a abertura de um
+        chamado para a TI."""
         async with rls_connection(claims) as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT c.id, c.codigo, c.titulo
+            query = """
+                SELECT c.id, c.codigo, c.titulo, c.departamento_id
                   FROM chamados c
                   JOIN perfis cli ON cli.id = c.cliente_id
                  WHERE c.cliente_id = $1::uuid
@@ -239,12 +244,40 @@ class AtendimentoRepo:
                    AND c.avaliacao_nota IS NULL
                    AND c.chamado_principal_id IS NULL
                    AND c.departamento_id IS DISTINCT FROM cli.departamento_id
+            """
+            params: list[Any] = [claims["sub"]]
+            if departamento_id:
+                params.append(departamento_id)
+                query += f" AND c.departamento_id = ${len(params)}::uuid"
+            query += """
                  ORDER BY c.resolvido_em ASC NULLS LAST
                  LIMIT 1
+            """
+            row = await conn.fetchrow(query, *params)
+            return dict(row) if row else None
+
+    async def avaliacoes_pendentes_por_departamento(
+        self, claims: dict
+    ) -> dict[str, dict[str, Any]]:
+        """Mapeia os chamados RESOLVIDOS sem avaliação mais antigos por departamento
+        de destino (2026-10-21). Devolve um dict com chave `departamento_id` (str) e
+        o chamado pendente como valor."""
+        async with rls_connection(claims) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (c.departamento_id) c.id, c.codigo, c.titulo, c.departamento_id
+                  FROM chamados c
+                  JOIN perfis cli ON cli.id = c.cliente_id
+                 WHERE c.cliente_id = $1::uuid
+                   AND c.status = 'RESOLVIDO'
+                   AND c.avaliacao_nota IS NULL
+                   AND c.chamado_principal_id IS NULL
+                   AND c.departamento_id IS DISTINCT FROM cli.departamento_id
+                 ORDER BY c.departamento_id, c.resolvido_em ASC NULLS LAST
                 """,
                 claims["sub"],
             )
-            return dict(row) if row else None
+            return {str(r["departamento_id"]): dict(r) for r in rows}
 
     async def ia_triagem_nota(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
         """Última triagem por IA que gerou nota interna no chamado, com a
@@ -303,7 +336,12 @@ class AtendimentoRepo:
         return True
 
     async def iniciar_atendimento(
-        self, claims: dict, chamado_id: str, *, operador_id: str, novo_status: str = "EM_ATENDIMENTO"
+        self,
+        claims: dict,
+        chamado_id: str,
+        *,
+        operador_id: str,
+        novo_status: str = "EM_ATENDIMENTO",
     ) -> dict[str, Any] | None:
         """Inicia o atendimento: move NOVO/A_FAZER→``novo_status`` e assume como responsável.
 
@@ -359,7 +397,10 @@ class AtendimentoRepo:
                 return None
             op_efetivo = str(row["operador_id"]) if row["operador_id"] else operador_id
             await self._registrar(
-                conn, chamado_id, claims["sub"], "ATENDIMENTO_INICIADO",
+                conn,
+                chamado_id,
+                claims["sub"],
+                "ATENDIMENTO_INICIADO",
                 {"operador_id": op_efetivo},
             )
             return dict(row)
@@ -391,7 +432,10 @@ class AtendimentoRepo:
             if row is None:
                 return None
             await self._registrar(
-                conn, chamado_id, claims["sub"], "DEPARTAMENTO_ALTERADO",
+                conn,
+                chamado_id,
+                claims["sub"],
+                "DEPARTAMENTO_ALTERADO",
                 {"de": str(atual), "para": str(departamento_id)},
             )
             return dict(row)
@@ -443,7 +487,11 @@ class AtendimentoRepo:
         checado aqui é para dar a mensagem certa, não para valer como trava.
         """
         if str(principal_id) == str(duplicado_id):
-            return {"ok": False, "codigo": None, "erro": "Um chamado não pode ser combinado com ele mesmo."}
+            return {
+                "ok": False,
+                "codigo": None,
+                "erro": "Um chamado não pode ser combinado com ele mesmo.",
+            }
 
         async with rls_connection(claims) as conn:
             principal = await conn.fetchrow(
@@ -469,51 +517,76 @@ class AtendimentoRepo:
                 duplicado_id,
             )
             if principal is None or duplicado is None:
-                return {"ok": False, "codigo": None,
-                        "erro": "Chamado não encontrado ou fora do seu escopo de atendimento."}
+                return {
+                    "ok": False,
+                    "codigo": None,
+                    "erro": "Chamado não encontrado ou fora do seu escopo de atendimento.",
+                }
 
             codigo = duplicado["codigo"]
             if duplicado["chamado_principal_id"] is not None:
-                return {"ok": False, "codigo": codigo, "erro": f"{codigo} já está combinado com outro chamado."}
+                return {
+                    "ok": False,
+                    "codigo": codigo,
+                    "erro": f"{codigo} já está combinado com outro chamado.",
+                }
             if principal["chamado_principal_id"] is not None:
-                return {"ok": False, "codigo": codigo,
-                        "erro": "Este chamado é um duplicado — combine no chamado principal."}
+                return {
+                    "ok": False,
+                    "codigo": codigo,
+                    "erro": "Este chamado é um duplicado — combine no chamado principal.",
+                }
             if str(duplicado["departamento_id"]) != str(principal["departamento_id"]):
-                return {"ok": False, "codigo": codigo,
-                        "erro": f"{codigo} é de outro departamento de destino e não pode ser combinado aqui."}
+                return {
+                    "ok": False,
+                    "codigo": codigo,
+                    "erro": f"{codigo} é de outro departamento de destino e não pode ser combinado aqui.",
+                }
             if await conn.fetchval(
                 "SELECT 1 FROM chamados WHERE chamado_principal_id = $1::uuid LIMIT 1", duplicado_id
             ):
-                return {"ok": False, "codigo": codigo,
-                        "erro": f"{codigo} já é o principal de outros chamados — desfaça aquelas combinações antes."}
+                return {
+                    "ok": False,
+                    "codigo": codigo,
+                    "erro": f"{codigo} já é o principal de outros chamados — desfaça aquelas combinações antes.",
+                }
             # A digest é uma mensagem pública do staff no principal, e a policy
             # `mensagens_insert` (0042) só a aceita em chamado já assumido e por
             # quem não seja o autor dele (fora do autoatendimento). Barrar aqui
             # dá uma instrução; deixar passar geraria erro de RLS no meio da
             # transação e um 500 sem explicação.
             if principal["operador_id"] is None:
-                return {"ok": False, "codigo": codigo,
-                        "erro": "Assuma este chamado (Iniciar atendimento) antes de combinar outros nele."}
+                return {
+                    "ok": False,
+                    "codigo": codigo,
+                    "erro": "Assuma este chamado (Iniciar atendimento) antes de combinar outros nele.",
+                }
             if (
                 str(principal["cliente_id"]) == str(claims["sub"])
                 and not principal["autoatendimento"]
             ):
-                return {"ok": False, "codigo": codigo,
-                        "erro": "Você abriu este chamado — outra pessoa do setor precisa fazer a combinação."}
+                return {
+                    "ok": False,
+                    "codigo": codigo,
+                    "erro": "Você abriu este chamado — outra pessoa do setor precisa fazer a combinação.",
+                }
 
             # Só os ANEXOS das mensagens públicas entram na digest (o texto da
             # conversa não é copiado — ver `app/domain/combinacao.py`). O filtro
             # `is_interna = false` continua valendo: anexo de nota interna do
             # duplicado não pode virar anexo de mensagem pública do principal.
-            mensagens = [dict(r) for r in await conn.fetch(
-                """
+            mensagens = [
+                dict(r)
+                for r in await conn.fetch(
+                    """
                 SELECT m.anexos
                   FROM mensagens m
                  WHERE m.chamado_id = $1::uuid AND m.is_interna = false
                  ORDER BY m.created_at ASC
                 """,
-                duplicado_id,
-            )]
+                    duplicado_id,
+                )
+            ]
             for m in mensagens:
                 bruto = m.get("anexos")
                 m["anexos"] = json.loads(bruto) if isinstance(bruto, str) else (bruto or [])
@@ -542,8 +615,11 @@ class AtendimentoRepo:
                     if marcado is None:
                         # RLS permitiu LER o duplicado (ex.: líder de setor
                         # acompanhando a própria equipe, 0028) mas não ESCREVER.
-                        return {"ok": False, "codigo": codigo,
-                                "erro": f"Sem permissão para combinar {codigo} — só o setor de destino dele pode."}
+                        return {
+                            "ok": False,
+                            "codigo": codigo,
+                            "erro": f"Sem permissão para combinar {codigo} — só o setor de destino dele pode.",
+                        }
 
                     # Em cópia: o autor do duplicado + quem já estava em cópia
                     # nele. O autor do PRINCIPAL fica de fora (já é o dono).
@@ -579,7 +655,10 @@ class AtendimentoRepo:
                     )
 
                     await self._registrar(
-                        conn, duplicado_id, claims["sub"], "COMBINADO",
+                        conn,
+                        duplicado_id,
+                        claims["sub"],
+                        "COMBINADO",
                         {
                             "principal_id": str(principal_id),
                             "principal_codigo": principal["codigo"],
@@ -588,15 +667,21 @@ class AtendimentoRepo:
                         },
                     )
                     await self._registrar(
-                        conn, principal_id, claims["sub"], "COMBINACAO_RECEBIDA",
+                        conn,
+                        principal_id,
+                        claims["sub"],
+                        "COMBINACAO_RECEBIDA",
                         {"duplicado_id": str(duplicado_id), "duplicado_codigo": codigo},
                     )
             except PostgresError:
                 # A mensagem do banco não vai para a tela (pode carregar detalhe
                 # de schema); o motivo real fica no log para investigação.
                 log.exception("Falha ao combinar %s em %s", duplicado_id, principal_id)
-                return {"ok": False, "codigo": codigo,
-                        "erro": f"Não foi possível combinar {codigo}. Recarregue a página e tente de novo."}
+                return {
+                    "ok": False,
+                    "codigo": codigo,
+                    "erro": f"Não foi possível combinar {codigo}. Recarregue a página e tente de novo.",
+                }
             return {"ok": True, "codigo": codigo, "erro": None}
 
     async def desfazer_combinacao(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
@@ -642,7 +727,10 @@ class AtendimentoRepo:
             if row is None:
                 return None
             await self._registrar(
-                conn, chamado_id, claims["sub"], "COMBINACAO_DESFEITA",
+                conn,
+                chamado_id,
+                claims["sub"],
+                "COMBINACAO_DESFEITA",
                 {"principal_id": str(atual), "status": status},
             )
             return dict(row)
@@ -696,7 +784,9 @@ class AtendimentoRepo:
         """Altera o status (staff no escopo). Marca `resolvido_em` ao resolver e
         registra no histórico. Retorna o chamado atualizado ou None (fora do escopo)."""
         async with rls_connection(claims) as conn:
-            atual = await conn.fetchval("SELECT status FROM chamados WHERE id = $1::uuid", chamado_id)
+            atual = await conn.fetchval(
+                "SELECT status FROM chamados WHERE id = $1::uuid", chamado_id
+            )
             if atual is None or atual == novo_status:
                 return None
             row = await conn.fetchrow(
@@ -715,7 +805,10 @@ class AtendimentoRepo:
             if row is None:
                 return None
             await self._registrar(
-                conn, chamado_id, claims["sub"], "STATUS_ALTERADO",
+                conn,
+                chamado_id,
+                claims["sub"],
+                "STATUS_ALTERADO",
                 {"de": atual, "para": novo_status},
             )
             return dict(row)
@@ -725,7 +818,9 @@ class AtendimentoRepo:
     ) -> dict[str, Any] | None:
         """Altera a prioridade (o trigger recalcula os prazos de SLA) + histórico."""
         async with rls_connection(claims) as conn:
-            atual = await conn.fetchval("SELECT prioridade FROM chamados WHERE id = $1::uuid", chamado_id)
+            atual = await conn.fetchval(
+                "SELECT prioridade FROM chamados WHERE id = $1::uuid", chamado_id
+            )
             if atual is None or atual == nova_prioridade:
                 return None
             row = await conn.fetchrow(
@@ -739,7 +834,10 @@ class AtendimentoRepo:
             if row is None:
                 return None
             await self._registrar(
-                conn, chamado_id, claims["sub"], "PRIORIDADE_ALTERADA",
+                conn,
+                chamado_id,
+                claims["sub"],
+                "PRIORIDADE_ALTERADA",
                 {"de": atual, "para": nova_prioridade},
             )
             return dict(row)
@@ -776,14 +874,21 @@ class AtendimentoRepo:
                 return None
             if atual != dias:
                 await self._registrar(
-                    conn, chamado_id, claims["sub"], "PRAZO_PROJETO_ALTERADO",
+                    conn,
+                    chamado_id,
+                    claims["sub"],
+                    "PRAZO_PROJETO_ALTERADO",
                     {"de": atual, "para": dias, "limite_resolucao": str(row["limite_resolucao"])},
                 )
             return dict(row)
 
     async def alterar_categoria(
-        self, claims: dict, chamado_id: str, *,
-        categoria_id: str | None, subcategoria_id: str | None,
+        self,
+        claims: dict,
+        chamado_id: str,
+        *,
+        categoria_id: str | None,
+        subcategoria_id: str | None,
     ) -> dict[str, Any] | None:
         """Altera categoria/subcategoria de um chamado já aberto (staff no
         escopo) + histórico. O par categoria/departamento e categoria/
@@ -804,7 +909,10 @@ class AtendimentoRepo:
             if row is None:
                 return None
             await self._registrar(
-                conn, chamado_id, claims["sub"], "CATEGORIA_ALTERADA",
+                conn,
+                chamado_id,
+                claims["sub"],
+                "CATEGORIA_ALTERADA",
                 {"categoria_id": categoria_id, "subcategoria_id": subcategoria_id},
             )
             return dict(row)
@@ -842,7 +950,10 @@ class AtendimentoRepo:
             if row is None:
                 return None
             await self._registrar(
-                conn, chamado_id, claims["sub"], "ATRIBUIDO",
+                conn,
+                chamado_id,
+                claims["sub"],
+                "ATRIBUIDO",
                 {"operador_id": operador_id},
             )
             return dict(row)
@@ -888,7 +999,10 @@ class AtendimentoRepo:
             )
             if row is not None:
                 await self._registrar(
-                    conn, chamado_id, claims["sub"], "MARKETING_META_ALTERADO",
+                    conn,
+                    chamado_id,
+                    claims["sub"],
+                    "MARKETING_META_ALTERADO",
                     {
                         "volume": volume,
                         "origem_demanda": origem_demanda,

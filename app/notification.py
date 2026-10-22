@@ -22,7 +22,7 @@ def gerar_token_resposta(codigo: str, usuario_id: str, secret: str) -> str:
     reaproveitado de outro contexto (ex.: SESSION_SECRET).
     """
     msg = f"{codigo.upper().strip()}:{str(usuario_id).strip()}"
-    return hmac.new(secret.encode('utf-8'), msg.encode('utf-8'), hashlib.sha256).hexdigest()[:16]
+    return hmac.new(secret.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
 
 def validar_token_resposta(codigo: str, usuario_id: str, token: str, secret: str) -> bool:
@@ -31,7 +31,9 @@ def validar_token_resposta(codigo: str, usuario_id: str, token: str, secret: str
     return hmac.compare_digest(esperado, token)
 
 
-async def enviar_email(para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None) -> bool:
+async def enviar_email(
+    para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None
+) -> bool:
     """Dispatcher de envio de e-mail. Prefere a API HTTP do Mailgun (sem socket
     bloqueante no event loop); se ela não estiver configurada, cai para SMTP
     (executado fora do event loop para não bloquear). Retorna ``True`` se o
@@ -69,7 +71,9 @@ async def enviar_email(para: str, assunto: str, corpo_texto: str, corpo_html: st
     return False
 
 
-async def _enviar_via_mailgun_api(para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None) -> None:
+async def _enviar_via_mailgun_api(
+    para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None
+) -> None:
     """Envia o e-mail pela API HTTP do Mailgun (POST multipart, HTTP basic auth).
     Assíncrono via httpx — sem socket SMTP bloqueante. Levanta em caso de falha
     para o dispatcher decidir o fallback.
@@ -93,26 +97,30 @@ async def _enviar_via_mailgun_api(para: str, assunto: str, corpo_texto: str, cor
     log.info(f"[EMAIL MAILGUN SUCCESS] E-mail enviado para {para} (HTTP {resp.status_code})")
 
 
-def enviar_email_smtp(para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None) -> bool:
+def enviar_email_smtp(
+    para: str, assunto: str, corpo_texto: str, corpo_html: str = None, reply_to: str = None
+) -> bool:
     """Envia um e-mail via SMTP (fallback). Bloqueante — chamar via
     ``asyncio.to_thread``. Retorna ``True`` em sucesso, ``False`` em falha.
     """
     settings = get_settings()
     if not (settings.smtp_host and settings.smtp_user and settings.smtp_password):
-        log.warning(f"[EMAIL SMTP MOCK] SMTP não configurado. E-mail NÃO enviado para {para} | Subject: {assunto}")
+        log.warning(
+            f"[EMAIL SMTP MOCK] SMTP não configurado. E-mail NÃO enviado para {para} | Subject: {assunto}"
+        )
         return False
 
     try:
-        msg = MIMEMultipart('alternative')
-        msg['From'] = settings.email_from
-        msg['To'] = para
-        msg['Subject'] = assunto
+        msg = MIMEMultipart("alternative")
+        msg["From"] = settings.email_from
+        msg["To"] = para
+        msg["Subject"] = assunto
         if reply_to:
-            msg['Reply-To'] = reply_to
+            msg["Reply-To"] = reply_to
 
-        msg.attach(MIMEText(corpo_texto, 'plain', 'utf-8'))
+        msg.attach(MIMEText(corpo_texto, "plain", "utf-8"))
         if corpo_html:
-            msg.attach(MIMEText(corpo_html, 'html', 'utf-8'))
+            msg.attach(MIMEText(corpo_html, "html", "utf-8"))
 
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as server:
             server.starttls()
@@ -141,19 +149,29 @@ async def notificar_nova_mensagem_email(
     cliente_id = str(chamado.get("cliente_id"))
     operador_id = str(chamado.get("operador_id")) if chamado.get("operador_id") else None
 
-    # Se a mensagem foi enviada pelo cliente, o destinatário é o operador.
-    # Caso contrário, o destinatário é o cliente.
-    destinatario_id = operador_id if str(remetente_id) == cliente_id else cliente_id
+    # Se a mensagem foi enviada pelo autor: destinatário principal é o operador.
+    # Se foi enviada pelo operador: destinatário principal é o autor.
+    # Se foi enviada por um observador (em cópia): notifica autor E operador (2026-10-21).
+    destinatarios_principais: list[str] = []
+    if str(remetente_id) == cliente_id:
+        if operador_id:
+            destinatarios_principais.append(operador_id)
+    elif operador_id and str(remetente_id) == operador_id:
+        destinatarios_principais.append(cliente_id)
+    else:
+        destinatarios_principais.append(cliente_id)
+        if operador_id:
+            destinatarios_principais.append(operador_id)
 
     client = await ensure_admin_client()
     if not client:
         log.warning("Could not load email recipients: Supabase admin client is not configured.")
         return
 
-    if destinatario_id:
-        await _notificar_destinatario_mensagem(client, chamado, destinatario_id, operador_id, conteudo)
+    for dest_id in destinatarios_principais:
+        await _notificar_destinatario_mensagem(client, chamado, dest_id, operador_id, conteudo)
 
-    ja_notificados = {str(remetente_id), destinatario_id} if destinatario_id else {str(remetente_id)}
+    ja_notificados = {str(remetente_id), *destinatarios_principais}
     for observador_id in {str(o) for o in (observadores or []) if o}:
         if observador_id in ja_notificados:
             continue
@@ -193,7 +211,7 @@ async def _notificar_destinatario_mensagem(
     corpo_texto = (
         f"Olá,\n\n"
         f"Você recebeu uma nova mensagem no chat do chamado {codigo} ({titulo}):\n\n"
-        f"\"{conteudo}\"\n\n"
+        f'"{conteudo}"\n\n'
         f"Para visualizar e responder, acesse: {url}\n\n"
         f"Atenciosamente,\n"
         f"Portal de Chamados Bondmann Química\n"
@@ -345,7 +363,9 @@ async def _notificar_destinatario_mensagem(
     await enviar_email(email, assunto, corpo_texto, corpo_html, reply_to=reply_to)
 
 
-async def _notificar_observador_mensagem(client, chamado: dict, observador_id: str, conteudo: str) -> None:
+async def _notificar_observador_mensagem(
+    client, chamado: dict, observador_id: str, conteudo: str
+) -> None:
     """Avisa quem está "em cópia" (Fase 8) de uma nova mensagem pública no
     chamado. Link sempre pela rota do Portal — a RLS de observador dá
     visibilidade ali independente do departamento/role de quem está em cópia
@@ -374,7 +394,7 @@ async def _notificar_observador_mensagem(client, chamado: dict, observador_id: s
     corpo_texto = (
         f"Olá,\n\n"
         f"Você está em cópia no chamado {codigo} ({titulo}) e há uma nova mensagem:\n\n"
-        f"\"{conteudo}\"\n\n"
+        f'"{conteudo}"\n\n'
         f"Para acompanhar, acesse: {url}\n\n"
         f"Atenciosamente,\n"
         f"Portal de Chamados Bondmann Química\n"
@@ -501,7 +521,9 @@ async def notificar_observador_adicionado_email(
     pelo chamado)."""
     client = await ensure_admin_client()
     if not client:
-        log.warning("Observador adicionado: Supabase admin client não configurado, notificação pulada.")
+        log.warning(
+            "Observador adicionado: Supabase admin client não configurado, notificação pulada."
+        )
         return
 
     try:
@@ -663,7 +685,7 @@ async def notificar_novo_usuario_email(nome: str, email: str) -> None:
         f"Uma conta foi criada para você no Portal de Chamados Bondmann Química.\n\n"
         f"Para o primeiro acesso:\n"
         f"1. Acesse {url_login}\n"
-        f"2. Clique em \"Esqueci minha senha\" ({url_senha}) e informe o e-mail {email}\n"
+        f'2. Clique em "Esqueci minha senha" ({url_senha}) e informe o e-mail {email}\n'
         f"3. Defina sua própria senha a partir do código enviado por e-mail\n\n"
         f"Atenciosamente,\n"
         f"Portal de Chamados Bondmann Química\n"
@@ -878,7 +900,9 @@ async def agendar_notificacao_email(
     após a resposta, sem o modo inline que a Vercel serverless exigia (função
     efêmera derrubada logo após responder, o que perdia o envio)."""
     log.info("[NOTIFICATION] Queueing background task for email notification")
-    background_tasks.add_task(notificar_nova_mensagem_email, chamado, remetente_id, conteudo, observadores)
+    background_tasks.add_task(
+        notificar_nova_mensagem_email, chamado, remetente_id, conteudo, observadores
+    )
 
 
 async def notificar_novo_chamado_email(chamado: dict, destinatarios_ids: list[str]) -> None:
@@ -894,7 +918,9 @@ async def notificar_novo_chamado_email(chamado: dict, destinatarios_ids: list[st
 
     client = await ensure_admin_client()
     if not client:
-        log.warning("Novo chamado: Supabase admin client não configurado, notificação da equipe pulada.")
+        log.warning(
+            "Novo chamado: Supabase admin client não configurado, notificação da equipe pulada."
+        )
         return
 
     settings = get_settings()

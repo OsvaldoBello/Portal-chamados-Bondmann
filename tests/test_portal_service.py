@@ -134,6 +134,31 @@ def test_pode_excluir_falso_se_ja_foi_respondido():
     )
 
 
+def test_pode_responder_autor_com_chamado_aberto():
+    assert PortalService.pode_responder({"status": "EM_ATENDIMENTO", "cliente_id": "u1"}, "u1")
+
+
+def test_pode_responder_observador_com_chamado_aberto():
+    chamado = {"status": "EM_ATENDIMENTO", "cliente_id": "u1"}
+    observadores = [{"perfil_id": "u2", "nome": "Usuario Copia"}]
+    assert PortalService.pode_responder(chamado, "u2", observadores=observadores)
+    assert PortalService.pode_responder(chamado, "u2", eh_observador=True)
+
+
+def test_pode_responder_usuario_estranho_retorna_falso():
+    chamado = {"status": "EM_ATENDIMENTO", "cliente_id": "u1"}
+    observadores = [{"perfil_id": "u2", "nome": "Usuario Copia"}]
+    assert not PortalService.pode_responder(chamado, "u3", observadores=observadores)
+    assert not PortalService.pode_responder(chamado, "u3")
+
+
+def test_pode_responder_falso_se_chamado_resolvido():
+    chamado = {"status": "RESOLVIDO", "cliente_id": "u1"}
+    observadores = [{"perfil_id": "u2", "nome": "Usuario Copia"}]
+    assert not PortalService.pode_responder(chamado, "u1", observadores=observadores)
+    assert not PortalService.pode_responder(chamado, "u2", observadores=observadores)
+
+
 def test_marketing_dep_id_encontra_por_nome_case_insensitive():
     deps = [{"id": "x1", "nome": "marketing"}]
     assert PortalService.marketing_dep_id(deps) == "x1"

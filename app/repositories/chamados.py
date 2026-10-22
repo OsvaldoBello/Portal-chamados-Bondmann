@@ -136,7 +136,7 @@ class ChamadosRepo:
         data_de: date | None = None,
         data_ate: date | None = None,
     ) -> list[dict[str, Any]]:
-        """"Meus chamados": os que o usuário ABRIU (portal do solicitante).
+        """ "Meus chamados": os que o usuário ABRIU (portal do solicitante).
 
         Filtra por `cliente_id = auth.uid()` para que também o staff (que via RLS
         enxerga a fila do seu setor) veja aqui apenas os próprios. A fila de
@@ -238,9 +238,7 @@ class ChamadosRepo:
     async def departamentos_destino_ativos(self, claims: dict) -> list[dict[str, Any]]:
         return await self._catalogo.departamentos_destino_ativos(claims)
 
-    async def subcategorias_ativas(
-        self, claims: dict, categoria_id: str
-    ) -> list[dict[str, Any]]:
+    async def subcategorias_ativas(self, claims: dict, categoria_id: str) -> list[dict[str, Any]]:
         return await self._catalogo.subcategorias_ativas(claims, categoria_id)
 
     async def subcategoria_valida(
@@ -301,14 +299,10 @@ class ChamadosRepo:
     async def observadores(self, claims: dict, chamado_id: str) -> list[dict[str, Any]]:
         return await self._mensagens.observadores(claims, chamado_id)
 
-    async def adicionar_observador(
-        self, claims: dict, chamado_id: str, perfil_id: str
-    ) -> None:
+    async def adicionar_observador(self, claims: dict, chamado_id: str, perfil_id: str) -> None:
         return await self._mensagens.adicionar_observador(claims, chamado_id, perfil_id)
 
-    async def remover_observador(
-        self, claims: dict, chamado_id: str, perfil_id: str
-    ) -> None:
+    async def remover_observador(self, claims: dict, chamado_id: str, perfil_id: str) -> None:
         return await self._mensagens.remover_observador(claims, chamado_id, perfil_id)
 
     # -- FilaRepo ---------------------------------------------------------
@@ -367,9 +361,13 @@ class ChamadosRepo:
     async def fila_assinatura(
         self, claims: dict, *, departamento_id: str | None, status: str | None = None
     ):
-        return await self._fila.fila_assinatura(claims, departamento_id=departamento_id, status=status)
+        return await self._fila.fila_assinatura(
+            claims, departamento_id=departamento_id, status=status
+        )
 
-    async def fila_stats(self, claims: dict, *, departamento_id: str | None = None) -> dict[str, int]:
+    async def fila_stats(
+        self, claims: dict, *, departamento_id: str | None = None
+    ) -> dict[str, int]:
         return await self._fila.fila_stats(claims, departamento_id=departamento_id)
 
     async def fila_projetos_desenvolvimento(
@@ -463,7 +461,12 @@ class ChamadosRepo:
         )
 
     async def iniciar_atendimento(
-        self, claims: dict, chamado_id: str, *, operador_id: str, novo_status: str = "EM_ATENDIMENTO"
+        self,
+        claims: dict,
+        chamado_id: str,
+        *,
+        operador_id: str,
+        novo_status: str = "EM_ATENDIMENTO",
     ) -> dict[str, Any] | None:
         return await self._atendimento.iniciar_atendimento(
             claims, chamado_id, operador_id=operador_id, novo_status=novo_status
@@ -472,7 +475,9 @@ class ChamadosRepo:
     async def transferir(
         self, claims: dict, chamado_id: str, *, departamento_id: str
     ) -> dict[str, Any] | None:
-        return await self._atendimento.transferir(claims, chamado_id, departamento_id=departamento_id)
+        return await self._atendimento.transferir(
+            claims, chamado_id, departamento_id=departamento_id
+        )
 
     async def combinados(self, claims: dict, chamado_id: str) -> list[dict[str, Any]]:
         return await self._atendimento.combinados(claims, chamado_id)
@@ -487,8 +492,15 @@ class ChamadosRepo:
     async def desfazer_combinacao(self, claims: dict, chamado_id: str) -> dict[str, Any] | None:
         return await self._atendimento.desfazer_combinacao(claims, chamado_id)
 
-    async def avaliacao_pendente(self, claims: dict) -> dict[str, Any] | None:
-        return await self._atendimento.avaliacao_pendente(claims)
+    async def avaliacao_pendente(
+        self, claims: dict, *, departamento_id: str | None = None
+    ) -> dict[str, Any] | None:
+        return await self._atendimento.avaliacao_pendente(claims, departamento_id=departamento_id)
+
+    async def avaliacoes_pendentes_por_departamento(
+        self, claims: dict
+    ) -> dict[str, dict[str, Any]]:
+        return await self._atendimento.avaliacoes_pendentes_por_departamento(claims)
 
     async def formulario_pendente(self, claims: dict, chamado_id: str):
         return await self._atendimento.formulario_pendente(claims, chamado_id)
@@ -514,8 +526,12 @@ class ChamadosRepo:
         return await self._atendimento.definir_prazo_projeto(claims, chamado_id, dias)
 
     async def alterar_categoria(
-        self, claims: dict, chamado_id: str, *,
-        categoria_id: str | None, subcategoria_id: str | None,
+        self,
+        claims: dict,
+        chamado_id: str,
+        *,
+        categoria_id: str | None,
+        subcategoria_id: str | None,
     ) -> dict[str, Any] | None:
         return await self._atendimento.alterar_categoria(
             claims, chamado_id, categoria_id=categoria_id, subcategoria_id=subcategoria_id

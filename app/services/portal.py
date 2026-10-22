@@ -81,19 +81,25 @@ class PortalService:
         )
 
     @staticmethod
-    def pode_responder(chamado: dict, user_id: str) -> bool:
-        """Regra de UI: só o AUTOR do chamado manda mensagem pelo portal — quem
-        está "em cópia" (observador, migration 0034) tem acesso de leitura +
-        notificação, mas nunca responde (mesma trava documentada na 0034: "sem
-        poder responder/alterar"). A RLS (`mensagens_insert`, migration 0042)
-        já recusa a inserção de quem não é o autor, mas sem esta checagem em
-        Python o formulário aparecia pra qualquer observador — o clique gerava
-        um WITH CHECK 42501 não tratado, que a rota devolvia como "Erro
-        interno." em vez de simplesmente não oferecer a ação."""
-        return (
-            str(chamado.get("cliente_id")) == str(user_id)
-            and chamado.get("status") != "RESOLVIDO"
-        )
+    def pode_responder(
+        chamado: dict,
+        user_id: str,
+        *,
+        observadores: list[dict] | None = None,
+        eh_observador: bool = False,
+    ) -> bool:
+        """Regra de UI/permissão: o AUTOR do chamado e quem está EM CÓPIA
+        (observador, migrations 0034/0097) podem responder/comentar pelo portal
+        enquanto o chamado não estiver RESOLVIDO (2026-10-21)."""
+        if chamado.get("status") == "RESOLVIDO":
+            return False
+        if str(chamado.get("cliente_id")) == str(user_id):
+            return True
+        if eh_observador:
+            return True
+        if observadores is not None:
+            return any(str(o.get("perfil_id")) == str(user_id) for o in observadores)
+        return False
 
     @staticmethod
     def pode_excluir(chamado: dict, user_id: str) -> bool:
@@ -201,23 +207,32 @@ class PortalService:
 
         if not data_entrega:
             return RegrasMarketing(
-                is_marketing=True, prioridade="MEDIA", data_entrega=None, sem_prazo=False,
+                is_marketing=True,
+                prioridade="MEDIA",
+                data_entrega=None,
+                sem_prazo=False,
                 erro=(
                     "Informe a data de entrega desejada (mínimo de 48h) ou marque "
-                    "\"Sem data limite\"."
+                    '"Sem data limite".'
                 ),
             )
         try:
             escolhida = date.fromisoformat(data_entrega)
         except ValueError:
             return RegrasMarketing(
-                is_marketing=True, prioridade="MEDIA", data_entrega=None, sem_prazo=False,
+                is_marketing=True,
+                prioridade="MEDIA",
+                data_entrega=None,
+                sem_prazo=False,
                 erro="Data de entrega inválida.",
             )
         minimo = cls.data_entrega_min()
         if escolhida < minimo:
             return RegrasMarketing(
-                is_marketing=True, prioridade="MEDIA", data_entrega=None, sem_prazo=False,
+                is_marketing=True,
+                prioridade="MEDIA",
+                data_entrega=None,
+                sem_prazo=False,
                 erro=(
                     "A data de entrega deve ser a partir de "
                     f"{minimo.strftime('%d/%m/%Y')} — mínimo de 48h para início do desenvolvimento."
@@ -225,7 +240,10 @@ class PortalService:
             )
         if cls._eh_fim_de_semana(escolhida):
             return RegrasMarketing(
-                is_marketing=True, prioridade="MEDIA", data_entrega=None, sem_prazo=False,
+                is_marketing=True,
+                prioridade="MEDIA",
+                data_entrega=None,
+                sem_prazo=False,
                 erro="O Marketing não atende aos finais de semana — escolha um dia útil (segunda a sexta).",
             )
         return RegrasMarketing(

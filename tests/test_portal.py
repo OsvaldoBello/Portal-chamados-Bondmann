@@ -166,8 +166,22 @@ class FakeRepo:
     async def marcar_notificacao_vista(self, claims, chamado_id):
         pass
 
-    async def avaliacao_pendente(self, claims):
+    async def avaliacao_pendente(self, claims, *, departamento_id=None):
+        if not self._avaliacao_pendente:
+            return None
+        if departamento_id and isinstance(self._avaliacao_pendente, dict):
+            dep = self._avaliacao_pendente.get("departamento_id")
+            if dep and dep != departamento_id:
+                return None
         return self._avaliacao_pendente
+
+    async def avaliacoes_pendentes_por_departamento(self, claims):
+        if not self._avaliacao_pendente:
+            return {}
+        if isinstance(self._avaliacao_pendente, dict):
+            dep_id = str(self._avaliacao_pendente.get("departamento_id") or "d3")
+            return {dep_id: self._avaliacao_pendente}
+        return {}
 
     async def mensagens(self, claims, chamado_id):
         return []
@@ -1405,10 +1419,66 @@ def test_remover_observador():
 # --------------------------------------------------------------------------
 # 2026-07-21: avaliação pendente bloqueia a abertura de um novo chamado.
 # --------------------------------------------------------------------------
-def test_abrir_chamado_com_avaliacao_pendente_e_redirecionado():
-    repo = FakeRepo(avaliacao_pendente={"id": "res1", "codigo": "BOND-2026-00099", "titulo": "Impressora"})
+def test_abrir_chamado_com_avaliacao_pendente_no_setor_e_redirecionado():
+    repo = FakeRepo(
+        avaliacao_pendente={"id": "res1", "codigo": "BOND-2026-00099", "titulo": "Impressora", "departamento_id": "d3"}
+    )
     with portal_client(repo) as client:
-        resp = client.get("/portal/chamados/novo", follow_redirects=False)
+        resp = client.get("/portal/chamados/novo?departamento_id=d3", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/portal/chamados/res1?avaliar_pendente=1"
+
+
+def test_abrir_chamado_sem_departamento_com_pendencia_outro_setor_carrega_formulario():
+    """Trava de avaliação só bloqueia o próprio setor com pendência (2026-10-21).
+    Acesso direto a /novo permite escolher outro setor sem forçar avaliação."""
+    repo = FakeRepo(
+        avaliacao_pendente={"id": "res1", "codigo": "BOND-2026-00099", "titulo": "Impressora", "departamento_id": "d3"}
+    )
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/novo")
+    assert resp.status_code == 200
+    assert "Selecione o departamento" in resp.text
+
+
+def test_selecionar_departamento_com_pendencia_redireciona_htmx():
+    repo = FakeRepo(
+        avaliacao_pendente={"id": "res1", "codigo": "BOND-2026-00099", "titulo": "Impressora", "departamento_id": "d3"}
+    )
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/categorias?departamento_id=d3")
+    assert resp.headers.get("HX-Redirect") == "/portal/chamados/res1?avaliar_pendente=1"
+
+
+def test_selecionar_departamento_sem_pendencia_carrega_categorias():
+    repo = FakeRepo(
+        avaliacao_pendente={"id": "res1", "codigo": "BOND-2026-00099", "titulo": "Impressora", "departamento_id": "d3"}
+    )
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/categorias?departamento_id=d1")
+    assert "HX-Redirect" not in resp.headers
+    assert resp.status_code == 200
+
+
+def test_criar_chamado_para_setor_com_pendencia_redireciona():
+    repo = FakeRepo(
+        avaliacao_pendente={"id": "res1", "codigo": "BOND-2026-00099", "titulo": "Impressora", "departamento_id": "d3"}
+    )
+    with portal_client(repo) as client:
+        token = _csrf_token(client)
+        resp = client.post(
+            "/portal/chamados",
+            data={
+                "titulo": "Demanda Marketing",
+                "descricao": "Demanda",
+                "departamento_id": "d3",
+                "categoria_id": "c1",
+                "setor": "TI",
+                "telefone_contato": "11999999999",
+            },
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
     assert resp.status_code == 303
     assert resp.headers["location"] == "/portal/chamados/res1?avaliar_pendente=1"
 
@@ -1747,14 +1817,8 @@ def test_responder_em_depto_nao_habilitado_nao_agenda_re_triagem():
     executar.assert_not_called()
 
 
-def test_responder_como_nao_autor_e_recusado_e_nao_agenda_re_triagem():
-    """Quem está só "em cópia" (observador, migration 0034) nunca responde pelo
-    portal — nem chega a agendar re-triagem. Antes desta checagem em Python
-    (`PortalService.pode_responder`), o formulário aparecia pra qualquer
-    observador e o POST caía direto na RLS (`mensagens_insert`, 0042), que
-    recusa com um WITH CHECK 42501 não tratado — "Erro interno." em vez de um
-    403 com mensagem clara (bug relatado por Alessandro Leodin em cópia num
-    chamado de Eduardo Becker, 2026-09-24)."""
+def test_responder_como_estranho_e_recusado_e_nao_agenda_re_triagem():
+    """Quem NÃO é o autor nem está em cópia (não-observador) é recusado com 403."""
     repo = FakeRepo(chamado=_chamado(status="NOVO", departamento="TI", cliente_id="outro-uuid"))
     with _hook_triagem(_settings_triagem()) as executar:
         with portal_client(repo) as client:
@@ -1766,8 +1830,36 @@ def test_responder_como_nao_autor_e_recusado_e_nao_agenda_re_triagem():
                 follow_redirects=False,
             )
     assert resp.status_code == 403
-    assert "Só o autor do chamado pode enviar mensagens." in resp.text
+    assert "Só o autor ou usuários em cópia podem enviar mensagens." in resp.text
     executar.assert_not_called()
+
+
+def test_responder_como_observador_em_copia_e_permitido():
+    """Usuário em cópia (observador, migrations 0034/0097) pode comentar no chamado (2026-10-21)."""
+    repo = FakeRepo(chamado=_chamado(status="NOVO", departamento="TI", cliente_id="outro-uuid"))
+    repo._observadores_por_chamado["aaa"] = [{"perfil_id": UID, "nome": "Cliente em Cópia"}]
+    with _hook_triagem(_settings_triagem()) as executar:
+        with portal_client(repo) as client:
+            token = _csrf_token(client)
+            resp = client.post(
+                "/portal/chamados/aaa/mensagens",
+                data={"conteudo": "Comentário de quem está em cópia."},
+                headers={"X-CSRF-Token": token},
+                follow_redirects=False,
+            )
+    assert resp.status_code == 303
+    assert len(repo.mensagens_criadas) == 1
+    assert repo.mensagens_criadas[0]["conteudo"] == "Comentário de quem está em cópia."
+    executar.assert_not_called()
+
+
+def test_detalhe_mostra_formulario_de_resposta_para_observador_em_copia():
+    repo = FakeRepo(chamado=_chamado(status="NOVO", departamento="TI", cliente_id="outro-uuid"))
+    repo._observadores_por_chamado["aaa"] = [{"perfil_id": UID, "nome": "Cliente em Cópia"}]
+    with portal_client(repo) as client:
+        resp = client.get("/portal/chamados/aaa")
+    assert resp.status_code == 200
+    assert 'action="/portal/chamados/aaa/mensagens"' in resp.text
 
 
 # --------------------------------------------------------------------------

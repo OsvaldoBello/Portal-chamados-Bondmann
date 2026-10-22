@@ -36,8 +36,7 @@
           class="w-full px-3.5 py-2.5 rounded-lg bg-white ring-1 ring-line focus:ring-2 focus:ring-navy-500 outline-none text-sm">
           <option value="">Selecione o departamento…</option>
           {% for dep in departamentos %}
-          <option value="{{ dep.id }}" {% if dep.id|string==f.get('departamento_id') %}selected{% endif %}>{{ dep.nome
-            }}</option>
+          <option value="{{ dep.id }}" {% if dep.id|string==f.get('departamento_id') %}selected{% endif %}>{{ dep.nome }}{% if pendencias_por_dep and dep.id|string in pendencias_por_dep %} (avaliação pendente){% endif %}</option>
           {% endfor %}
         </select>
         <span class="block text-xs text-muted mt-1">Só a equipe desse setor verá e atenderá o chamado.</span>

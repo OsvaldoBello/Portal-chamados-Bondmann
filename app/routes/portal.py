@@ -65,9 +65,7 @@ from app.templating import portal_base_template, render
 
 log = logging.getLogger("app.portal")
 
-router = APIRouter(
-    prefix="/portal", tags=["portal"], route_class=CommitBeforeResponseRoute
-)
+router = APIRouter(prefix="/portal", tags=["portal"], route_class=CommitBeforeResponseRoute)
 
 
 @dataclass(frozen=True)
@@ -226,9 +224,7 @@ async def dashboard(
             "busca_sel": f["busca"] or "",
             "data_de_sel": f["data_de_raw"],
             "data_ate_sel": f["data_ate_raw"],
-            "tem_filtro": bool(
-                f["status"] or f["busca"] or f["data_de_raw"] or f["data_ate_raw"]
-            ),
+            "tem_filtro": bool(f["status"] or f["busca"] or f["data_de_raw"] or f["data_ate_raw"]),
             "periodo_invertido": f["periodo_invertido"],
             "qs_sem_status": _qs_meus(f, com_status=False),
         },
@@ -289,7 +285,9 @@ async def _render_form(
     dados_form: dict = {}
     if dep_sel and form.get("categoria_id"):
         layout = await _layout_da_escolha(
-            ctx, repo, setores_ativos,
+            ctx,
+            repo,
+            setores_ativos,
             departamento_id=dep_sel,
             categoria_id=form["categoria_id"],
             subcategoria_id=form.get("subcategoria_id") or "",
@@ -297,6 +295,7 @@ async def _render_form(
         )
         if layout:
             dados_form = layout.prefill(form.get("dados_formulario") or {})
+    pendencias_por_dep = await repo.avaliacoes_pendentes_por_departamento(ctx.user.claims)
     usuarios_copia = await repo.usuarios_para_copia(ctx.user.claims, excluir_id=ctx.user.id)
     return render(
         request,
@@ -305,6 +304,7 @@ async def _render_form(
             "perfil": ctx.perfil,
             "categorias": categorias,
             "departamentos": departamentos,
+            "pendencias_por_dep": pendencias_por_dep,
             "subcategorias": subcategorias,
             "marketing_dep_id": marketing_dep_id,
             "quimico_dep_id": quimico_dep_id,
@@ -325,19 +325,24 @@ async def _render_form(
 @router.get("/chamados/novo")
 async def novo_chamado_form(
     request: Request,
+    departamento_id: str = "",
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
-    # Avaliação pendente bloqueia a abertura de um novo chamado (2026-07-21):
-    # quem tem um atendimento RESOLVIDO ainda sem nota (1-5 ★) é mandado pra lá
-    # primeiro, em vez do formulário de abertura.
-    pendente = await repo.avaliacao_pendente(ctx.user.claims)
-    if pendente is not None:
-        return RedirectResponse(
-            f"/portal/chamados/{pendente['id']}?avaliar_pendente=1",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
-    return await _render_form(request, ctx, repo)
+    # Trava por setor (2026-10-21): só bloqueia se o departamento de destino
+    # tiver avaliação pendente (ex.: Marketing pendente não trava chamado pra TI).
+    # Se acessado diretamente sem departamento pré-selecionado, renderiza o form.
+    dep_id = departamento_id.strip()
+    if dep_id:
+        pendente = await repo.avaliacao_pendente(ctx.user.claims, departamento_id=dep_id)
+        if pendente is not None:
+            return RedirectResponse(
+                f"/portal/chamados/{pendente['id']}?avaliar_pendente=1",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+    return await _render_form(
+        request, ctx, repo, form={"departamento_id": dep_id} if dep_id else None
+    )
 
 
 @router.get("/chamados/categorias")
@@ -348,9 +353,19 @@ async def categorias_fragmento(
     repo: ChamadosRepo = Depends(get_chamados_repo),
 ):
     """Cascade da abertura: <option>s de categoria do departamento escolhido
-    (carregado via HTMX quando o usuário troca o departamento). Declarado ANTES
+    (carregado via HTMX quando o usuário troca o departamento). Se o departamento
+    escolhido tiver chamado resolvido aguardando avaliação pelo autor, redireciona
+    via HX-Redirect para avaliá-lo (2026-10-21). Declarado ANTES
     da rota dinâmica ``/chamados/{chamado_id}``."""
     departamento_id = departamento_id.strip()
+    if departamento_id:
+        pendente = await repo.avaliacao_pendente(ctx.user.claims, departamento_id=departamento_id)
+        if pendente is not None:
+            return Response(
+                "",
+                status_code=status.HTTP_200_OK,
+                headers={"HX-Redirect": f"/portal/chamados/{pendente['id']}?avaliar_pendente=1"},
+            )
     cats = (
         await repo.categorias_ativas(ctx.user.claims, departamento_id, filtrar_publico=True)
         if departamento_id
@@ -370,11 +385,7 @@ async def subcategorias_fragmento(
     (carregado via HTMX quando o usuário muda a categoria). Declarado ANTES da
     rota dinâmica ``/chamados/{chamado_id}``."""
     categoria_id = categoria_id.strip()
-    subs = (
-        await repo.subcategorias_ativas(ctx.user.claims, categoria_id)
-        if categoria_id
-        else []
-    )
+    subs = await repo.subcategorias_ativas(ctx.user.claims, categoria_id) if categoria_id else []
     return render(request, "portal/_subcategorias_options.html", {"subcategorias": subs})
 
 
@@ -402,7 +413,9 @@ async def fila_projetos_fragmento(
     estimativa = calcular_estimativa_novo_projeto(projetos_ordenados, metricas)
 
     for p in projetos_ordenados:
-        p["sla_estado"] = estado_sla(p.get("created_at"), p.get("limite_resolucao"), status=p.get("status"))
+        p["sla_estado"] = estado_sla(
+            p.get("created_at"), p.get("limite_resolucao"), status=p.get("status")
+        )
 
     return render(
         request,
@@ -433,9 +446,7 @@ async def _layout_da_escolha(
         return None
     # Departamento opcional: o Químico resolve só pela categoria; os layouts da
     # TI exigem o departamento (conferido pelo nome dentro de `layout_para`).
-    dep_nome = next(
-        (d["nome"] for d in setores_ativos if str(d["id"]) == departamento_id), None
-    )
+    dep_nome = next((d["nome"] for d in setores_ativos if str(d["id"]) == departamento_id), None)
     nome_cat = await repo.nome_categoria(ctx.user.claims, categoria_id)
     if not nome_cat:
         return None
@@ -443,9 +454,7 @@ async def _layout_da_escolha(
     if subcategoria_id:
         if subcategorias is None:
             subcategorias = await repo.subcategorias_ativas(ctx.user.claims, categoria_id)
-        nome_sub = next(
-            (s["nome"] for s in subcategorias if str(s["id"]) == subcategoria_id), None
-        )
+        nome_sub = next((s["nome"] for s in subcategorias if str(s["id"]) == subcategoria_id), None)
     return layout_para(
         departamento=dep_nome,
         categoria=nome_cat,
@@ -470,7 +479,9 @@ async def campos_fragmento(
     ``/chamados/{chamado_id}``."""
     setores_ativos = await repo.departamentos_ativos(ctx.user.claims)
     layout = await _layout_da_escolha(
-        ctx, repo, setores_ativos,
+        ctx,
+        repo,
+        setores_ativos,
         departamento_id=departamento_id.strip(),
         categoria_id=categoria_id.strip(),
         subcategoria_id=subcategoria_id.strip(),
@@ -495,16 +506,16 @@ async def criar_chamado(
     # POST morria num 422 de JSON, antes de chegar na derivação — a abertura do
     # Químico quebrava inteira. Com default explícito, a validação é sempre a
     # nossa, que re-renderiza o formulário com mensagem em português.
-    titulo: str = Form(""),            # "Assunto"
+    titulo: str = Form(""),  # "Assunto"
     descricao: str = Form(""),
-    departamento_id: str = Form(""),   # destino: TI / RH / Marketing
+    departamento_id: str = Form(""),  # destino: TI / RH / Marketing
     categoria_id: str = Form(""),
     subcategoria_id: str = Form(""),
     prioridade: str = Form("MEDIA"),
-    setor: str = Form(""),             # setor demandante
+    setor: str = Form(""),  # setor demandante
     telefone_contato: str = Form(""),  # contato direto (0058)
-    data_entrega: str = Form(""),      # fluxo por demanda (Marketing)
-    sem_prazo: str = Form(""),         # Marketing: demanda sem urgência/prazo (0040)
+    data_entrega: str = Form(""),  # fluxo por demanda (Marketing)
+    sem_prazo: str = Form(""),  # Marketing: demanda sem urgência/prazo (0040)
     ctx: PortalCtx = Depends(portal_context),
     repo: ChamadosRepo = Depends(get_chamados_repo),
     _: None = Depends(_csrf_guard),
@@ -555,6 +566,18 @@ async def criar_chamado(
     # Departamento, categoria, assunto/descrição e telefone de contato são obrigatórios.
     if not departamento_id:
         return await _erro("Selecione o departamento de destino do chamado.")
+    pendente = await repo.avaliacao_pendente(ctx.user.claims, departamento_id=departamento_id)
+    if pendente is not None:
+        if request.headers.get("HX-Request"):
+            return Response(
+                "",
+                status_code=status.HTTP_200_OK,
+                headers={"HX-Redirect": f"/portal/chamados/{pendente['id']}?avaliar_pendente=1"},
+            )
+        return RedirectResponse(
+            f"/portal/chamados/{pendente['id']}?avaliar_pendente=1",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
     try:
         telefone_contato = validar_telefone_contato(telefone_contato)
     except ValueError as exc:
@@ -628,7 +651,9 @@ async def criar_chamado(
     # assunto/descrição porque a tela esconde esses dois campos quando há
     # layout — são derivados das respostas do formulário em vez de digitados.
     layout = await _layout_da_escolha(
-        ctx, repo, setores_ativos,
+        ctx,
+        repo,
+        setores_ativos,
         departamento_id=departamento_id,
         categoria_id=categoria_id,
         subcategoria_id=subcategoria_id,
@@ -668,10 +693,14 @@ async def criar_chamado(
     # após testar sem anexo e o chamado abrir normalmente). `subs_da_categoria`
     # já foi carregado acima para validar `subcategoria_id`; reaproveita para
     # resolver o nome sem outra consulta.
-    nome_subcategoria_val = next(
-        (s["nome"] for s in subs_da_categoria if str(s["id"]) == str(subcategoria_id)),
-        None,
-    ) if subcategoria_id else None
+    nome_subcategoria_val = (
+        next(
+            (s["nome"] for s in subs_da_categoria if str(s["id"]) == str(subcategoria_id)),
+            None,
+        )
+        if subcategoria_id
+        else None
+    )
     formulario_obrigatorio = formulario_da_subcategoria(nome_subcategoria_val)
     if formulario_obrigatorio and not arquivos:
         return await _erro(
@@ -798,7 +827,6 @@ async def criar_chamado(
         except Exception:
             log.exception("[AUTOMACAO] falha ao enfileirar job automático para %s", novo["codigo"])
 
-
     # Aviso por e-mail à equipe do setor de destino: até aqui a fila só
     # avisava quem já estivesse com o sino/Realtime do Workspace aberto —
     # ninguém era notificado por e-mail da entrada de um chamado NOVO na
@@ -813,9 +841,15 @@ async def criar_chamado(
     )
     if equipe_destino:
         from app.notification import agendar_notificacao_novo_chamado
+
         await agendar_notificacao_novo_chamado(
             tarefa_ia,
-            {"id": str(novo["id"]), "codigo": novo["codigo"], "titulo": titulo, "departamento_nome": dep_destino_nome},
+            {
+                "id": str(novo["id"]),
+                "codigo": novo["codigo"],
+                "titulo": titulo,
+                "departamento_nome": dep_destino_nome,
+            },
             [str(o["id"]) for o in equipe_destino],
         )
 
@@ -824,6 +858,7 @@ async def criar_chamado(
     observadores_abertura = {v.strip() for v in form_data.getlist("observadores") if v.strip()}
     if observadores_abertura:
         from app.notification import agendar_notificacao_observador_adicionado
+
         chamado_para_email = {"id": str(novo["id"]), "codigo": novo["codigo"], "titulo": titulo}
         for observador_id in observadores_abertura:
             await repo.adicionar_observador(ctx.user.claims, str(novo["id"]), observador_id)
@@ -835,13 +870,18 @@ async def criar_chamado(
     if validados:
         try:
             anexos = await _enviar_uploads(
-                request, validados, empresa_id=str(ctx.perfil["empresa_id"]),
+                request,
+                validados,
+                empresa_id=str(ctx.perfil["empresa_id"]),
                 chamado_id=str(novo["id"]),
             )
             if anexos:
                 await repo.adicionar_mensagem(
-                    ctx.user.claims, str(novo["id"]),
-                    remetente_id=ctx.user.id, conteudo="", anexos=anexos,
+                    ctx.user.claims,
+                    str(novo["id"]),
+                    remetente_id=ctx.user.id,
+                    conteudo="",
+                    anexos=anexos,
                 )
         except UploadInvalido as exc:
             # Chamado já criado; não trava a abertura por falha pontual de Storage.
@@ -877,7 +917,8 @@ async def detalhe_chamado(
     observadores = await repo.observadores(ctx.user.claims, chamado_id)
     ja_observadores = {str(o["perfil_id"]) for o in observadores}
     usuarios_copia = [
-        u for u in await repo.usuarios_para_copia(ctx.user.claims, excluir_id=ctx.user.id)
+        u
+        for u in await repo.usuarios_para_copia(ctx.user.claims, excluir_id=ctx.user.id)
         if str(u["id"]) not in ja_observadores
     ]
     # Formulário obrigatório do RH (2026-08-10): avisa o autor que falta anexar
@@ -895,13 +936,17 @@ async def detalhe_chamado(
             "chamado": chamado,
             "mensagens": mensagens,
             "dados_formulario": rotular_chamado(
-                chamado.get("categoria"), chamado.get("subcategoria"), chamado.get("dados_formulario")
+                chamado.get("categoria"),
+                chamado.get("subcategoria"),
+                chamado.get("dados_formulario"),
             ),
             "formulario_pendente": formulario_pendente,
             "pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id),
             "pode_reabrir": PortalService.pode_reabrir(chamado, ctx.user.id),
             "pode_excluir": PortalService.pode_excluir(chamado, ctx.user.id),
-            "pode_responder": PortalService.pode_responder(chamado, ctx.user.id),
+            "pode_responder": PortalService.pode_responder(
+                chamado, ctx.user.id, observadores=observadores
+            ),
             "confirmar_exclusao": bool(excluir),
             "avaliar_pendente": bool(avaliar_pendente),
             "observadores": observadores,
@@ -961,12 +1006,11 @@ async def adicionar_observador(
         chamado = await repo.obter(ctx.user.claims, chamado_id)
         if chamado:
             from app.notification import agendar_notificacao_observador_adicionado
+
             await agendar_notificacao_observador_adicionado(
                 background_tasks, chamado, perfil_id, ctx.perfil.get("nome")
             )
-    return RedirectResponse(
-        f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/chamados/{chamado_id}/observadores/{perfil_id}/remover")
@@ -979,9 +1023,7 @@ async def remover_observador(
     _: None = Depends(_csrf_guard),
 ):
     await repo.remover_observador(ctx.user.claims, chamado_id, perfil_id)
-    return RedirectResponse(
-        f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/chamados/{chamado_id}/mensagens/fragmento")
@@ -1036,12 +1078,11 @@ async def responder_chamado(
     chamado = await repo.obter(ctx.user.claims, chamado_id)
     if chamado is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chamado não encontrado.")
-    if not PortalService.pode_responder(chamado, ctx.user.id):
-        # Defesa em profundidade: o formulário já não aparece pra quem está só
-        # em cópia (0034), mas um POST forjado direto pra cá cairia na RLS
-        # (`mensagens_insert`, 0042) como um WITH CHECK 42501 não tratado —
-        # "Erro interno." em vez de uma mensagem que faça sentido pro usuário.
-        return _erro("Só o autor do chamado pode enviar mensagens.", status.HTTP_403_FORBIDDEN)
+    observadores = await repo.observadores(ctx.user.claims, chamado_id)
+    if not PortalService.pode_responder(chamado, ctx.user.id, observadores=observadores):
+        return _erro(
+            "Só o autor ou usuários em cópia podem enviar mensagens.", status.HTTP_403_FORBIDDEN
+        )
 
     try:
         anexos = await _processar_uploads(
@@ -1070,9 +1111,13 @@ async def responder_chamado(
     chamado = await repo.obter(ctx.user.claims, chamado_id)
     if chamado:
         from app.notification import agendar_notificacao_email
+
         observadores = await repo.observadores(ctx.user.claims, chamado_id)
         await agendar_notificacao_email(
-            background_tasks, chamado, ctx.user.id, conteudo or "[Arquivo anexo]",
+            background_tasks,
+            chamado,
+            ctx.user.id,
+            conteudo or "[Arquivo anexo]",
             observadores=[str(o["perfil_id"]) for o in observadores],
         )
         # Re-triagem por IA (F2): resposta do AUTOR num depto habilitado reagenda
@@ -1083,9 +1128,7 @@ async def responder_chamado(
         ):
             triagem.agendar_triagem(chamado_id)
 
-    return RedirectResponse(
-        f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/chamados/{chamado_id}/avaliacao")
@@ -1126,7 +1169,10 @@ async def avaliar_chamado(
     except ValueError as exc:
         if is_htmx:
             return fragmento(
-                {"pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id), "erro": str(exc)},
+                {
+                    "pode_avaliar": PortalService.pode_avaliar(chamado, ctx.user.id),
+                    "erro": str(exc),
+                },
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
             )
         return redir
@@ -1134,8 +1180,10 @@ async def avaliar_chamado(
     if not PortalService.pode_avaliar(chamado, ctx.user.id):
         if is_htmx:
             return fragmento(
-                {"pode_avaliar": False,
-                 "erro": "Só o autor pode avaliar, e apenas após a resolução."},
+                {
+                    "pode_avaliar": False,
+                    "erro": "Só o autor pode avaliar, e apenas após a resolução.",
+                },
                 status.HTTP_403_FORBIDDEN,
             )
         return redir
@@ -1169,9 +1217,7 @@ async def reabrir_chamado(
             detail="Só o autor pode reabrir, e apenas quando o chamado está resolvido.",
         )
     await repo.reabrir(ctx.user.claims, chamado_id)
-    return RedirectResponse(
-        f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER
-    )
+    return RedirectResponse(f"/portal/chamados/{chamado_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 def register_portal_routes(app) -> None:
