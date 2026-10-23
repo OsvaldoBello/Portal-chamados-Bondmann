@@ -155,9 +155,15 @@ class Settings(BaseSettings):
     automacao_ativa: bool = Field(default=False)
     # Tipos de job liberados (CSV) — permite ligar só a CRIACAO no rollout.
     automacao_tipos: str = Field(default="CRIACAO,DESLIGAMENTO,REVOGAR_LICENCA,SINCRONIZAR_LIDERANCA")
-    # Token do worker (header `X-Automacao-Token`, comparado em tempo constante).
-    # Vazio = API fechada (fail-closed), mesmo com `automacao_ativa=true`.
     automacao_worker_token: str = Field(default="")
+
+    # --- SAP Business One (Service Layer) ---
+    sap_api_url: str = Field(default="https://10.151.4.40:50000/b1s/v1")
+    sap_company_db: str = Field(default="")
+    sap_username: str = Field(default="")
+    sap_password: str = Field(default="")
+    sap_proxy_url: str = Field(default="")
+
     # Versão do contrato payload/resultado (docs/automacao_api.md). O worker
     # confere no `/saude` e recusa rodar se divergir.
     automacao_contrato_versao: str = Field(default="1")
