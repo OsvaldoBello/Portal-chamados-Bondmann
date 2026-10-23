@@ -46,6 +46,18 @@
       {% if chamado.telefone_contato %}
       <div>Contato: {{ chamado.telefone_contato }}</div>
       {% endif %}
+      {% if regiao_autor %}
+      <div class="flex items-center justify-end gap-1">
+        <span>Região:</span>
+        {% if regiao_autor.eh_multiplo %}
+        <span class="font-medium text-navy cursor-help underline decoration-dotted" title="{{ regiao_autor.detalhe }}">
+          {{ regiao_autor.rotulo }} ℹ️
+        </span>
+        {% else %}
+        <span class="font-medium text-navy">{{ regiao_autor.rotulo }}</span>
+        {% endif %}
+      </div>
+      {% endif %}
     </div>
   </div>
   <p class="mt-4 text-sm text-ink whitespace-pre-line">{{ chamado.descricao }}</p>
