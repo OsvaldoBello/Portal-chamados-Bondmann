@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
-from typing import Any
-import urllib.parse
-import urllib3
 import uuid
+from dataclasses import dataclass
+from typing import Any
 
-import requests
+import httpx
 
 import app.cache as cache
 from app.config import get_settings
 from app.db import admin_connection
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger("app.services.sap_regiao")
 
 CACHE_TTL_REGIAO_S = 21600.0  # 6 horas
@@ -44,21 +41,21 @@ class SAPRegiaoService:
         self.password = settings.sap_password
         self.proxy_url = settings.sap_proxy_url
 
-        self._session: requests.Session | None = None
+        self._session: httpx.Client | None = None
         self._session_id: str | None = None
 
-    def _get_session(self) -> requests.Session:
+    def _get_session(self) -> httpx.Client:
         if self._session is not None:
             return self._session
-        s = requests.Session()
-        s.verify = False
-        if self.proxy_url:
-            s.proxies = {"http": self.proxy_url, "https": self.proxy_url}
-            s.trust_env = False
-        self._session = s
-        return s
+        client = httpx.Client(
+            verify=False,
+            proxy=self.proxy_url or None,
+            timeout=3.0,
+        )
+        self._session = client
+        return client
 
-    def _login(self, session: requests.Session) -> bool:
+    def _login(self, session: httpx.Client) -> bool:
         if self._session_id:
             return True
         if not (self.company_db and self.username and self.password):
@@ -71,7 +68,7 @@ class SAPRegiaoService:
                 "UserName": self.username,
                 "Password": self.password,
             }
-            resp = session.post(url, json=payload, timeout=3)
+            resp = session.post(url, json=payload, timeout=3.0)
             if resp.status_code == 200:
                 self._session_id = resp.json().get("SessionId")
                 return True

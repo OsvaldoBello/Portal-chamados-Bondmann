@@ -46,6 +46,7 @@ Toda biblioteca usada no projeto **deve** ter versão-alvo fixada em `requiremen
 | python-magic | `python-magic==0.4.*` | Validação de MIME por *magic bytes* (Seção 3.9). Requer `libmagic` na imagem Docker. |
 | itsdangerous | `itsdangerous==2.*` | Assinatura de token CSRF e/ou cookie de sessão. |
 | httpx | `httpx==0.27.*` | Cliente HTTP (testes e chamadas REST eventuais). `⚠️ VERSÃO A CONFIRMAR`. |
+| requests | `requests==2.32.*` | Cliente HTTP complementar (compatibilidade de integrações e scripts SAP). Fixado em `requirements.txt`. |
 | PyJWT | `pyjwt[crypto]==2.10.1` | `[DECISÃO DE ENGENHARIA]` adicionado ao stack (não estava na spec): verificação **local** de JWT por request (JWKS RS256/ES256 + fallback HS256, Seção 3.6). Validar via API do Supabase a cada request seria gargalo. Travado no lockfile. |
 
 ### 0.3 Testes

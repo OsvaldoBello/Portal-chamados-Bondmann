@@ -25,6 +25,8 @@ python-magic==0.4.27
 python-magic-bin==0.4.14 ; sys_platform == "win32"
 itsdangerous==2.2.0
 httpx==0.28.1
+# Cliente HTTP complementar / compatibilidade de integrações SAP (Seção 0)
+requests==2.32.3
 # Verificação de JWT local (JWKS RS256/ES256 + fallback HS256) — Seção 3.6.
 # [DECISÃO DE ENGENHARIA] adicionado ao stack: a spec exige verificação local
 # de assinatura/exp/aud por request; chamar a API do Supabase a cada request
