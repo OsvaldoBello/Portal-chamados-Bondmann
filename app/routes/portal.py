@@ -61,6 +61,7 @@ from app.security.uploads import UploadInvalido
 from app.services import automacao as automacao_svc
 from app.services.ia_resumo import gerar_e_salvar_resumo
 from app.services.portal import PortalService
+from app.services.sap_regiao import obter_regiao_do_autor
 from app.templating import portal_base_template, render
 
 log = logging.getLogger("app.portal")
@@ -928,12 +929,14 @@ async def detalhe_chamado(
         if chamado.get("status") != "RESOLVIDO"
         else None
     )
+    regiao_autor = await obter_regiao_do_autor(str(chamado.get("cliente_id") or ""))
     return render(
         request,
         "portal/chamado_detalhe.html",
         {
             "perfil": ctx.perfil,
             "chamado": chamado,
+            "regiao_autor": regiao_autor,
             "mensagens": mensagens,
             "dados_formulario": rotular_chamado(
                 chamado.get("categoria"),

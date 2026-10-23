@@ -7,6 +7,7 @@ import logging
 from typing import Any
 import urllib.parse
 import urllib3
+import uuid
 
 import requests
 
@@ -201,26 +202,42 @@ def obter_regiao_por_email(email: str) -> RegiaoInfo | None:
     return info
 
 
+def _eh_uuid_valido(val: Any) -> bool:
+    try:
+        uuid.UUID(str(val).strip())
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
 async def obter_email_do_autor(cliente_id: str) -> str | None:
-    if not cliente_id:
+    if not cliente_id or not _eh_uuid_valido(cliente_id):
         return None
     cache_key = f"user_email:{cliente_id}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
-    async with admin_connection() as conn:
-        email = await conn.fetchval(
-            "SELECT email FROM auth.users WHERE id = $1::uuid", cliente_id
-        )
-        if email:
-            cache.set(cache_key, email, ttl=CACHE_TTL_EMAIL_S)
-            return email
+    try:
+        async with admin_connection() as conn:
+            email = await conn.fetchval(
+                "SELECT email FROM auth.users WHERE id = $1::uuid", cliente_id
+            )
+            if email:
+                cache.set(cache_key, email, ttl=CACHE_TTL_EMAIL_S)
+                return email
+    except Exception as exc:
+        logger.warning("Falha ao obter email do autor para cliente_id=%s: %s", cliente_id, exc)
     return None
 
 
 async def obter_regiao_do_autor(cliente_id: str) -> RegiaoInfo | None:
-    email = await obter_email_do_autor(cliente_id)
-    if not email:
+    try:
+        email = await obter_email_do_autor(cliente_id)
+        if not email:
+            return None
+        return obter_regiao_por_email(email)
+    except Exception as exc:
+        logger.warning("Falha ao obter regiao do autor para cliente_id=%s: %s", cliente_id, exc)
         return None
-    return obter_regiao_por_email(email)
+

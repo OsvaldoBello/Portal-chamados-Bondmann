@@ -54,6 +54,7 @@ from app.security.csrf import get_csrf
 from app.security.uploads import UploadInvalido
 from app.services import automacao as automacao_svc
 from app.services.atendimento import AtendimentoService
+from app.services.sap_regiao import obter_regiao_do_autor
 from app.templating import render
 
 router = APIRouter(
@@ -559,9 +560,11 @@ async def _carregar_atendimento(request, chamado_id, ctx, repo, *, origem: str =
         automacao_card = automacao_svc.montar_card(
             chamado, jobs, settings, pode_agir=perm.pode_atender
         )
+    regiao_autor = await obter_regiao_do_autor(str(chamado.get("cliente_id") or ""))
     ctx_render = {
         "perfil": ctx.perfil,
         "chamado": chamado,
+        "regiao_autor": regiao_autor,
         "mensagens": mensagens,
         "automacao": automacao_card,
         "automacao_status_label": automacao_dom.STATUS_LABEL,
