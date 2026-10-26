@@ -150,5 +150,63 @@ async def resultado(request: Request, job_id: str) -> JSONResponse:
     return JSONResponse({"ok": True, "status": status_final}, background=tarefa)
 
 
+async def salvar_sap_regioes_em_lote(itens: list[dict[str, Any]]) -> int:
+    """Salva lista de regiões no banco e invalida os caches correspondentes."""
+    if not itens:
+        return 0
+    import app.cache as cache
+    from app.db import admin_connection
+
+    total = 0
+    async with admin_connection() as conn:
+        for it in itens:
+            email = (it.get("email") or "").strip().lower()
+            if not email:
+                continue
+            await conn.execute(
+                """
+                INSERT INTO public.sap_regioes_autores (
+                    email, card_code, card_name, tipo, rotulo, regioes, detalhe, eh_multiplo, atualizado_em
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+                ON CONFLICT (email) DO UPDATE SET
+                    card_code = EXCLUDED.card_code,
+                    card_name = EXCLUDED.card_name,
+                    tipo = EXCLUDED.tipo,
+                    rotulo = EXCLUDED.rotulo,
+                    regioes = EXCLUDED.regioes,
+                    detalhe = EXCLUDED.detalhe,
+                    eh_multiplo = EXCLUDED.eh_multiplo,
+                    atualizado_em = now()
+                """,
+                email,
+                str(it.get("card_code") or ""),
+                it.get("card_name"),
+                str(it.get("tipo") or "representante"),
+                str(it.get("rotulo") or ""),
+                list(it.get("regioes") or []),
+                str(it.get("detalhe") or ""),
+                bool(it.get("eh_multiplo")),
+            )
+            cache.delete(f"sap_regiao:{email}")
+            total += 1
+    return total
+
+
+@router.post("/sap-regioes/sync")
+@limiter.limit("60/minute")
+async def sync_sap_regioes(request: Request) -> JSONResponse:
+    """Ingestão e atualização das regiões comerciais SAP (enviadas pelo worker ou scripts)."""
+    _autorizar(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = []
+    if not isinstance(payload, list):
+        payload = []
+    total = await salvar_sap_regioes_em_lote(payload)
+    return JSONResponse({"ok": True, "processados": total})
+
+
 def register_automacao_api_routes(app) -> None:
     app.include_router(router)
+
