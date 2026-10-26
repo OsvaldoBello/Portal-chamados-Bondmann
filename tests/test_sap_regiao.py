@@ -15,10 +15,12 @@ def limpar_cache():
 
 def test_regiao_representante_unica():
     service = SAPRegiaoService()
-    
+    service.company_db = "TEST_DB"
+    service.username = "manager"
+    service.password = "password"
+    service._session_id = "test-session"
+
     mock_session = MagicMock()
-    mock_session.post.return_value.status_code = 200
-    mock_session.post.return_value.json.return_value = {"SessionId": "test-session"}
 
     # Mock BusinessPartners
     bp_resp = MagicMock()
@@ -51,10 +53,12 @@ def test_regiao_representante_unica():
 
 def test_regiao_supervisor_multiplas():
     service = SAPRegiaoService()
-    
+    service.company_db = "TEST_DB"
+    service.username = "manager"
+    service.password = "password"
+    service._session_id = "test-session"
+
     mock_session = MagicMock()
-    mock_session.post.return_value.status_code = 200
-    mock_session.post.return_value.json.return_value = {"SessionId": "test-session"}
 
     bp_resp = MagicMock()
     bp_resp.status_code = 200
@@ -100,6 +104,9 @@ def test_regiao_cache():
 
 def test_regiao_sap_offline():
     service = SAPRegiaoService()
+    service.company_db = "TEST_DB"
+    service.username = "manager"
+    service.password = "password"
     mock_session = MagicMock()
     mock_session.post.side_effect = Exception("Connection timed out")
     service._session = mock_session
