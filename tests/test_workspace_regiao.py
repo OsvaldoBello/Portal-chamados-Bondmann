@@ -1,5 +1,7 @@
 from unittest.mock import AsyncMock, patch
+
 import pytest
+
 from app.services.sap_regiao import RegiaoInfo
 
 

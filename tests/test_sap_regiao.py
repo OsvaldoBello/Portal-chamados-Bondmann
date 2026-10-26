@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
+
 import pytest
+
 from app.services.sap_regiao import RegiaoInfo, SAPRegiaoService, obter_regiao_por_email
 
 
