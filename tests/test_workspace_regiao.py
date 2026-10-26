@@ -10,6 +10,7 @@ async def test_obter_regiao_do_autor_integracao():
     with patch("app.services.sap_regiao.admin_connection") as mock_conn:
         mock_ctx = AsyncMock()
         mock_ctx.fetchval.return_value = "douglas.melo@bondmann.com.br"
+        mock_ctx.fetchrow.return_value = None
         mock_conn.return_value.__aenter__.return_value = mock_ctx
 
         with patch("app.services.sap_regiao.obter_regiao_por_email") as mock_por_email:

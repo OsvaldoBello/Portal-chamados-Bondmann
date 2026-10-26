@@ -228,13 +228,57 @@ async def obter_email_do_autor(cliente_id: str) -> str | None:
     return None
 
 
+async def obter_regiao_do_banco(email: str) -> RegiaoInfo | None:
+    """Busca o espelho de região comercial armazenado no Supabase."""
+    email_limpo = (email or "").strip().lower()
+    if not email_limpo:
+        return None
+
+    try:
+        async with admin_connection() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT tipo, rotulo, regioes, detalhe, eh_multiplo
+                FROM public.sap_regioes_autores
+                WHERE email = $1
+                """,
+                email_limpo,
+            )
+            if row:
+                return RegiaoInfo(
+                    tipo=row["tipo"],
+                    rotulo=row["rotulo"],
+                    regioes=list(row["regioes"] or []),
+                    detalhe=row["detalhe"] or "",
+                    eh_multiplo=bool(row["eh_multiplo"]),
+                )
+    except Exception as exc:
+        logger.warning("Falha ao consultar sap_regioes_autores para %s: %s", email_limpo, exc)
+    return None
+
+
 async def obter_regiao_do_autor(cliente_id: str) -> RegiaoInfo | None:
     try:
         email = await obter_email_do_autor(cliente_id)
         if not email:
             return None
-        return obter_regiao_por_email(email)
+
+        email_limpo = email.strip().lower()
+        cache_key = f"sap_regiao:{email_limpo}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return None if cached == "__VAZIO__" else cached
+
+        # 1. Consulta o espelho no banco Supabase (<2ms)
+        info = await obter_regiao_do_banco(email_limpo)
+        if info is not None:
+            cache.set(cache_key, info, ttl=CACHE_TTL_REGIAO_S)
+            return info
+
+        # 2. Fallback SAP direto
+        return obter_regiao_por_email(email_limpo)
     except Exception as exc:
         logger.warning("Falha ao obter regiao do autor para cliente_id=%s: %s", cliente_id, exc)
         return None
+
 

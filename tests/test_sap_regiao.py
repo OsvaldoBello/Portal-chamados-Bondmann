@@ -106,3 +106,32 @@ def test_regiao_sap_offline():
 
     info = service.consultar_regiao_sap("qualquer@bondmann.com.br")
     assert info is None
+
+
+@pytest.mark.asyncio
+async def test_obter_regiao_do_autor_via_banco():
+    from unittest.mock import AsyncMock
+
+    from app.services.sap_regiao import obter_regiao_do_autor
+
+    cliente_id = "1d2f1b28-da53-4606-ba0b-5558f07ad725"
+    mock_row_email = "helmano.silva@bondmann.com.br"
+    mock_db_regiao = RegiaoInfo(
+        tipo="supervisor",
+        rotulo="6 regiões vinculadas",
+        regioes=["136-VALE DO ACO", "069-DIVINOPOLIS"],
+        detalhe="136-VALE DO ACO, 069-DIVINOPOLIS",
+        eh_multiplo=True,
+    )
+
+    with patch("app.services.sap_regiao.obter_email_do_autor", new_callable=AsyncMock) as mock_email:
+        mock_email.return_value = mock_row_email
+        with patch("app.services.sap_regiao.obter_regiao_do_banco", new_callable=AsyncMock) as mock_banco:
+            mock_banco.return_value = mock_db_regiao
+            info = await obter_regiao_do_autor(cliente_id)
+            assert info is not None
+            assert info.tipo == "supervisor"
+            assert info.rotulo == "6 regiões vinculadas"
+            assert info.eh_multiplo is True
+            mock_banco.assert_awaited_once_with(mock_row_email)
+
