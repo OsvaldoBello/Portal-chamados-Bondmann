@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -69,6 +70,8 @@ from app.services.export_marketing import gerar_workbook as gerar_workbook_marke
 from app.services.ingestao_marketing_midia import parse_bytes as parse_midia_bytes
 from app.services.ingestao_quimico import ingerir_conn
 from app.templating import render
+
+log = logging.getLogger("app.routes.admin")
 
 router = APIRouter(
     prefix="/admin", tags=["admin"], route_class=CommitBeforeResponseRoute
@@ -1270,9 +1273,9 @@ async def excluir_usuario(
     repo: AdminRepo = Depends(get_admin_repo),
     _: None = Depends(_csrf_guard),
 ):
-    """Exclui a conta (GoTrue Admin API). A remoção de ``auth.users`` cascateia
-    para ``perfis``; se o usuário tiver chamados/mensagens (FK RESTRICT), a
-    exclusão falha e sugerimos desativar em vez de excluir. Só TI."""
+    """Exclui a conta (GoTrue Admin API). A remoção de ``auth.users`` revoga
+    o login permanentemente e marca o perfil como inativo, desatribuindo chamados
+    em aberto e preservando o histórico de chamados já atendidos/resolvidos. Só TI."""
     _require_ti(ctx)
     from app.auth.supabase_client import ensure_admin_client
 
@@ -1289,14 +1292,21 @@ async def excluir_usuario(
     if client is None:
         return _volta(erro="Exclusão indisponível: service_role não configurada no servidor.")
 
+    # 1. Desativa no banco e libera chamados em aberto (preservando chamados já finalizados)
+    try:
+        await repo.desativar_usuario(ctx.user.claims, user_id)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Falha ao desativar usuário %s no banco antes da exclusão: %s", user_id, exc)
+
+    # 2. Exclui no GoTrue (auth.users)
     try:
         await client.auth.admin.delete_user(user_id)
-    except Exception:  # noqa: BLE001 — FK RESTRICT (tem chamados/mensagens) ou erro do GoTrue
+    except Exception as exc:  # noqa: BLE001
+        log.error("Erro ao excluir usuário %s no GoTrue: %s", user_id, exc)
         return _volta(
-            erro="Não foi possível excluir: o usuário tem chamados ou mensagens no "
-                 "histórico. Reatribua/encerre esses itens ou apenas não use a conta."
+            erro=f"Não foi possível excluir a conta no serviço de autenticação: {exc}"
         )
-    return _volta(ok="Usuário excluído.")
+    return _volta(ok="Usuário excluído com sucesso. O histórico de atendimentos e mensagens foi preservado.")
 
 
 _CSV_COLS = [

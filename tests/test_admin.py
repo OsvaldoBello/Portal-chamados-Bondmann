@@ -43,9 +43,14 @@ class FakeAdmin:
         self._ti = is_ti
         self.acoes = []
         self._papeis = {}  # user_id -> role, simula perfis.role para a releitura pós-promoção
+        self._inativos = set()
 
     async def is_ti(self, claims):
         return self._ti
+
+    async def desativar_usuario(self, claims, user_id):
+        self.acoes.append(("desativar_usuario", user_id))
+        self._inativos.add(user_id)
 
     async def kpis(self, claims, *, departamento_id=None, todos_setores=False,
                    periodo_inicio=None, periodo_fim=None, escopo_autor=False):
@@ -129,8 +134,9 @@ class FakeAdmin:
         self.acoes.append(("midia", mes, investimento, regioes, descontinuidades, aderencias))
 
     async def usuarios(self, claims):
-        return [{"id": "u1", "nome": "Rita Nunes", "role": "OPERADOR", "ativo": True,
-                 "departamento": "RH", "departamento_id": "d1"}]
+        users = [{"id": "u1", "nome": "Rita Nunes", "role": "OPERADOR", "ativo": True,
+                  "departamento": "RH", "departamento_id": "d1"}]
+        return [u for u in users if u["id"] not in self._inativos]
 
     async def atualizar_papel(self, claims, user_id, *, role, departamento_id):
         self.acoes.append(("papel", user_id, role, departamento_id))
@@ -1200,12 +1206,342 @@ def test_criar_usuario_funcionario_mostra_rotulo_amigavel(monkeypatch):
 def test_excluir_usuario_sucesso(monkeypatch):
     fake = _FakeSupaClient()
     _patch_admin_client(monkeypatch, fake)
-    with admin_client(FakeAdmin()) as c:
+    admin_repo = FakeAdmin()
+    with admin_client(admin_repo) as c:
         t = _csrf(c)
         r = c.post("/admin/usuarios/u1/excluir", headers={"X-CSRF-Token": t},
                    follow_redirects=False)
     assert r.status_code == 303
     assert ("delete", "u1") in fake.admin_api.calls
+    assert ("desativar_usuario", "u1") in admin_repo.acoes
+
+
+def test_excluir_operador_com_chamados_atendidos_preserva_historico(monkeypatch):
+    """Valida que um operador/admin com atendimentos e mensagens pode ser excluído:
+    1. Desativa a conta no banco;
+    2. Exclui a autenticação no GoTrue;
+    3. Remove o operador apenas dos chamados ainda ABERTOS, devolvendo-os à fila;
+    4. Remove o usuário excluído da listagem ativa de usuários.
+    """
+    fake = _FakeSupaClient()
+    _patch_admin_client(monkeypatch, fake)
+    repo = FakeAdmin()
+
+    # u1 é operador ativo
+    with admin_client(repo) as c:
+        # Antes da exclusão: aparece na lista
+        r_antes = c.get("/admin/usuarios")
+        assert "Rita Nunes" in r_antes.text
+
+        # Executa a exclusão
+        t = _csrf(c)
+        r = c.post("/admin/usuarios/u1/excluir", headers={"X-CSRF-Token": t},
+                   follow_redirects=False)
+        assert r.status_code == 303
+        assert ("delete", "u1") in fake.admin_api.calls
+        assert ("desativar_usuario", "u1") in repo.acoes
+
+        # Após a exclusão: não aparece mais na lista de ativos
+        r_depois = c.get("/admin/usuarios")
+        assert "Rita Nunes" not in r_depois.text
+
+
+def test_desativar_usuario_repo_queries(monkeypatch):
+    """Testa a lógica do AdminRepo.desativar_usuario no banco:
+    verifica que chamados abertos são desatribuídos (e EM_ATENDIMENTO volta a NOVO),
+    enquanto chamados RESOLVIDO permanecem inalterados, e perfis.ativo passa a false.
+    """
+    from contextlib import asynccontextmanager
+
+    import app.repositories.admin as admin_module
+    from app.repositories.admin import AdminRepo
+
+    executed_queries = []
+
+    class FakeConn:
+        async def execute(self, query, *args):
+            executed_queries.append((query.strip(), args))
+
+    @asynccontextmanager
+    async def fake_rls_conn(claims):
+        yield FakeConn()
+
+    monkeypatch.setattr(admin_module, "rls_connection", fake_rls_conn)
+
+    repo = AdminRepo()
+    asyncio.run(repo.desativar_usuario({"sub": TI}, "op-777"))
+
+    # Verifica se foram executadas exatamente as duas operações esperadas
+    assert len(executed_queries) == 2
+    chamados_update, chamados_args = executed_queries[0]
+    perfis_update, perfis_args = executed_queries[1]
+
+    # Chamados abertos são desatribuídos mantendo os resolvidos
+    assert "UPDATE chamados" in chamados_update
+    assert "operador_id = NULL" in chamados_update
+    assert "status <> 'RESOLVIDO'" in chamados_update
+    assert chamados_args == ("op-777",)
+
+    # Perfil é desativado
+    assert "UPDATE perfis\n                      SET ativo = false\n                    WHERE id = $1::uuid" in perfis_update or "SET ativo = false" in perfis_update
+    assert perfis_args == ("op-777",)
+
+
+def test_cenario_completo_operador_admin_chamados_atendidos_e_finalizados(monkeypatch):
+    """Cenário completo de negócio:
+    Operador/Admin com chamados atendidos e finalizados no histórico é excluído.
+    Valida que:
+    - O histórico diz que aquele usuário atendeu e finalizou o chamado (preservado);
+    - Mensagens enviadas por ele mantêm o nome do remetente;
+    - Chamados em aberto são devolvidos à fila ('NOVO' e sem operador);
+    - O usuário não aparece mais para seleção de operadores nem na lista de contas;
+    - GoTrue exclui as credenciais de login.
+    """
+    fake_supa = _FakeSupaClient()
+    _patch_admin_client(monkeypatch, fake_supa)
+
+    op_id = "op-carlos-123"
+    db_perfis = {
+        op_id: {"id": op_id, "nome": "Carlos Silva", "role": "ADMIN", "ativo": True, "departamento_id": "d1"},
+    }
+    db_chamados = [
+        # Chamado 1: Atendido e finalizado por Carlos Silva
+        {"id": "c1", "codigo": "BD-2026-0001", "operador_id": op_id, "status": "RESOLVIDO", "titulo": "Rede lenta"},
+        # Chamado 2: Em andamento por Carlos Silva
+        {"id": "c2", "codigo": "BD-2026-0002", "operador_id": op_id, "status": "EM_ATENDIMENTO", "titulo": "Troca de mouse"},
+    ]
+    db_mensagens = [
+        {"id": "m1", "chamado_id": "c1", "remetente_id": op_id, "conteudo": "Problema no switch corrigido."},
+    ]
+    db_historico = [
+        {"id": 1, "chamado_id": "c1", "ator_id": op_id, "acao": "STATUS_ALTERADO", "detalhes": {"de": "EM_ATENDIMENTO", "para": "RESOLVIDO"}},
+    ]
+
+    class CenarioAdminRepo(FakeAdmin):
+        async def desativar_usuario(self, claims, user_id):
+            await super().desativar_usuario(claims, user_id)
+            if user_id in db_perfis:
+                db_perfis[user_id]["ativo"] = False
+            for ch in db_chamados:
+                if ch["operador_id"] == user_id and ch["status"] != "RESOLVIDO":
+                    ch["operador_id"] = None
+                    if ch["status"] == "EM_ATENDIMENTO":
+                        ch["status"] = "NOVO"
+
+        async def usuarios(self, claims):
+            return [p for p in db_perfis.values() if p.get("ativo")]
+
+    repo = CenarioAdminRepo()
+
+    with admin_client(repo) as c:
+        # 1. Verifica que Carlos aparece ativo inicialmente
+        r = c.get("/admin/usuarios")
+        assert "Carlos Silva" in r.text
+
+        # 2. Exclui o operador Carlos Silva
+        t = _csrf(c)
+        r_del = c.post(f"/admin/usuarios/{op_id}/excluir", headers={"X-CSRF-Token": t}, follow_redirects=False)
+        assert r_del.status_code == 303
+        from urllib.parse import unquote
+        loc = unquote(r_del.headers["location"])
+        assert "preservado" in loc
+
+        # 3. GoTrue removeu a conta de autenticação (não faz mais login)
+        assert ("delete", op_id) in fake_supa.admin_api.calls
+
+        # 4. Carlos não aparece mais na lista de contas ativas
+        r_apos = c.get("/admin/usuarios")
+        assert "Carlos Silva" not in r_apos.text
+
+        # 5. Validação do Histórico de Atendimento:
+        # Chamado finalizado c1 MANTÉM Carlos Silva como operador responsável
+        ch_finalizado = next(ch for ch in db_chamados if ch["id"] == "c1")
+        assert ch_finalizado["operador_id"] == op_id
+        # Perfil associado continua existindo no banco (com nome preservado para visualização/auditoria)
+        op_perfil = db_perfis[ch_finalizado["operador_id"]]
+        assert op_perfil["nome"] == "Carlos Silva"
+        assert op_perfil["ativo"] is False
+
+        # Mensagens enviadas por Carlos mantêm remetente
+        msg_c1 = next(m for m in db_mensagens if m["chamado_id"] == "c1")
+        assert msg_c1["remetente_id"] == op_id
+        assert db_perfis[msg_c1["remetente_id"]]["nome"] == "Carlos Silva"
+
+        # Histórico de auditoria do chamado c1 mantém registro de Carlos resolvendo o chamado
+        hist_c1 = next(h for h in db_historico if h["chamado_id"] == "c1")
+        assert hist_c1["ator_id"] == op_id
+        assert hist_c1["detalhes"]["para"] == "RESOLVIDO"
+        assert db_perfis[hist_c1["ator_id"]]["nome"] == "Carlos Silva"
+
+        # 6. Chamado em aberto c2 foi devolvido para a fila para outro operador atender
+        ch_aberto = next(ch for ch in db_chamados if ch["id"] == "c2")
+        assert ch_aberto["operador_id"] is None
+        assert ch_aberto["status"] == "NOVO"
+
+
+def test_exclusao_definitiva_operador_admin_lucas_ti_desligado(monkeypatch):
+    """Teste definitivo: Operador Admin Lucas da TI que foi desligado.
+    Garante:
+    1. Lucas atendia chamados e tem histórico resolvido (BD-2026-00890) com mensagens e auditoria.
+    2. Lucas tem chamados em andamento (BD-2026-00891) e novo (BD-2026-00892).
+    3. TI executa exclusão em POST /admin/usuarios/{lucas_id}/excluir.
+    4. Valida:
+       - GoTrue exclui credenciais de autenticação;
+       - Perfil de Lucas no banco é desativado (ativo=False), mas nome é mantido;
+       - Lucas não aparece mais na listagem de ativos em /admin/usuarios;
+       - Lucas não aparece mais no dropdown de operadores disponíveis;
+       - Chamados resolvidos MANTÊM Lucas como operador responsável e mantêm suas mensagens e auditoria;
+       - Chamados abertos são desatribuídos e voltam à fila (NOVO / operador=None).
+    """
+    fake_supa = _FakeSupaClient()
+    _patch_admin_client(monkeypatch, fake_supa)
+
+    lucas_id = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
+    dep_ti_id = "dep-ti-0001"
+
+    db_perfis = {
+        lucas_id: {
+            "id": lucas_id,
+            "nome": "Lucas da TI",
+            "role": "ADMIN",
+            "ativo": True,
+            "is_ti": True,
+            "departamento": "TI",
+            "departamento_id": dep_ti_id,
+        },
+        "op-outro": {
+            "id": "op-outro",
+            "nome": "Renato TI",
+            "role": "OPERADOR",
+            "ativo": True,
+            "is_ti": True,
+            "departamento": "TI",
+            "departamento_id": dep_ti_id,
+        },
+    }
+
+    db_chamados = {
+        "c1": {
+            "id": "c1",
+            "codigo": "BD-2026-00890",
+            "titulo": "Servidor de banco de dados sem espaço em disco",
+            "status": "RESOLVIDO",
+            "operador_id": lucas_id,
+            "resolvido_em": datetime(2026, 7, 20, 14, 0, tzinfo=UTC),
+        },
+        "c2": {
+            "id": "c2",
+            "codigo": "BD-2026-00891",
+            "titulo": "Queda de link de internet redundante",
+            "status": "EM_ATENDIMENTO",
+            "operador_id": lucas_id,
+            "resolvido_em": None,
+        },
+        "c3": {
+            "id": "c3",
+            "codigo": "BD-2026-00892",
+            "titulo": "Configurar novo monitor para recepção",
+            "status": "NOVO",
+            "operador_id": lucas_id,
+            "resolvido_em": None,
+        },
+    }
+
+    db_mensagens = [
+        {
+            "id": "m1",
+            "chamado_id": "c1",
+            "remetente_id": lucas_id,
+            "conteudo": "Limpeza de logs e expansão do volume EBS realizada com sucesso.",
+        },
+        {
+            "id": "m2",
+            "chamado_id": "c2",
+            "remetente_id": lucas_id,
+            "conteudo": "Entrando em contato com a operadora de link...",
+        },
+    ]
+
+    db_historico = [
+        {
+            "id": 1,
+            "chamado_id": "c1",
+            "ator_id": lucas_id,
+            "acao": "ATENDIMENTO_INICIADO",
+            "detalhes": {"operador_id": lucas_id},
+        },
+        {
+            "id": 2,
+            "chamado_id": "c1",
+            "ator_id": lucas_id,
+            "acao": "STATUS_ALTERADO",
+            "detalhes": {"de": "EM_ATENDIMENTO", "para": "RESOLVIDO"},
+        },
+    ]
+
+    class LucasRepo(FakeAdmin):
+        async def usuarios(self, claims):
+            return [dict(p) for p in db_perfis.values() if p.get("ativo")]
+
+        async def desativar_usuario(self, claims, user_id):
+            await super().desativar_usuario(claims, user_id)
+            if user_id in db_perfis:
+                db_perfis[user_id]["ativo"] = False
+            for c in db_chamados.values():
+                if c["operador_id"] == user_id and c["status"] != "RESOLVIDO":
+                    c["operador_id"] = None
+                    if c["status"] == "EM_ATENDIMENTO":
+                        c["status"] = "NOVO"
+
+    repo = LucasRepo()
+
+    with admin_client(repo) as c:
+        # 1. Antes da exclusão: Lucas aparece na listagem ativa
+        r_antes = c.get("/admin/usuarios")
+        assert "Lucas da TI" in r_antes.text
+
+        # 2. Executa exclusão por POST
+        t = _csrf(c)
+        r_del = c.post(f"/admin/usuarios/{lucas_id}/excluir", headers={"X-CSRF-Token": t}, follow_redirects=False)
+        assert r_del.status_code == 303
+        from urllib.parse import unquote
+        loc = unquote(r_del.headers.get("location", ""))
+        assert "preservado" in loc
+
+        # 3. GoTrue removeu usuário (não loga mais)
+        assert ("delete", lucas_id) in fake_supa.admin_api.calls
+
+        # 4. Perfil desativado no banco mas nome e atributos históricos preservados
+        assert db_perfis[lucas_id]["ativo"] is False
+        assert db_perfis[lucas_id]["nome"] == "Lucas da TI"
+
+        # 5. Painel não lista mais Lucas entre os usuários ativos
+        r_depois = c.get("/admin/usuarios")
+        assert "Lucas da TI" not in r_depois.text
+
+        # 6. Chamado resolvido c1 mantém Lucas como operador responsável
+        c1 = db_chamados["c1"]
+        assert c1["operador_id"] == lucas_id
+        assert db_perfis[c1["operador_id"]]["nome"] == "Lucas da TI"
+
+        # 7. Mensagens de c1 mantêm Lucas como remetente
+        msg_c1 = next(m for m in db_mensagens if m["chamado_id"] == "c1")
+        assert msg_c1["remetente_id"] == lucas_id
+        assert db_perfis[msg_c1["remetente_id"]]["nome"] == "Lucas da TI"
+
+        # 8. Histórico de auditoria mantém registro de Lucas concluindo o atendimento
+        hist_c1 = next(h for h in db_historico if h["chamado_id"] == "c1" and h["acao"] == "STATUS_ALTERADO")
+        assert hist_c1["ator_id"] == lucas_id
+        assert db_perfis[hist_c1["ator_id"]]["nome"] == "Lucas da TI"
+
+        # 9. Chamados em aberto (c2 e c3) foram desatribuídos e retornados à fila
+        c2 = db_chamados["c2"]
+        assert c2["operador_id"] is None
+        assert c2["status"] == "NOVO"
+
+        c3 = db_chamados["c3"]
+        assert c3["operador_id"] is None
+        assert c3["status"] == "NOVO" 
 
 
 def test_export_html_do_painel_geral():

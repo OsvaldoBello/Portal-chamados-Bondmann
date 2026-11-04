@@ -714,10 +714,34 @@ class AdminRepo:
                        d.nome AS departamento, p.departamento_id
                   FROM perfis p
                   LEFT JOIN departamentos d ON d.id = p.departamento_id
+                 WHERE p.ativo = true
                  ORDER BY lower(p.nome)
                 """
             )
             return [dict(r) for r in rows]
+
+    async def desativar_usuario(self, claims: dict, user_id: str) -> None:
+        """Desativa o usuário e desatribui chamados abertos antes da exclusão.
+
+        Mantém o histórico de chamados já finalizados (RESOLVIDO) com o operador_id
+        original para auditoria e relatórios. Chamados em andamento voltam para NOVO
+        com operador_id nulo.
+        """
+        async with rls_connection(claims) as conn:
+            await conn.execute(
+                """UPDATE chamados
+                      SET operador_id = NULL,
+                          status = CASE WHEN status = 'EM_ATENDIMENTO' THEN 'NOVO'::status_chamado ELSE status END
+                    WHERE operador_id = $1::uuid
+                      AND status <> 'RESOLVIDO'""",
+                user_id,
+            )
+            await conn.execute(
+                """UPDATE perfis
+                      SET ativo = false
+                    WHERE id = $1::uuid""",
+                user_id,
+            )
 
     async def atualizar_papel(
         self, claims: dict, user_id: str, *, role: str, departamento_id: str | None

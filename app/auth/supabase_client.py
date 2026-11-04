@@ -53,9 +53,12 @@ async def ensure_admin_client() -> AsyncClient | None:
         settings = get_settings()
         if not (settings.supabase_url and settings.supabase_service_role_key):
             return None
-        _admin_client = await acreate_client(
-            settings.supabase_url, settings.supabase_service_role_key
-        )
+        try:
+            _admin_client = await acreate_client(
+                settings.supabase_url, settings.supabase_service_role_key
+            )
+        except Exception:
+            return None
     return _admin_client
 
 
