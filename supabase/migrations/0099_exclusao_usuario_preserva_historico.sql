@@ -15,38 +15,14 @@
 --   1. Remove a constraint `perfis_id_fkey` com ON DELETE CASCADE entre `perfis` e `auth.users`.
 --      Assim, a exclusão da conta em `auth.users` revoga permanentemente o login, sessões e credenciais
 --      sem remover o registro histórico em `perfis`.
---   2. Trigger `on_auth_user_deleted` em `auth.users`:
---      - Marca `perfis.ativo = false`;
---      - Desatribui chamados em aberto (`status <> 'RESOLVIDO'`), liberando-os para a fila
---        (`operador_id = NULL`, e status `EM_ATENDIMENTO` retorna para `NOVO`);
---      - Mantém os chamados já finalizados (`status = 'RESOLVIDO'`) intactos com o `operador_id` original,
---        garantindo que o histórico informe quem de fato atendeu e concluiu a demanda.
+--   2. A desativação e desatribuição de chamados em aberto é realizada pelo backend
+--      (`AdminRepo.desativar_usuario`) antes de chamar a GoTrue Admin API. Não se deve
+--      adicionar trigger em `auth.users` que tente mutar tabelas em `public`, pois o GoTrue
+--      executa com o papel `supabase_auth_admin` que falha nessas operações ("database error deleting user").
 
 -- 1. Remove o CASCADE automático de auth.users para perfis
 ALTER TABLE public.perfis DROP CONSTRAINT IF EXISTS perfis_id_fkey;
 
--- 2. Trigger para quando o usuário for excluído de auth.users (GoTrue Admin API / painel)
-CREATE OR REPLACE FUNCTION public.handle_user_deleted()
-RETURNS trigger AS $$
-BEGIN
-  -- Desatribui chamados em aberto atribuídos a este operador
-  UPDATE public.chamados
-     SET operador_id = NULL,
-         status = CASE WHEN status = 'EM_ATENDIMENTO' THEN 'NOVO'::status_chamado ELSE status END
-   WHERE operador_id = OLD.id
-     AND status <> 'RESOLVIDO';
-
-  -- Marca o perfil como inativo
-  UPDATE public.perfis
-     SET ativo = false
-   WHERE id = OLD.id;
-
-  RETURN OLD;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
+-- 2. Garante que não haja trigger em auth.users mutando tabelas públicas
 DROP TRIGGER IF EXISTS on_auth_user_deleted ON auth.users;
-CREATE TRIGGER on_auth_user_deleted
-  AFTER DELETE ON auth.users
-  FOR EACH ROW
-  EXECUTE FUNCTION public.handle_user_deleted();
+DROP FUNCTION IF EXISTS public.handle_user_deleted();
